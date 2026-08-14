@@ -25,6 +25,7 @@ import * as Control from "../Cli/Control.ts"
 import * as TimeCode from "../Cli/TimeCode.ts"
 import { HttpRouter } from "effect/unstable/http"
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
+import { FileSystem } from "effect/FileSystem"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -207,6 +208,19 @@ const reportSubtitleChoice = (choice: Option.Option<Tracks.SubtitleChoice>) =>
  */
 const bitsPerSecond = (rate: AudioBitrate): number =>
   Number.parseInt(rate, 10) * 1000
+
+/**
+ * Enough of a file's identity to know whether a cached answer still applies.
+ *
+ * Size and modification time rather than a hash: hashing a multi-gigabyte
+ * container to save a few seconds of subtitle extraction would be a poor trade,
+ * and a re-encode changes both.
+ */
+const fileFingerprint = Effect.fn("cast.fileFingerprint")(function*(file: FilePath) {
+  const fs = yield* FileSystem
+  const info = yield* fs.stat(file)
+  return `${info.size}:${Option.getOrElse(info.mtime, () => new Date(0)).getTime()}`
+})
 
 /** The audio track in the summary block, or why there is none. */
 const describeAudio = (chosen: Option.Option<MediaStream>): string =>
@@ -685,18 +699,45 @@ const streams = Command.make(
 
     // Cue counts are the reason this command exists in its current form: two
     // subtitle tracks of the same language are otherwise indistinguishable, and
-    // the container's own flags point at the wrong one. Counting means reading
-    // each track, so it happens concurrently and only for subtitles.
-    const cueCounts = yield* Effect.forEach(
-      info.subtitleStreams,
-      (stream) =>
-        Effect.map(
-          ffmpeg.extractCues(absolute, StreamIndex.make(stream.index)),
-          (cues) => [stream.index, cues.length] as const
+    // the container's own flags point at the wrong one.
+    //
+    // Counting means extracting each track, which is seconds apiece — so it
+    // happens concurrently, only for subtitles, and only once per file. The
+    // fingerprint is size and modification time, so the answer is reused until
+    // the file itself changes.
+    const fingerprint = yield* fileFingerprint(absolute)
+    const cached = yield* State.cachedCueCounts(absolute, fingerprint)
+
+    const cuesByIndex = yield* Option.match(cached, {
+      onSome: (known) =>
+        Effect.succeed(
+          new Map(
+            Object.entries(known.counts).map(([index, count]) => [Number(index), count] as const)
+          )
         ),
-      { concurrency: 4 }
-    )
-    const cuesByIndex = new Map(cueCounts)
+      onNone: () =>
+        Effect.gen(function*() {
+          yield* Effect.when(
+            Console.log("reading the subtitle tracks (once per file)…"),
+            Effect.succeed(info.subtitleStreams.length > 0)
+          )
+          const counted = yield* Effect.forEach(
+            info.subtitleStreams,
+            (stream) =>
+              Effect.map(
+                ffmpeg.extractCues(absolute, StreamIndex.make(stream.index)),
+                (cues) => [stream.index, cues.length] as const
+              ),
+            { concurrency: 4 }
+          )
+          yield* State.rememberCueCounts(
+            absolute,
+            fingerprint,
+            Object.fromEntries(counted.map(([index, count]) => [String(index), count]))
+          )
+          return new Map(counted)
+        })
+    })
 
     // Marked with the same functions `play` uses, so the listing answers "what
     // will it do" rather than merely "what is in the file".

@@ -42,12 +42,27 @@ export class SeekRequest extends Schema.Class<SeekRequest>("SeekRequest")({
   toSeconds: Seconds
 }) {}
 
+/**
+ * Cue counts already paid for.
+ *
+ * Counting cues means extracting the track, which is seconds of work per
+ * subtitle stream — the reason `cast streams` was slow enough to be annoying.
+ * The count cannot change unless the file does, so it is keyed by size and
+ * modification time as well as path: a re-encode under the same name is a
+ * different file and gets counted again.
+ */
+export class CueCounts extends Schema.Class<CueCounts>("CueCounts")({
+  fingerprint: Schema.String,
+  counts: Schema.Record(Schema.String, Schema.Number)
+}) {}
+
 export class Remembered extends Schema.Class<Remembered>("Remembered")({
   lastDevice: Schema.optional(Ipv4),
   /** Absolute path to the position last reported for it. */
   positions: Schema.optionalKey(Schema.Record(Schema.String, Seconds)),
   active: Schema.optional(ActiveStream),
-  seek: Schema.optional(SeekRequest)
+  seek: Schema.optional(SeekRequest),
+  cues: Schema.optionalKey(Schema.Record(Schema.String, CueCounts))
 }) {}
 
 const EMPTY = new Remembered({ positions: {} })
@@ -129,6 +144,32 @@ export const pendingSeek = Effect.flatMap(
   Store,
   (store) => Effect.map(store.read, (state) => Option.fromNullishOr(state.seek))
 )
+
+/**
+ * What is already known about this file's subtitle tracks.
+ *
+ * Absent when the file has changed since, which is the whole point of the
+ * fingerprint: a stale count would be worse than a slow one.
+ */
+export const cachedCueCounts = (file: FilePath, fingerprint: string) =>
+  Effect.flatMap(Store, (store) =>
+    Effect.map(store.read, (state) =>
+      Option.filter(
+        Option.fromNullishOr(state.cues?.[file]),
+        (cached) => cached.fingerprint === fingerprint
+      )))
+
+export const rememberCueCounts = (
+  file: FilePath,
+  fingerprint: string,
+  counts: Record<string, number>
+) =>
+  Effect.flatMap(Store, (store) =>
+    store.update((state) =>
+      new Remembered({
+        ...state,
+        cues: { ...state.cues, [file]: new CueCounts({ fingerprint, counts }) }
+      })))
 
 /** The device the last `play` used. */
 export const rememberedDevice = Effect.flatMap(

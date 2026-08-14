@@ -274,9 +274,10 @@ such an import resolve.
 |---|---|
 | `npm run typecheck` | strict TypeScript, `exactOptionalPropertyTypes` on |
 | `npm run lint` | 25 project rules |
+| `npm run vocabulary:sync` | refetch the media vocabulary from Google (needs the network) |
 | `npm run depcruise` | no cycles, Node builtins stay in `platform`/`protocol`, packages never import the app |
 | `npm run codegen:check` | the generated wire descriptors and media vocabulary are not stale |
-| `npm test` | 102 tests, including one that runs the binary at an emulated device |
+| `npm test` | 103 tests, including two that run the binary at an emulated device |
 | `npm run check` | all of the above — and the only thing CI runs |
 
 The lint rules encode one idea: never hand-roll what Effect provides. `no-if`,
@@ -342,9 +343,6 @@ removing the `as` casts exposed an `Ipv4` brand that accepted
   that stands between `--hls` and the default.
 - **Progressive quality switches and seeks are visible.** Both restart ffmpeg
   and reissue `LOAD`. This is what HLS exists to fix.
-- **`cast streams` reads every subtitle track.** Counting cues means extracting
-  them, so listing a file with several subtitle tracks takes ~20 seconds. `play`
-  only reads the candidates in one language, so it is much cheaper.
 - **The two processes talk through a file.** `cast seek` reaches the running
   `cast play` by writing a request into the state file, which the player polls
   once a second. Unglamorous, and a socket would be a great deal of machinery

@@ -121,4 +121,23 @@ describe("State", () => {
         assert.isTrue(Option.isNone(yield* State.rememberedDevice))
       }).pipe(Effect.provide(NodeServices.layer))
     ))
+
+  it.effect("reuses cue counts only while the file is unchanged", () =>
+    withStore(() =>
+      Effect.gen(function*() {
+        yield* State.rememberCueCounts(FILM, "1234:5678", { "4": 24, "5": 1670 })
+
+        // The same file: the counts are worth seconds each, so reuse them.
+        const same = yield* State.cachedCueCounts(FILM, "1234:5678")
+        assert.deepStrictEqual(
+          Option.map(same, (cached) => cached.counts["5"]),
+          Option.some(1670)
+        )
+
+        // A different file behind the same name — a re-encode, say. A stale
+        // count would be worse than a slow one, so it is not offered.
+        assert.isTrue(Option.isNone(yield* State.cachedCueCounts(FILM, "9999:5678")))
+        assert.isTrue(Option.isNone(yield* State.cachedCueCounts(OTHER, "1234:5678")))
+      })
+    ))
 })

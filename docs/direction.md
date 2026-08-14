@@ -108,8 +108,6 @@ Recorded so it does not have to be re-argued:
 
 ## What is left
 
-- **One session on a real television**, after which `--hls` becomes the default
-  and the quality controller's actuation can be deleted.
-- **`cast streams` costs ~20 seconds** on a file with several subtitle tracks,
-  because counting cues means extracting them. `play` is cheaper — it reads only
-  one language — but the listing could cache what it learns.
+**One session on a real television.** After that `--hls` becomes the default and
+the quality controller's actuation — the reload queue, the `LOAD` reissue, the
+probe-and-hold logic — can be deleted. That is the entire list.
