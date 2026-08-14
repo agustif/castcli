@@ -3,10 +3,23 @@
 // The device fetches these; we never push to it. That inversion is the whole
 // reason the original VLC bug existed — VLC advertised a link-local IPv6
 // address the TV could not route back to.
+//
+// Two presentations of the same film are served side by side, because they fail
+// in different ways and neither is strictly better:
+//
+//   * **progressive** (`/stream`) — one continuous transcode at one bitrate.
+//     We choose the quality, so changing it means restarting ffmpeg and
+//     reissuing LOAD, and there are no byte ranges to seek within.
+//   * **HLS** (`/master.m3u8`) — a VOD presentation, one variant per rung, every
+//     segment addressable. The receiver chooses the quality and does its own
+//     seeking, so neither costs a restart.
+//
+// Serving both costs almost nothing: the segments do not exist until they are
+// requested, so an unused HLS surface encodes nothing at all.
 
 import { Effect, Option, Ref, Schema, Stream } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { Ffmpeg } from "@castcli/media"
+import { Ffmpeg, Hls } from "@castcli/media"
 import type { Rung } from "@castcli/domain"
 import { Brands, Seconds } from "@castcli/domain"
 import { Vtt } from "@castcli/media"
@@ -19,9 +32,14 @@ export interface SessionState {
 
 interface MediaServerOptions {
   readonly file: Brands.FilePath
+  readonly durationSeconds: Brands.Seconds
   readonly videoIndex: Brands.StreamIndex
   readonly audioIndex: Option.Option<Brands.StreamIndex>
   readonly audioBitrate: Brands.AudioBitrate
+  /** Peak audio rate, which the master playlist must include in BANDWIDTH. */
+  readonly audioBitsPerSecond: number
+  /** One HLS variant per rung, in the order the master playlist advertises. */
+  readonly ladder: ReadonlyArray<Rung>
   readonly state: Ref.Ref<SessionState>
   readonly onBytes: (count: number) => Effect.Effect<void>
 }
@@ -63,10 +81,37 @@ const queryOffset = (
   request: HttpServerRequest.HttpServerRequest
 ): Option.Option<Brands.Seconds> => offsetFromUrl(request.originalUrl)
 
+/**
+ * A path segment that has to be a whole number inside a known range.
+ *
+ * Range-checked rather than merely parsed: a variant or segment we never
+ * advertised is a request we did not invite, and answering it by clamping would
+ * hand back the wrong part of the film with a 200.
+ */
+const indexIn = (count: number) =>
+  Schema.FiniteFromString.pipe(
+    Schema.decodeTo(
+      Schema.Int.pipe(
+        Schema.check(Schema.isBetween({ minimum: 0, maximum: Math.max(0, count - 1) }))
+      )
+    )
+  )
+
+const playlistHeaders = {
+  // Arithmetic over a file that is not changing, but a receiver holding these
+  // across sessions would keep a stale variant list.
+  "cache-control": "no-store",
+  "access-control-allow-origin": "*"
+} as const
+
+const notFound = HttpServerResponse.empty({ status: 404 })
+
 // The requirement type is inferred: v4 tracks each handler's error and service
 // requirements in the Layer's context, so pinning it by hand fights the router.
 export const routes = (options: MediaServerOptions) =>
   HttpRouter.addAll([
+    // --- progressive ---------------------------------------------------------
+
     HttpRouter.route(
       "GET",
       "/stream",
@@ -105,6 +150,92 @@ export const routes = (options: MediaServerOptions) =>
         })
       })
     ),
+
+    // --- HLS -----------------------------------------------------------------
+
+    HttpRouter.route(
+      "GET",
+      "/master.m3u8",
+      Effect.fn("MediaServer.master")(function*() {
+        yield* Effect.logInfo(
+          `hls master requested: ${options.ladder.length} variants, ` +
+            `${Hls.segmentCount(options.durationSeconds)} segments each`
+        )
+        return HttpServerResponse.text(
+          Hls.master(options.ladder, options.audioBitsPerSecond, (variant) => `/v${variant}.m3u8`),
+          { contentType: Hls.CONTENT_TYPE, headers: playlistHeaders }
+        )
+      })
+    ),
+
+    HttpRouter.route(
+      "GET",
+      "/v:variant.m3u8",
+      Effect.fn("MediaServer.variant")(function*() {
+        const params = yield* HttpRouter.params
+        const variant = Schema.decodeUnknownOption(indexIn(options.ladder.length))(
+          params["variant"]
+        )
+
+        return Option.match(variant, {
+          onNone: () => notFound,
+          onSome: (index) =>
+            HttpServerResponse.text(
+              Hls.media(options.durationSeconds, (segment) => `/v${index}/${segment}.ts`),
+              { contentType: Hls.CONTENT_TYPE, headers: playlistHeaders }
+            )
+        })
+      })
+    ),
+
+    HttpRouter.route(
+      "GET",
+      "/v:variant/:segment.ts",
+      Effect.fn("MediaServer.segment")(function*() {
+        const ffmpeg = yield* Ffmpeg
+        const params = yield* HttpRouter.params
+
+        const wanted = Option.all({
+          variant: Schema.decodeUnknownOption(indexIn(options.ladder.length))(params["variant"]),
+          segment: Schema.decodeUnknownOption(
+            indexIn(Hls.segmentCount(options.durationSeconds))
+          )(params["segment"])
+        })
+
+        return yield* Option.match(wanted, {
+          onNone: () => Effect.succeed(notFound),
+          onSome: ({ segment, variant }) =>
+            Option.match(Option.fromNullishOr(options.ladder[variant]), {
+              onNone: () => Effect.succeed(notFound),
+              onSome: (rung) =>
+                Effect.map(
+                  ffmpeg.segment({
+                    file: options.file,
+                    startSeconds: Hls.segmentStart(segment),
+                    durationSeconds: Hls.segmentLength(segment, options.durationSeconds),
+                    videoIndex: options.videoIndex,
+                    audioIndex: options.audioIndex,
+                    rung,
+                    audioBitrate: options.audioBitrate
+                  }),
+                  // Counted like the progressive stream: the numbers are not
+                  // used to choose quality here, but they are the same
+                  // measurement and the log is worth having.
+                  (source) =>
+                    HttpServerResponse.stream(
+                      source.pipe(Stream.tap((chunk) => options.onBytes(chunk.length))),
+                      {
+                        contentType: Hls.SEGMENT_CONTENT_TYPE,
+                        headers: { "cache-control": "no-store" }
+                      }
+                    )
+                )
+            })
+        })
+      })
+    ),
+
+    // --- subtitles, shared by both -------------------------------------------
 
     HttpRouter.route(
       "GET",

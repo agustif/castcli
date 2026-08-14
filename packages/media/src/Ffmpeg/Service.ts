@@ -19,6 +19,7 @@ import {
 
 /** Re-exported so callers need only this module. */
 export type TranscodeOptions = Args.TranscodeOptions
+export type SegmentOptions = Args.SegmentOptions
 import * as Vtt from "../Vtt/Codec.ts"
 import * as Args from "./Args.ts"
 
@@ -45,6 +46,9 @@ export class Ffmpeg extends Context.Service<Ffmpeg, {
   ) => Effect.Effect<Vtt.Cues, MediaProbeError>
   readonly transcode: (
     options: TranscodeOptions
+  ) => Effect.Effect<Stream.Stream<Uint8Array, TranscodeError>, TranscodeError, Scope.Scope>
+  readonly segment: (
+    options: SegmentOptions
   ) => Effect.Effect<Stream.Stream<Uint8Array, TranscodeError>, TranscodeError, Scope.Scope>
 }>()("@castcli/Ffmpeg") {
   static readonly layer = Layer.effect(
@@ -103,7 +107,21 @@ export class Ffmpeg extends Context.Service<Ffmpeg, {
       )
     })
 
-      return { probe, extractCues, transcode } as const
+    /**
+     * One HLS segment. Scoped like the transcode, so a receiver that abandons
+     * a request — which it does constantly while switching variants — takes
+     * the encoder with it rather than leaving it running.
+     */
+    const segment = Effect.fn("Ffmpeg.segment")(function*(options: Args.SegmentOptions) {
+      const handle = yield* spawner.spawn(
+        ChildProcess.make("ffmpeg", Args.segment(options))
+      ).pipe(Effect.mapError((cause) => new TranscodeError({ cause })))
+      return handle.stdout.pipe(
+        Stream.mapError((cause) => new TranscodeError({ cause }))
+      )
+    })
+
+      return { probe, extractCues, transcode, segment } as const
     })
   )
 }

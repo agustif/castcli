@@ -18,7 +18,8 @@ export default defineConfig({
       "@castcli/protocol": pkg("protocol"),
       "@castcli/media": pkg("media"),
       "@castcli/quality": pkg("quality"),
-      "@castcli/platform": pkg("platform")
+      "@castcli/platform": pkg("platform"),
+      "@castcli/emulator": pkg("emulator")
     }
   }
 })

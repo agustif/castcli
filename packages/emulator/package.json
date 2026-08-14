@@ -1,0 +1,12 @@
+{
+  "name": "@castcli/emulator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A Google Cast device, emulated well enough to test against",
+  "type": "module",
+  "dependencies": {
+    "effect": "4.0.0-rc.109",
+    "@castcli/domain": "*",
+    "@castcli/protocol": "*"
+  }
+}

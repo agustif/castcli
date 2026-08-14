@@ -233,7 +233,7 @@ const seek = Command.make(
       onSome: (stream) => stream.offsetSeconds
     })
 
-    yield* withSession(ip, (_session, current) =>
+    yield* withSession(ip, (session, current) =>
       Effect.gen(function*() {
         const within = Option.match(current, {
           onNone: () => 0,
@@ -260,7 +260,7 @@ const seek = Command.make(
           }
         )
 
-        // Nothing is playing to reload, so there is nothing this can do.
+        // Nothing is playing to seek within or to reload.
         yield* Effect.when(
           Effect.fail(
             new SeekTargetError({
@@ -270,8 +270,24 @@ const seek = Command.make(
           Effect.succeed(Option.isNone(active))
         )
 
-        yield* State.requestSeek(wanted)
-        yield* Console.log(`seeking to ${TimeCode.format(wanted)}`)
+        const seekable = Option.getOrElse(
+          Option.map(active, (stream) => stream.seekable === true),
+          () => false
+        )
+
+        // Under HLS every segment of the film is addressable, so the receiver
+        // seeks itself and nothing restarts. Progressively there is nothing to
+        // seek within — a live pipe has no byte ranges — so the player is asked
+        // to restart ffmpeg at the new offset instead.
+        yield* Effect.when(
+          session.mediaCommand(Session.MediaCommand.SEEK({ currentTime: wanted })),
+          Effect.succeed(seekable)
+        )
+        yield* Effect.when(State.requestSeek(wanted), Effect.succeed(!seekable))
+
+        yield* Console.log(
+          `seeking to ${TimeCode.format(wanted)}${seekable ? "" : " (the stream restarts there)"}`
+        )
       }))
   })
 ).pipe(Command.withDescription("Seek within what is playing"))

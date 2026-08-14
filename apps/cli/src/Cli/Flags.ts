@@ -52,6 +52,18 @@ export const subtitleStream = Flag.integer("subs").pipe(
  * beginning" are different requests. Without the distinction there is no way to
  * express resuming, because every invocation would look like `--seek 0`.
  */
+/**
+ * Serve HLS instead of one continuous stream.
+ *
+ * Opt-in rather than default: the progressive path is the one that has been
+ * watched end to end on a real receiver, and HLS changes who decides quality
+ * and who performs seeking. Flipping the default is a one-word change here once
+ * a device has confirmed it.
+ */
+export const hls = Flag.boolean("hls").pipe(
+  Flag.withDescription("Serve HLS: the receiver picks the quality and seeks natively")
+)
+
 export const seek = Flag.string("seek").pipe(
   Flag.withSchema(TimeCode),
   Flag.withDescription("Start position: seconds, mm:ss or h:mm:ss (default: resume)"),

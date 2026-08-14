@@ -29,8 +29,9 @@ import * as os from "node:os"
 import * as path from "node:path"
 
 import { AppConfig } from "../Config.ts"
-import { canStreamCopy, Ffmpeg, Tracks, Vtt } from "@castcli/media"
+import { canStreamCopy, Ffmpeg, Hls, Tracks, Vtt } from "@castcli/media"
 import {
+  type AudioBitrate,
   describeRung,
   FilePath,
   type MediaStream,
@@ -199,6 +200,14 @@ const reportSubtitleChoice = (choice: Option.Option<Tracks.SubtitleChoice>) =>
       )
   })
 
+/**
+ * ffmpeg spells audio rates as `128k`; a playlist has to state them in bits per
+ * second, because BANDWIDTH is what a receiver compares against its own
+ * measurement.
+ */
+const bitsPerSecond = (rate: AudioBitrate): number =>
+  Number.parseInt(rate, 10) * 1000
+
 /** The audio track in the summary block, or why there is none. */
 const describeAudio = (chosen: Option.Option<MediaStream>): string =>
   Option.match(chosen, {
@@ -215,9 +224,10 @@ const play = Command.make(
     ip: Flags.deviceIp,
     audio: Flags.audioStream,
     subs: Flags.subtitleStream,
-    seek: Flags.seek
+    seek: Flags.seek,
+    hls: Flags.hls
   },
-  Effect.fn(function*({ audio, device, file, ip, seek, subs }) {
+  Effect.fn(function*({ audio, device, file, hls, ip, seek, subs }) {
     const config = yield* AppConfig
     const ffmpeg = yield* Ffmpeg
     // `Argument.file({ mustExist: true })` already proved it is there.
@@ -297,6 +307,16 @@ const play = Command.make(
     })
     const startIndex = Ladder.startingIndex(ladder)
 
+    // HLS is arithmetic over the running time, so a container that does not
+    // report one cannot be presented that way at all. Saying so and carrying on
+    // beats refusing: the progressive path needs no duration.
+    const duration = info.durationSeconds
+    const useHls = hls && Option.isSome(duration)
+    yield* Effect.when(
+      Console.log("this file reports no duration, so HLS is not possible — streaming instead"),
+      Effect.succeed(hls && Option.isNone(duration))
+    )
+
     const startingRung = yield* Option.match(Array.get(ladder, startIndex), {
       onNone: () => Effect.fail(new EmptyLadderError()),
       onSome: (rung) => Effect.succeed(rung)
@@ -354,9 +374,12 @@ const play = Command.make(
       HttpRouter.serve(
         routes({
           file: absolute,
+          durationSeconds: Option.getOrElse(duration, () => Seconds.make(0)),
           videoIndex: StreamIndex.make(video.index),
           audioIndex,
           audioBitrate: config.audioBitrate,
+          audioBitsPerSecond: bitsPerSecond(config.audioBitrate),
+          ladder,
           state,
           onBytes: controller.noteBytes
         })
@@ -401,9 +424,27 @@ const play = Command.make(
       // literal sets are closed, so a typo in `streamType` or a track missing
       // its mandatory `language` is a compile error instead of a receiver
       // silently declining to show subtitles.
+      // The two presentations differ only here. Under HLS the receiver is
+      // handed a master playlist covering the whole film, so it seeks and
+      // switches quality by itself and the offset moves from the URL into
+      // LOAD's own `currentTime`. Progressively, the offset *is* the stream:
+      // ffmpeg starts there and the receiver has nothing to seek within.
+      const presentation = useHls
+        ? {
+          contentId: `${baseUrl}/master.m3u8`,
+          contentType: Hls.CONTENT_TYPE,
+          // Lowercase on the wire, whatever the sender-side documentation
+          // says — taken from the receiver framework Google ships.
+          hlsSegmentFormat: "ts_aac" as const,
+          duration: Option.getOrElse(duration, () => Seconds.make(0))
+        }
+        : {
+          contentId: `${baseUrl}/stream?o=${current.offsetSeconds}`,
+          contentType: "video/mp4"
+        }
+
       const media = new Media.MediaInformation({
-        contentId: `${baseUrl}/stream?o=${current.offsetSeconds}`,
-        contentType: "video/mp4",
+        ...presentation,
         streamType: "BUFFERED",
         ...(Option.isNone(subtitleIndex) ? {} : {
           tracks: [
@@ -411,7 +452,9 @@ const play = Command.make(
               trackId: SUBTITLE_TRACK_ID,
               type: "TEXT",
               subtype: "SUBTITLES",
-              trackContentId: `${baseUrl}/subs.vtt?o=${current.offsetSeconds}`,
+              // Under HLS the receiver seeks for itself, so the cues have to
+              // cover the whole film rather than start at the offset.
+              trackContentId: `${baseUrl}/subs.vtt?o=${useHls ? 0 : current.offsetSeconds}`,
               trackContentType: "text/vtt",
               language: subtitleLanguage,
               name: `Subtitles (${subtitleLanguage})`
@@ -431,12 +474,26 @@ const play = Command.make(
           .pipe(Effect.catchTag("CastProtocolError", () => Effect.void)),
         Effect.succeed(Option.isSome(subtitleIndex))
       )
-      yield* session.load(media, Option.isNone(subtitleIndex) ? [] : [SUBTITLE_TRACK_ID])
-      // The receiver reports time within this stream, which begins at the
-      // offset just loaded. `cast seek` runs in a different process and has no
-      // other way to learn it.
+      yield* session.load(
+        media,
+        Option.isNone(subtitleIndex) ? [] : [SUBTITLE_TRACK_ID],
+        // Where to begin. Only meaningful under HLS: progressively the stream
+        // itself starts at the offset, so asking to start anywhere but zero
+        // would skip that much again.
+        useHls ? Option.some(current.offsetSeconds) : Option.none()
+      )
+      // What `cast seek` needs, and it needs both halves: where this stream
+      // begins, because the receiver reports time relative to it, and whether
+      // the receiver can seek at all — under HLS it can, progressively the
+      // player has to restart ffmpeg instead.
       yield* State.setActive(
-        Option.some(new State.ActiveStream({ file: absolute, offsetSeconds: current.offsetSeconds }))
+        Option.some(
+          new State.ActiveStream({
+            file: absolute,
+            offsetSeconds: useHls ? Seconds.make(0) : current.offsetSeconds,
+            seekable: useHls
+          })
+        )
       )
       yield* controller.noteRestart
     })

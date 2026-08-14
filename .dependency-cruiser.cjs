@@ -31,9 +31,11 @@ module.exports = {
       name: "node-stays-in-platform-and-protocol",
       severity: "error",
       comment:
-        "node: builtins belong behind platform (UDP, http.createServer) or the " +
-        "Cast TLS transport. Everywhere else uses the Effect equivalent.",
-      from: { pathNot: "^(packages/(platform|protocol)|scripts|tools)" },
+        "node: builtins belong behind platform (UDP, http.createServer), the " +
+        "Cast TLS transport, or the emulator — which is a TLS *server* and so " +
+        "is Node interop by its nature. Everywhere else uses the Effect " +
+        "equivalent.",
+      from: { pathNot: "^(packages/(platform|protocol|emulator)|scripts|tools)" },
       // Core modules resolve to their bare name with the protocol recorded
       // separately, so match on dependencyTypes rather than the `node:` prefix.
       to: {

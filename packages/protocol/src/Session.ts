@@ -21,6 +21,7 @@ import {
   CastProtocolError,
   LoadFailedError,
   MediaSessionId,
+  type Seconds,
   SessionId,
   type TrackId,
   TransportId,
@@ -97,7 +98,9 @@ export interface Session {
   readonly join: Effect.Effect<void, CastProtocolError>
   readonly load: (
     media: MediaNs.MediaInformation,
-    activeTrackIds: ReadonlyArray<TrackId>
+    activeTrackIds: ReadonlyArray<TrackId>,
+    /** Where to begin, for a presentation the receiver can seek within. */
+    startAt: Option.Option<Seconds>
   ) => Effect.Effect<void, CastProtocolError>
   readonly mediaCommand: (command: MediaCommand) => Effect.Effect<void, CastProtocolError>
   readonly setVolume: (level: VolumeLevel) => Effect.Effect<void>
@@ -344,7 +347,7 @@ export const makeOver = Effect.fn("CastSession.makeOver")(function*(
     launch,
     join,
 
-    load: (media, activeTrackIds) =>
+    load: (media, activeTrackIds, startAt) =>
       withTransport((transport) =>
         Effect.gen(function*() {
           const id = yield* nextRequestId
@@ -358,7 +361,9 @@ export const makeOver = Effect.fn("CastSession.makeOver")(function*(
               requestId: id,
               media,
               autoplay: true,
-              currentTime: 0,
+              // Zero unless a start position was given. Only a presentation the
+              // receiver can seek within can honour anything else.
+              currentTime: Option.getOrElse(startAt, () => 0),
               ...Option.match(currentSession, {
                 onNone: () => ({}),
                 onSome: (value) => ({ sessionId: value })

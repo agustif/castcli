@@ -6,7 +6,7 @@
 // types instead of `any`.
 
 import { Option, Schema } from "effect"
-import { Bitrate } from "./Brands.ts"
+import { Bitrate, Seconds } from "./Brands.ts"
 
 /**
  * ffprobe reports dispositions as 0/1 integers. Only the two that bear on
@@ -82,6 +82,20 @@ export class MediaInfo extends Schema.Class<MediaInfo>("MediaInfo")({
   streams: Schema.Array(MediaStream),
   format: MediaFormat
 }) {
+  /**
+   * How long the film runs, when the container says.
+   *
+   * Absent rather than zero: an HLS playlist is arithmetic over this number, so
+   * a container that does not report one cannot be presented that way at all —
+   * and a zero would quietly produce a playlist with no segments.
+   */
+  get durationSeconds(): Option.Option<Seconds> {
+    return Option.flatMap(
+      Option.fromNullishOr(this.format.duration),
+      (duration) => Seconds.makeOption(Number(duration))
+    )
+  }
+
   /** Absent for containers that do not report one, rather than a zero. */
   get video(): Option.Option<MediaStream> {
     return Option.fromNullishOr(this.streams.find((stream) => stream.isVideo))

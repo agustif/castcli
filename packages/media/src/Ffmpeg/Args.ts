@@ -68,6 +68,17 @@ export type Arg = Data.TaggedEnum<{
   readonly AudioChannels: { readonly count: number }
   readonly AudioBitrate: { readonly rate: AudioBitrate }
   readonly Format: { readonly muxer: Muxer }
+  /** Bound the output to a duration — one HLS segment's worth. */
+  readonly Duration: { readonly seconds: number }
+  /**
+   * Shift output timestamps so a segment carries the presentation times it has
+   * in the film. Without it every segment starts at zero and a player that
+   * concatenates them sees time run backwards at each boundary.
+   */
+  readonly TimestampOffset: { readonly seconds: number }
+  /** Force a keyframe at the start, so a segment can be decoded on its own. */
+  readonly ForceKeyFrames: { readonly expression: string }
+  readonly MuxDelay: { readonly seconds: number }
   readonly MovFlags: { readonly flags: ReadonlyArray<MovFlag> }
   readonly Output: { readonly target: string }
 }>
@@ -91,7 +102,14 @@ const render: (arg: Arg) => ReadonlyArray<string> = Match.type<Arg>().pipe(
   Match.tag("ScaleHeight", ({ height }) => ["-vf", `scale=-2:'min(${height},ih)'`]),
   Match.tag("AudioChannels", ({ count }) => ["-ac", String(count)]),
   Match.tag("AudioBitrate", ({ rate }) => ["-b:a", rate]),
-  Match.tag("Format", ({ muxer }) => ["-f", muxer]),
+  Match.tag("Format", ({ muxer }) => ["-f", muxer])
+).pipe(
+  // Split only because `pipe` takes at most twenty arguments; the two halves
+  // are one exhaustive match.
+  Match.tag("Duration", ({ seconds }) => ["-t", String(seconds)]),
+  Match.tag("TimestampOffset", ({ seconds }) => ["-output_ts_offset", String(seconds)]),
+  Match.tag("ForceKeyFrames", ({ expression }) => ["-force_key_frames", expression]),
+  Match.tag("MuxDelay", ({ seconds }) => ["-muxdelay", String(seconds), "-muxpreload", String(seconds)]),
   Match.tag("MovFlags", ({ flags }) => ["-movflags", flags.join("+")]),
   Match.tag("Output", ({ target }) => [target]),
   Match.exhaustive
@@ -160,6 +178,55 @@ export const transcode = (options: TranscodeOptions): ReadonlyArray<string> =>
     Arg.AudioBitrate({ rate: options.audioBitrate }),
     Arg.Format({ muxer: "mp4" }),
     Arg.MovFlags({ flags: ["frag_keyframe", "empty_moov", "default_base_moof"] }),
+    Arg.Output({ target: "pipe:1" })
+  ])
+
+export interface SegmentOptions {
+  readonly file: FilePath
+  readonly startSeconds: Seconds
+  readonly durationSeconds: number
+  readonly videoIndex: StreamIndex
+  readonly audioIndex: Option.Option<StreamIndex>
+  readonly rung: Rung
+  readonly audioBitrate: AudioBitrate
+}
+
+/**
+ * One HLS segment on stdout, as MPEG-TS.
+ *
+ * Each segment is an independent ffmpeg run seeking straight to its own start,
+ * which is what makes the playlist's thousand segments cost nothing until they
+ * are asked for. Three details make the pieces fit back together:
+ *
+ *   * the seek is *before* `-i`, so it is fast and rebases the decode;
+ *   * `-output_ts_offset` puts the presentation timestamps back where they
+ *     belong in the film, so time does not restart at every boundary;
+ *   * a keyframe is forced at t=0 so the segment decodes without its
+ *     predecessor, which is the whole premise of switching variants mid-film.
+ *
+ * MPEG-TS rather than fragmented MP4 because it needs no initialisation
+ * segment: each piece is self-contained, so a variant switch is just the next
+ * request.
+ */
+export const segment = (options: SegmentOptions): ReadonlyArray<string> =>
+  renderAll([
+    ...preamble,
+    Arg.SeekInput({ at: options.startSeconds }),
+    Arg.Input({ path: options.file }),
+    Arg.Duration({ seconds: options.durationSeconds }),
+    Arg.Map({ stream: options.videoIndex }),
+    ...Option.match(options.audioIndex, {
+      onNone: () => [],
+      onSome: (stream) => [Arg.Map({ stream })]
+    }),
+    ...videoFor(options.rung),
+    Arg.ForceKeyFrames({ expression: "expr:gte(t,0)" }),
+    Arg.Audio({ codec: "aac" }),
+    Arg.AudioChannels({ count: 2 }),
+    Arg.AudioBitrate({ rate: options.audioBitrate }),
+    Arg.TimestampOffset({ seconds: options.startSeconds }),
+    Arg.MuxDelay({ seconds: 0 }),
+    Arg.Format({ muxer: "mpegts" }),
     Arg.Output({ target: "pipe:1" })
   ])
 

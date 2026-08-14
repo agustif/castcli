@@ -21,7 +21,15 @@ import * as os from "node:os"
 export class ActiveStream extends Schema.Class<ActiveStream>("ActiveStream")({
   file: FilePath,
   /** Where the running stream begins; the receiver's clock is relative to it. */
-  offsetSeconds: Seconds
+  offsetSeconds: Seconds,
+  /**
+   * Whether the receiver can seek by itself.
+   *
+   * True under HLS, where every segment of the film is addressable. False for
+   * the progressive stream, which is a live pipe with no byte ranges — there
+   * the player has to restart ffmpeg at the new offset instead.
+   */
+  seekable: Schema.optionalKey(Schema.Boolean)
 }) {}
 
 /**
