@@ -104,13 +104,19 @@ cast stop
 These attach to the running session rather than launching a new one, so pausing
 does not restart the film.
 
-`seek` needs a word of explanation. The receiver reports and accepts time
-*within the current stream*, which begins wherever the last `LOAD` started — so
-a position in the film is `offset + reported`, and `play` publishes that offset
-for `seek` to read. A target *before* the stream begins cannot be reached by
-seeking at all; it needs a fresh `LOAD`, so `seek` asks the playing process to
-do it. That is the ordinary case when rewinding past a resume point, not an
-edge case.
+`seek` needs a word of explanation, because the obvious implementation does not
+work. What we serve is a live pipe from ffmpeg with no `Content-Length` and no
+byte ranges, so there is nothing for the receiver to seek *within*: sent the
+Cast `SEEK` command, it re-requests the same URL and starts the stream again
+from its beginning. That looked like it worked — the command printed a new
+position while the film played from the old one — which is worse than failing.
+
+So every seek is served by restarting ffmpeg at the new offset, the same thing
+`--seek` does at startup. `cast seek` writes the request into the state file and
+the running `cast play` picks it up. The arithmetic still matters for relative
+seeks: the receiver reports time within the current stream, which begins
+wherever the last `LOAD` started, so a position in the film is
+`offset + reported`, and `play` publishes that offset.
 
 ### Environment
 
@@ -298,9 +304,9 @@ Ordered by how much they cost someone trying to watch something.
 - **`cast streams` reads every subtitle track.** Counting cues means extracting
   them, so listing a file with several subtitle tracks takes ~20 seconds. `play`
   only reads the candidates in one language, so it is much cheaper.
-- **Seeking backwards past the stream start restarts the stream.** It cannot be
-  a receiver-side seek; the stream does not contain that part of the film. The
-  player is asked to reload instead, which the viewer sees as a rebuffer.
+- **Every seek restarts the stream.** It cannot be a receiver-side seek: a live
+  pipe has no byte ranges to seek within. The player reloads at the new offset
+  instead, which the viewer sees as a rebuffer. HLS would fix this too.
 - **The two processes talk through a file.** `cast seek` reaches the running
   `cast play` by writing a request into the state file, which the player polls
   once a second. Unglamorous, and a socket would be a great deal of machinery

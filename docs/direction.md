@@ -143,9 +143,9 @@ Scope discipline, recorded so it does not have to be re-argued:
 **Tier 1 — serves the job directly.** Done.
 
 1. ~~Zero-flag defaults: device, audio, subtitles by the rules above.~~
-2. ~~`cast seek`.~~ Also handles a target before the stream begins, by asking
-   the playing process to reload — the ordinary case when rewinding past a
-   resume point.
+2. ~~`cast seek`.~~ Served by reloading rather than by the receiver's `SEEK`,
+   because a live pipe has no byte ranges: asked to jump, the receiver silently
+   restarts the stream from its beginning instead.
 3. ~~Remember position per file, and resume by default.~~
 4. ~~`cast streams` shows cue counts and dispositions~~, and marks what `play`
    would choose.
@@ -170,7 +170,8 @@ the caller printed "paused".
 Everything above the line is done, which makes the remaining list short and
 worth stating plainly:
 
-- **HLS**, on the trigger — the only remaining thing a viewer can see.
+- **HLS**, on the trigger — now covering both remaining visible defects, since a
+  seek restarts the stream for exactly the same reason a quality switch does.
 - **`cast streams` costs ~20 seconds** on a file with several subtitle tracks,
   because counting cues means extracting them. `play` is cheaper — it only reads
   one language — but the listing could cache what it learns.

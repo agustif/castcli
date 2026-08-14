@@ -38,6 +38,9 @@ const withStore = <A, E>(use: (directory: string) => Effect.Effect<A, E, State.S
     )
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
 
+const idOf = (request: Option.Option<State.SeekRequest>) =>
+  Option.getOrElse(Option.map(request, (value) => value.id), () => 0)
+
 describe("State", () => {
   it.effect("remembers nothing before anything has been written", () =>
     withStore(() =>
@@ -100,9 +103,6 @@ describe("State", () => {
         const first = yield* State.pendingSeek
         yield* State.requestSeek(Brands.Seconds.make(60))
         const second = yield* State.pendingSeek
-
-        const idOf = (request: Option.Option<State.SeekRequest>) =>
-          Option.getOrElse(Option.map(request, (value) => value.id), () => 0)
 
         assert.isTrue(idOf(second) > idOf(first))
       })

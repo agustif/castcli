@@ -187,16 +187,24 @@ const stop = Command.make(
 ).pipe(Command.withDescription("Stop playback and close the receiver session"))
 
 /**
- * Seek within the running stream.
+ * Seek within what is playing.
  *
  * Three flags rather than one signed argument: `cast seek -5:00` is parsed as a
  * flag by any argument parser, and quoting your way around that is worse than
  * saying what you mean.
  *
- * The arithmetic is the interesting part. The receiver reports and accepts time
- * *within the current stream*, which begins wherever the last LOAD started — so
- * a position in the film is `offset + reported`. `play` publishes that offset,
- * and without it an absolute seek would silently land in the wrong place.
+ * Every seek is served by reloading, never by the receiver's own `SEEK`. What
+ * we serve is a live pipe from ffmpeg with no `Content-Length` and no byte
+ * ranges, so there is nothing for the receiver to seek *within*: asked to jump
+ * forward, it re-requests the same URL and starts the stream again from its
+ * beginning. That looked like it worked — the command printed a new position
+ * while the film played from the old one — which is worse than failing. So the
+ * player is asked to restart ffmpeg at the new offset, which is the same thing
+ * `--seek` does at startup and the only mechanism that actually moves.
+ *
+ * The arithmetic still matters for relative seeks: the receiver reports time
+ * *within the current stream*, which begins wherever the last LOAD started, so
+ * a position in the film is `offset + reported`. `play` publishes that offset.
  */
 const seek = Command.make(
   "seek",
@@ -225,7 +233,7 @@ const seek = Command.make(
       onSome: (stream) => stream.offsetSeconds
     })
 
-    yield* withSession(ip, (session, current) =>
+    yield* withSession(ip, (_session, current) =>
       Effect.gen(function*() {
         const within = Option.match(current, {
           onNone: () => 0,
@@ -248,32 +256,22 @@ const seek = Command.make(
               Effect.fail(
                 new SeekTargetError({ message: "say where to seek: --to, --forward or --back" })
               ),
-            onSome: (at) => Effect.succeed(Math.max(0, at))
+            onSome: (at) => Effect.succeed(Brands.Seconds.make(Math.max(0, at)))
           }
         )
 
-        const at = Brands.Seconds.make(wanted)
-
-        // The stream only exists from its offset onwards, so anything earlier
-        // cannot be reached by seeking — it needs a fresh LOAD, and only the
-        // process serving the file can issue one. Asking it is far better than
-        // refusing: rewinding past the point a film was resumed from is the
-        // ordinary case, not an edge one.
+        // Nothing is playing to reload, so there is nothing this can do.
         yield* Effect.when(
-          Effect.andThen(
-            State.requestSeek(at),
-            Console.log(`rewinding to ${TimeCode.format(at)} (the stream restarts there)`)
+          Effect.fail(
+            new SeekTargetError({
+              message: "nothing is playing — start it with `cast play --seek`"
+            })
           ),
-          Effect.succeed(wanted < offset)
+          Effect.succeed(Option.isNone(active))
         )
 
-        yield* Effect.when(
-          Effect.andThen(
-            session.mediaCommand(Session.MediaCommand.SEEK({ currentTime: wanted - offset })),
-            Console.log(`seeking to ${TimeCode.format(at)}`)
-          ),
-          Effect.succeed(wanted >= offset)
-        )
+        yield* State.requestSeek(wanted)
+        yield* Console.log(`seeking to ${TimeCode.format(wanted)}`)
       }))
   })
 ).pipe(Command.withDescription("Seek within what is playing"))
