@@ -22,7 +22,7 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { Ffmpeg, Hls } from "@castcli/media"
 import type { Rung } from "@castcli/domain"
 import { Brands, Seconds } from "@castcli/domain"
-import { Vtt } from "@castcli/media"
+import { Srt, Vtt } from "@castcli/media"
 
 export interface SessionState {
   readonly offsetSeconds: Brands.Seconds
@@ -256,6 +256,32 @@ export const routes = (options: MediaServerOptions) =>
             "cache-control": "no-store"
           }
         })
+      })
+    ),
+
+    HttpRouter.route(
+      "GET",
+      "/subs.srt",
+      Effect.fn("MediaServer.subtitlesSrt")(function*(
+        request: HttpServerRequest.HttpServerRequest
+      ) {
+        // The same cues in the other format, for televisions that will not read
+        // WebVTT. A DLNA renderer is told its subtitle track is `text/srt` —
+        // that is what the `sec:CaptionInfoEx` element Samsung and LG read means
+        // — and handing it WebVTT at that URL produces a file it fetches, fails
+        // to parse, and says nothing about.
+        const current = yield* Ref.get(options.state)
+        const offsetSeconds = Option.getOrElse(queryOffset(request), () => current.offsetSeconds)
+        return HttpServerResponse.text(
+          Srt.encode(Vtt.cutFrom(current.cues, offsetSeconds)),
+          {
+            contentType: "application/x-subrip",
+            headers: {
+              "access-control-allow-origin": "*",
+              "cache-control": "no-store"
+            }
+          }
+        )
       })
     )
   ])

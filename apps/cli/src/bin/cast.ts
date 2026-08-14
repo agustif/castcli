@@ -352,6 +352,15 @@ const playOnRenderer = Effect.fn("cast.playOnRenderer")(function*(options: {
   readonly durationSeconds: Option.Option<Seconds>
   readonly subtitleUrl: Option.Option<string>
   readonly from: Seconds
+  /**
+   * Where the viewer has got to.
+   *
+   * Without this the position saved every fifteen seconds is the one playback
+   * *started* at, so an hour of watching is remembered as none of it and the
+   * film resumes at the beginning — which is worse than not remembering,
+   * because it looks deliberate.
+   */
+  readonly onPosition: (at: Seconds) => Effect.Effect<void>
 }) {
   const renderer = yield* DlnaRenderer.connect(options.renderer)
 
@@ -391,7 +400,10 @@ const playOnRenderer = Effect.fn("cast.playOnRenderer")(function*(options: {
       Option.match({
         onNone: () => Effect.void,
         onSome: (playback) =>
-          Effect.logDebug(`${playback.state} at ${TimeCode.format(playback.position)}`)
+          Effect.andThen(
+            options.onPosition(playback.position),
+            Effect.logDebug(`${playback.state} at ${TimeCode.format(playback.position)}`)
+          )
       })
     ),
     Schedule.spaced(Duration.seconds(1))
@@ -949,11 +961,16 @@ const play = Command.make(
           url: `${baseUrl}/stream?o=${resumed}`,
           title: path.basename(absolute),
           durationSeconds: duration,
+          // SubRip rather than WebVTT: the metadata handed to a renderer
+          // advertises `text/srt`, which is what the Samsung and LG firmware
+          // reads, and a set given WebVTT there fetches it and silently shows
+          // nothing.
           subtitleUrl: Option.map(
             subtitleIndex,
-            () => `${baseUrl}/subs.vtt?o=${resumed}`
+            () => `${baseUrl}/subs.srt?o=${resumed}`
           ),
-          from: resumed
+          from: resumed,
+          onPosition: (at) => Ref.set(position, at)
         })),
       Match.exhaustive
     )

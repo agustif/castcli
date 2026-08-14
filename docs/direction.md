@@ -106,8 +106,30 @@ Recorded so it does not have to be re-argued:
 - **Not multi-device groups or sync.** A different job with a different hard
   part (clock alignment), and not one anybody has asked for.
 
+## The third protocol
+
+AirPlay was researched and deliberately not built; the reasoning is in
+[`airplay.md`](airplay.md). The short version is that it fails this project's
+own test twice over. There is no first source to generate from — unlike
+Chromium's `.proto` and the UPnP service descriptions, what exists is
+reverse-engineered notes, and the part that matters for a current Apple TV
+exists only in two unmerged implementations. And the one path demonstrably
+working on modern hardware is *mirroring*, which inverts the pull model that
+lets Cast and DLNA share everything above the transport.
+
+It would also be unfinishable without an Apple TV to test against, which is the
+same constraint that keeps HLS from being the default.
+
 ## What is left
 
-**One session on a real television.** After that `--hls` becomes the default and
-the quality controller's actuation — the reload queue, the `LOAD` reissue, the
-probe-and-hold logic — can be deleted. That is the entire list.
+**Hardware to test against.** Three things wait on it and nothing else:
+
+- **One Cast session with `--hls`.** After that it becomes the default and the
+  quality controller's actuation — the reload queue, the `LOAD` reissue, the
+  probe-and-hold logic — can be deleted.
+- **One DLNA television.** The whole path is verified against an emulated
+  renderer and has never met a real set.
+- **An Apple TV**, if AirPlay is ever wanted, to settle whether the legacy
+  `/play` still works or the play queue is mandatory.
+
+Everything that can be verified without a device has been.
