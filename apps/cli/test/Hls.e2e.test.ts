@@ -252,7 +252,44 @@ describe("cast play, against an emulated device", () => {
             const segments = fetched.filter((url) => url.endsWith(".ts"))
             assert.isAtLeast(segments.length, 1)
 
-            // 4. The subtitle track is side-loaded rather than part of the
+            // 4. Seeking is what HLS is for: under it the receiver seeks
+            //    itself, so `cast seek` sends SEEK rather than asking the
+            //    player to restart ffmpeg. Progressively this same command
+            //    reloads instead, which is the distinction worth pinning.
+            const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+            yield* Effect.scoped(
+              Effect.flatMap(
+                spawner.spawn(
+                  ChildProcess.make(
+                    process.execPath,
+                    ["--import", "tsx", "apps/cli/src/bin/cast.ts", "seek", "--to", "0:12"],
+                    {
+                      extendEnv: true,
+                      env: {
+                        CAST_DEVICE_PORT: String(device.port),
+                        XDG_STATE_HOME: directory
+                      }
+                    }
+                  )
+                ),
+                (handle) => handle.exitCode
+              )
+            )
+
+            yield* eventually(
+              device.playback,
+              (state) => state._tag === "Playing" && state.at === 12,
+              Duration.seconds(30)
+            )
+            const playback = yield* device.playback
+            assert.strictEqual(playback._tag, "Playing")
+            assert.strictEqual(
+              playback._tag === "Playing" ? playback.at : -1,
+              12,
+              "the device did not seek where it was told"
+            )
+
+            // 5. The subtitle track is side-loaded rather than part of the
             //    presentation, so it has to be fetched separately — and under
             //    HLS it must cover the whole film, not start at an offset.
             yield* eventually(

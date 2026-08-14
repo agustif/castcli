@@ -277,7 +277,7 @@ such an import resolve.
 | `npm run vocabulary:sync` | refetch the media vocabulary from Google (needs the network) |
 | `npm run depcruise` | no cycles, Node builtins stay in `platform`/`protocol`, packages never import the app |
 | `npm run codegen:check` | the generated wire descriptors and media vocabulary are not stale |
-| `npm test` | 103 tests, including two that run the binary at an emulated device |
+| `npm test` | 106 tests, including end-to-end runs against an emulated device |
 | `npm run check` | all of the above — and the only thing CI runs |
 
 The lint rules encode one idea: never hand-roll what Effect provides. `no-if`,
