@@ -15,7 +15,7 @@ import { FileSystem } from "effect/FileSystem"
 import { FetchHttpClient } from "effect/unstable/http"
 import { NodeServices } from "@effect/platform-node"
 import { DlnaDevice } from "@castcli/emulator"
-import { eventually, hasBinary, makeSample, play } from "./support/Fixture.ts"
+import { eventually, hasBinary, makeSample, noStrayPlayers, play } from "./support/Fixture.ts"
 
 const TestServices = Layer.mergeAll(FetchHttpClient.layer, NodeServices.layer)
 
@@ -26,6 +26,7 @@ describe("cast play, against an emulated DLNA renderer", () => {
     "finds a renderer over SSDP and gets it to pull the film",
     () =>
       Effect.gen(function*() {
+        yield* noStrayPlayers
         const ffmpeg = yield* hasBinary("ffmpeg")
 
         return yield* Effect.when(

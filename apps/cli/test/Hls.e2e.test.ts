@@ -11,7 +11,7 @@
 // pipeline installed is a suite people stop running.
 
 import { assert, describe, it } from "@effect/vitest"
-import { eventually, hasBinary, makeSample, play } from "./support/Fixture.ts"
+import { eventually, hasBinary, makeSample, noStrayPlayers, play } from "./support/Fixture.ts"
 import { Duration, Effect, Layer, Option } from "effect"
 import { FileSystem } from "effect/FileSystem"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -35,6 +35,7 @@ describe("cast play, against an emulated device", () => {
     "serves HLS the receiver can actually walk",
     () =>
       Effect.gen(function*() {
+        yield* noStrayPlayers
         const ffmpeg = yield* hasBinary("ffmpeg")
         const openssl = yield* hasBinary("openssl")
 
@@ -153,6 +154,7 @@ describe("cast play, against an emulated device", () => {
     "still serves the progressive stream, which the receiver pulls whole",
     () =>
       Effect.gen(function*() {
+        yield* noStrayPlayers
         const ffmpeg = yield* hasBinary("ffmpeg")
         const openssl = yield* hasBinary("openssl")
 
@@ -200,6 +202,7 @@ describe("cast play, against an emulated device", () => {
     "can be found rather than told where it is",
     () =>
       Effect.gen(function*() {
+        yield* noStrayPlayers
         const ffmpeg = yield* hasBinary("ffmpeg")
         const openssl = yield* hasBinary("openssl")
 

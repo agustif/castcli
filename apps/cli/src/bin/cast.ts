@@ -394,19 +394,39 @@ const playOnRenderer = Effect.fn("cast.playOnRenderer")(function*(options: {
   // There is no status stream to subscribe to — UPnP has no channel back — so
   // the position is polled. Once a second matches what the receiver-side
   // equivalent reports and is slow enough not to bother a television.
+  //
+  // The loop ends when the device says it has stopped, so `cast play` returns
+  // when the film does instead of polling a finished television indefinitely.
   yield* Effect.repeat(
     Effect.flatMap(
       renderer.status,
       Option.match({
-        onNone: () => Effect.void,
+        onNone: () => Effect.succeed(false),
         onSome: (playback) =>
-          Effect.andThen(
-            options.onPosition(playback.position),
-            Effect.logDebug(`${playback.state} at ${TimeCode.format(playback.position)}`)
+          Effect.as(
+            Effect.andThen(
+              // Only a position the device actually reported. `RelTime` is
+              // legitimately `NOT_IMPLEMENTED` on some renderers, and writing a
+              // fabricated zero to the resume point once a second would
+              // continuously reset how far the viewer had got.
+              Option.match(playback.position, {
+                onNone: () => Effect.void,
+                onSome: (at) => options.onPosition(at)
+              }),
+              Effect.logDebug(
+                `${playback.state} at ${
+                  Option.match(playback.position, {
+                    onNone: () => "a position it does not report",
+                    onSome: (at) => TimeCode.format(at)
+                  })
+                }`
+              )
+            ),
+            playback.state === "STOPPED"
           )
       })
     ),
-    Schedule.spaced(Duration.seconds(1))
+    { schedule: Schedule.spaced(Duration.seconds(1)), until: (stopped) => stopped }
   )
 })
 
@@ -620,7 +640,17 @@ const play = Command.make(
     // caching that would cache a port the device is free to change on reboot.
     yield* Match.value(target).pipe(
       Match.tag("Cast", ({ device: found }) => State.rememberDevice(found.ip)),
-      Match.tag("Dlna", () => Effect.void),
+      // The name, not the description URL: a description lives on a port the
+      // device re-picks when it reboots, and the URL carries no identity — a
+      // remembered one points at nothing, or at whatever else has since been
+      // given that port. A name survives a reboot and costs the SSDP sweep that
+      // discovery would have cost anyway.
+      //
+      // Recorded here as well as by the control commands, or the first `pause`
+      // after playing to a renderer has no memory of the protocol and sweeps
+      // both networks preferring Cast — which a Chromecast on the same network
+      // will happily answer.
+      Match.tag("Dlna", ({ renderer }) => State.rememberRenderer(renderer.friendlyName)),
       Match.exhaustive
     )
     const advertise = yield* localAddress(config.advertiseHost)
@@ -956,7 +986,23 @@ const play = Command.make(
             )
         )),
       Match.tag("Dlna", ({ renderer }) =>
-        playOnRenderer({
+        Effect.andThen(
+          // What `cast seek` reads to turn a position in the film into one
+          // within the track we served. The URL carries `?o=${resumed}`, so a
+          // seek that assumed the track began at zero would be wrong by exactly
+          // the resume offset — invisible on a fresh play and confusing on a
+          // part-watched one. `seekable` because a renderer is handed a plain
+          // URL with byte ranges, and seeks it natively.
+          State.setActive(
+            Option.some(
+              new State.ActiveStream({
+                file: absolute,
+                offsetSeconds: resumed,
+                seekable: true
+              })
+            )
+          ),
+          playOnRenderer({
           renderer,
           url: `${baseUrl}/stream?o=${resumed}`,
           title: path.basename(absolute),
@@ -969,9 +1015,10 @@ const play = Command.make(
             subtitleIndex,
             () => `${baseUrl}/subs.srt?o=${resumed}`
           ),
-          from: resumed,
-          onPosition: (at) => Ref.set(position, at)
-        })),
+            from: resumed,
+            onPosition: (at) => Ref.set(position, at)
+          })
+        )),
       Match.exhaustive
     )
   })

@@ -11,7 +11,7 @@
 // every write is best effort. That policy is the reason this module exists
 // rather than the calls being inlined: it has to be applied consistently.
 
-import { Config, Context, Effect, Layer, Option, Schema } from "effect"
+import { Config, Context, Effect, Layer, Match, Option, Schema } from "effect"
 import { FileSystem } from "effect/FileSystem"
 import { Path } from "effect/Path"
 import { FilePath, Ipv4, Seconds } from "@castcli/domain"
@@ -56,8 +56,37 @@ export class CueCounts extends Schema.Class<CueCounts>("CueCounts")({
   counts: Schema.Record(Schema.String, Schema.Number)
 }) {}
 
+/**
+ * The device the last command acted on.
+ *
+ * Tagged, because the two protocols are not identified by the same thing and
+ * the difference is not cosmetic: a control command has to know which network
+ * to sweep before it can act, and a television and a Chromecast in the same
+ * room will both answer to "the last device I used".
+ *
+ * The Cast arm keeps an address, which is a DHCP lease rather than an identity
+ * and so can go stale. That costs one failed connection and then discovery runs
+ * anyway, which is why the shortcut can only ever save time.
+ *
+ * The DLNA arm deliberately keeps the renderer's **name** and not its
+ * description URL, even though the URL is the thing `Renderer.connect` needs.
+ * A description is served from an ephemeral port that the device is free to
+ * change every time it reboots, and the URL carries no identity of its own — so
+ * a remembered one points at nothing, or worse, at whatever else on that host
+ * has since been given the port, and a `pause` would be posted at a stranger.
+ * A name survives a reboot; turning it back into a URL costs one SSDP sweep,
+ * which is what discovery would have cost anyway. A stale URL would be worse
+ * than no memory at all, a stale name is merely no faster.
+ */
+export const LastTarget = Schema.TaggedUnion({
+  Cast: { ip: Ipv4 },
+  Dlna: { friendlyName: Schema.String }
+})
+
+export type LastTarget = typeof LastTarget.Type
+
 export class Remembered extends Schema.Class<Remembered>("Remembered")({
-  lastDevice: Schema.optional(Ipv4),
+  lastTarget: Schema.optional(LastTarget),
   /** Absolute path to the position last reported for it. */
   positions: Schema.optionalKey(Schema.Record(Schema.String, Seconds)),
   active: Schema.optional(ActiveStream),
@@ -171,10 +200,31 @@ export const rememberCueCounts = (
         cues: { ...state.cues, [file]: new CueCounts({ fingerprint, counts }) }
       })))
 
-/** The device the last `play` used. */
-export const rememberedDevice = Effect.flatMap(
+/** Whatever was last acted on, Cast or DLNA. */
+export const rememberedTarget = Effect.flatMap(
   Store,
-  (store) => Effect.map(store.read, (state) => Option.fromNullishOr(state.lastDevice))
+  (store) => Effect.map(store.read, (state) => Option.fromNullishOr(state.lastTarget))
+)
+
+const addressOf: (target: LastTarget) => Option.Option<Ipv4> = Match.type<LastTarget>().pipe(
+  Match.tag("Cast", ({ ip }) => Option.some(ip)),
+  // A renderer has no address worth handing to anything: it is reached through
+  // the control URLs in its description, which are fetched afresh every time.
+  Match.tag("Dlna", () => Option.none<Ipv4>()),
+  Match.exhaustive
+)
+
+/**
+ * The Cast address the last `play` used, if the last device was a Cast one.
+ *
+ * A narrower view of `rememberedTarget` for the callers that can only act on an
+ * address at all. Absent when the last device was a renderer, which is the
+ * point: answering with an address that belongs to some earlier session would
+ * send a command to a device nobody has touched in days.
+ */
+export const rememberedDevice = Effect.map(
+  rememberedTarget,
+  (target) => Option.flatMap(target, addressOf)
 )
 
 /** Where the running stream starts, if `play` published one. */
@@ -196,9 +246,19 @@ export const rememberPosition = (file: FilePath, at: Seconds) =>
         positions: { ...state.positions, [file]: at }
       })))
 
-export const rememberDevice = (ip: Ipv4) =>
+const rememberTarget = (target: LastTarget) =>
   Effect.flatMap(Store, (store) =>
-    store.update((state) => new Remembered({ ...state, lastDevice: ip })))
+    store.update((state) => new Remembered({ ...state, lastTarget: target })))
+
+export const rememberDevice = (ip: Ipv4) => rememberTarget({ _tag: "Cast", ip })
+
+/**
+ * A renderer is remembered by name. See `LastTarget` for why its description
+ * URL, which is the thing actually needed to talk to it, is the one thing not
+ * worth keeping.
+ */
+export const rememberRenderer = (friendlyName: string) =>
+  rememberTarget({ _tag: "Dlna", friendlyName })
 
 /** Publish where the running stream starts, so another process can seek in it. */
 export const setActive = (active: Option.Option<ActiveStream>) =>

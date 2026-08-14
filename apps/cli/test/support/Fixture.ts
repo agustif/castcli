@@ -11,6 +11,41 @@ import { FileSystem } from "effect/FileSystem"
 import { Path } from "effect/Path"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
+/**
+ * Refuse to run beside a player left over from an earlier run.
+ *
+ * A stray `cast play` keeps sweeping for its device, and the mDNS and SSDP
+ * answers it draws are enough to make a discovery test look for ninety seconds
+ * and find nothing. That has now happened three times, each time presenting as
+ * a mysterious timeout in whichever test ran first. Failing immediately with
+ * the reason is worth more than the tidiest possible cleanup, because cleanup
+ * cannot be guaranteed: a test killed by a timeout — or by someone pressing
+ * Ctrl-C — never runs its finalizers at all.
+ */
+export const noStrayPlayers = Effect.gen(function*() {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const running = yield* Effect.orElseSucceed(
+    // Matched on how node invokes it, not on the bare string: a shell whose own
+    // command line mentions `cast.cjs play` — the very `pkill` someone runs to
+    // clean up, for instance — would otherwise match itself and report a stray
+    // that does not exist.
+    spawner.string(ChildProcess.make("pgrep", ["-f", "node .*dist/cast\\.cjs play"])),
+    () => ""
+  )
+  const count = running.split("\n").filter((line) => line.trim().length > 0).length
+
+  return yield* Effect.when(
+    Effect.die(
+      new Error(
+        `${count} stray \`cast play\` process(es) are still running from an earlier run. ` +
+          "They keep searching for a device that no longer exists, and their traffic makes " +
+          "discovery tests time out. Run: pkill -f 'cast.cjs play'"
+      )
+    ),
+    Effect.succeed(count > 0)
+  )
+})
+
 export const hasBinary = (name: string) =>
   Effect.map(
     Effect.exit(
@@ -160,6 +195,11 @@ export const play = (
                 ...extra
               ],
               {
+                // The player traps SIGTERM to close its scopes tidily, and a
+                // finalizer that hangs there leaves it alive — which then keeps
+                // answering discovery and breaks whichever test runs next.
+                // Politeness first, then force.
+                forceKillAfter: "2 seconds",
                 extendEnv: true,
                 env: {
                   CAST_DEVICE_PORT: String(device.port),

@@ -22,32 +22,60 @@ plainer than DLNA — no SOAP, no DIDL:
 | `GET /playback-info` | duration, position, rate, buffering, seekable ranges |
 
 Discovery is mDNS `_airplay._tcp` on port 7000 — the same machinery already
-written for Cast. Feature bit 0 is "video supported" and bit 4 is "http live
-streaming supported", so a device announces whether it will take the HLS this
-tool already serves.
+written for Cast. A device announces its capabilities as a 64-bit `features`
+bitmask in its TXT record, and whether it will play video is `bit 0 || bit 49`.
+
+That disjunction is not pedantry. Decoding the TXT records of twelve real
+devices shows the two halves of the world use different bits: **every Apple TV
+sets bit 0 and clears 49; every third-party set — Roku, Samsung, LG — sets 49
+and clears 0.** Checking either alone silently excludes half of them, and that
+has bitten a real project: pyatv's author read an LG's mask against a community
+table with no row 49 and concluded video was unsupported, while pyatv's own
+runtime check said otherwise.
+
+Whether *pairing* is required is a different field again — `flags`, where bit 3
+is PIN mode, bit 7 password required and bit 9 pair-PIN. Capability and
+permission are separate questions and reading one for the other is a
+well-travelled mistake.
 
 On paper that is a smaller job than DLNA was.
 
 ## What does not
 
-**`POST /play` no longer starts video on a current Apple TV.** Modern receivers
-drive playback through a play queue: `POST /command` carrying
-`insertPlayQueueItem`, over a type-130 stream registered with a specific client
-UUID, and **PTP timing is mandatory** — with NTP the session collapses after
-about twenty-seven seconds.
+**A bare `POST /play` does not start video on a current Apple TV.** Two
+investigations reached slightly different accounts of why, and the difference is
+worth keeping rather than smoothing over.
 
-Three independent lines of evidence, which is why this is stated flatly:
+The first: modern receivers drive playback through a play queue — `POST /command`
+carrying `insertPlayQueueItem`, over a type-130 stream registered with a
+specific client UUID, with **PTP timing mandatory**; under NTP the session
+collapses after about twenty-seven seconds.
 
-1. pyatv's own pull request #2899 (open, unmerged, 2026-07-29) says it: *"pyatv
-   sends POST /play, which modern receivers no longer use for video."*
-2. An unrelated project, VioletRelay, independently arrived at the same
-   `POST /command` shape and the *identical* reverse-engineered client UUID.
-3. Apple's shipped framework symbols corroborate it — `insertPlayQueueItem`
-   appears in dumps of `AirPlaySender.framework` and `MediaToolbox`.
+The second, which is better evidenced and less dramatic: `/play` still works,
+but only inside a full AirPlay-2 session — pair-verify, `SETUP`, an event
+channel, `RECORD` — after which it starts **paused** and needs
+`POST /rate?value=1.0`. pyatv's author put it plainly when he fixed it in 2023:
+*"The play_url method has been broken for a very long time as I believed Apple
+wasn't maintaining the underlying functionality anymore. They do, but an AirPlay
+session must be established for it to work now."* The symptom without it is
+exactly what people report: the screen goes black, shows a spinner, and returns
+to the home screen after four seconds.
 
-Two 2026 projects still ship the classic `/play` path. Neither documents a
-single successful Apple TV test, and the one hardware note in either is a Sony
-set answering 404.
+Either way the conclusion is the same — the simple endpoint is not the whole
+protocol — but the second account means the work is "establish a session", not
+"reverse-engineer a play queue", and that is a materially smaller thing. Which
+one is true for a given device is settled by trying it.
+
+The play-queue account rests on three independent lines: pyatv's own unmerged
+pull request #2899, which states that *"modern receivers no longer use [POST
+/play] for video"*; an unrelated project arriving at the same `POST /command`
+shape and the *identical* reverse-engineered client UUID; and Apple's shipped
+framework symbols, where `insertPlayQueueItem` appears in dumps of
+`AirPlaySender.framework`.
+
+Against that, two projects shipping in 2026 still use the classic path. Neither
+documents a single successful Apple TV test, which is the point: nobody has
+published a straight answer, and the disagreement is itself the finding.
 
 **Pairing is unavoidable.** Since tvOS 10.2 a device demands authentication, and
 AirPlay 2 requires HAP: SRP6a, Ed25519, Curve25519, HKDF, and ChaCha20-Poly1305
@@ -65,14 +93,28 @@ MFi hardware module. Handing over a URL does not.
 
 Three reasons, in order of weight.
 
-**There is no first source.** Cast is generated from Chromium's
-`cast_channel.proto` and from the enum tables in the framework Google ships;
-DLNA is generated from the standardised SCPD service descriptions. AirPlay has
-neither. What exists is a community wiki of reverse-engineered notes, and the
-part that actually matters for a modern device — the play-queue command shape —
-exists in exactly two unmerged, undemonstrated implementations. Everything would
-be transcription, of a moving target, which is the practice this project has
-spent its time removing.
+**There is no first source worth generating from.** This is a weaker claim than
+"no machine-readable table exists", and the difference matters, so it is worth
+being precise.
+
+There is no JSON, YAML or TOML of the feature bits anywhere. What exists is: one
+CSV and one markdown table, both unlicensed; five language enums, of which
+pyatv's (MIT) and goplay2's (Apache-2.0) are usable; and Apple's own MFi SDK C
+header, which is the only authoritative artifact and is leaked proprietary
+source that must not be vendored.
+
+The four community tables **materially disagree** at bits 26, 30, 38 and 48, and
+downstream copies introduce fresh errors of their own — one Rust port puts
+`VideoVolumeControl` at bit 6 when it is bit 3. So generating from the licensed
+enums would mean vendoring a table known to be wrong in specific places and
+hand-authoring a correction overlay against a header we may not copy. That is
+not the same kind of act as generating from Chromium's `.proto` or a UPnP
+service description, where the source *is* the contract. It is transcription
+with extra steps, of a target that moves.
+
+The one genuinely machine-readable, authoritative, freely licensed artifact in
+the whole area is IANA's service-name registry, which gives the service types
+and their declared TXT keys — useful, and about a day's worth of the problem.
 
 **The demonstrated path is the wrong shape.** The only AirPlay video that is
 provably working against 2021-2022 Apple TV hardware today is *mirroring*: encode
@@ -93,8 +135,10 @@ meant writing the something.
   media path is perhaps a day's work on top of the HLS already served, and the
   cost collapses to pairing alone.
 - **An AirPlay-compatible television** (Samsung, LG, Sony, Vizio) rather than an
-  Apple TV. These are a different firmware lineage and may well accept the
-  simple path; nobody has published a straight answer.
+  Apple TV. These are a different firmware lineage and they advertise video
+  through bit 49 rather than bit 0, so they are already answering a different
+  question — whether they also accept the simpler session is unpublished, and a
+  single evening with one would settle it.
 - **pyatv #2899 merging**, which would make the play-queue shape a maintained
   reference rather than a draft.
 
