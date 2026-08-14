@@ -2,6 +2,14 @@
 
 Stream a local video file to a Google Cast device from the command line.
 
+```sh
+cast play movie.mkv --device "Living Room" --audio 3 --subs 5
+```
+
+It discovers the TV, serves the file, transcodes only what the receiver cannot
+play, adapts quality to the link while it runs, and carries subtitles the
+receiver will actually render.
+
 Written because VLC could not do it, for a reason worth recording.
 
 ## The bug this exists to work around
@@ -34,6 +42,9 @@ server, hands the receiver a URL, and the receiver fetches from it:
   cast ◀──HTTP:8021── TV         the TV pulls video and subtitles
 ```
 
+Almost every failure in this project came from forgetting that the second arrow
+points inward. The advertised URL has to be routable **from the TV**.
+
 ffmpeg remuxes on the fly into fragmented MP4. Video is stream-copied whenever
 the source is already H.264 8-bit 4:2:0 at 1080p or below; only the audio is
 always re-encoded, because Cast receivers reject AC-3 and E-AC-3 and never
@@ -50,7 +61,8 @@ npm run check   # typecheck, lint, architecture, codegen drift, tests
 
 This is an npm workspace. `npm run cast -- <args>` runs the CLI from source;
 there is no build step in the loop, because package names resolve to each
-package's barrel through tsconfig paths.
+package's barrel through tsconfig paths. It is not yet installable as a global
+binary — see [Known gaps](#known-gaps).
 
 ## Usage
 
@@ -68,8 +80,6 @@ cast play movie.mkv --device "Living Room" --audio 3 --subs 5
 cast play movie.mkv --ip 192.168.1.24 --seek 12:30
 ```
 
-### Flags
-
 | Flag | Meaning |
 |---|---|
 | `--device <substring>` | Pick a device by name |
@@ -78,14 +88,18 @@ cast play movie.mkv --ip 192.168.1.24 --seek 12:30
 | `--subs <index>` | Subtitle stream index, served as a WebVTT sidecar |
 | `--seek <time>` | Start position: `90`, `1:30` or `1:02:03` |
 
-Flags are validated by Schema before anything opens a socket:
+### Control
 
+```sh
+cast status --ip 192.168.1.24     # what is it playing?
+cast toggle                       # pause if playing, resume if paused
+cast pause / cast resume
+cast volume --level 20
+cast stop
 ```
-$ cast play movie.mkv --ip not-an-ip
-ERROR
-  Invalid value for flag --ip: "not-an-ip". Expected: Schema validation failed:
-  Expected a string matching the RegExp ^(\d{1,3}\.){3}\d{1,3}$
-```
+
+These attach to the running session rather than launching a new one, so pausing
+does not restart the film.
 
 ### Environment
 
@@ -97,6 +111,29 @@ ERROR
 | `CAST_AUDIO_BITRATE` | 128k | AAC bitrate |
 | `CAST_DISCOVERY_TIMEOUT_MS` | 4000 | Per-sweep mDNS timeout |
 | `CAST_DEVICE_IP` | — | Pin the device, skipping discovery |
+
+## Failures are messages, not stack traces
+
+Every expected failure is a domain error that renders itself, and bad input is
+rejected by Schema before anything opens a socket:
+
+```
+$ cast status --ip 192.168.1.99
+error: could not reach a Cast device at 192.168.1.99:8009 — check that it is
+switched on and on this network (`cast scan` lists what is reachable)
+
+$ cast play movie.mkv --ip 999.1.1.1
+Invalid value for flag --ip: "999.1.1.1".
+Expected: expected an IPv4 address such as 192.168.1.24
+```
+
+That first one took three separate fixes. The socket was handed to
+`Socket.fromTransformStream` as a lazy effect, so the connection was deferred to
+the first write and a write to a dead device never settled; the socket's run
+fiber was forked with its failure discarded and ended the message queue
+*cleanly*, so an unreachable device looked exactly like an idle one; and there
+was no connect timeout at all, leaving TCP's own, in minutes. The symptom was a
+command that printed nothing, hung, and exited 0.
 
 ## Adaptive quality
 
@@ -133,7 +170,8 @@ quality: 480p @ 1.2 Mbps accepted (no stalls)
 quality: 540p @ 1.8 Mbps accepted (no stalls)
 ```
 
-Pin it with `CAST_*` config or extend the ladder in `packages/quality/src/Ladder.ts`.
+Pin it with `CAST_*` config or extend the ladder in
+`packages/quality/src/Ladder.ts`.
 
 ## Subtitles
 
@@ -156,9 +194,19 @@ subtitles:
   leaves its already-rendered cues painted on screen and draws the new ones
   above them.
 
-Note also that a track flagged `default` is often a *forced* signage track with
-a couple of dozen cues, not dialogue. `cast streams` shows the indices; pick the
-one with the cue count you expect.
+**Track metadata cannot be trusted.** In the file this tool was built for,
+`cast streams` reports two indistinguishable Spanish subtitle tracks:
+
+```
+  [4] subtitle subrip spa
+  [5] subtitle subrip spa
+```
+
+Stream 4 is 24 cues of forced signage. Stream 5 is 1670 lines of dialogue. The
+container flags stream 4 as `default` and neither as `forced`, so *the obvious
+heuristic picks the wrong one* — and picking by hand means guessing. Only the
+cue count separates them, and nothing in the listing shows it. See
+[Direction](docs/direction.md); this is the tool's sharpest remaining flaw.
 
 ## Layout
 
@@ -185,17 +233,17 @@ such an import resolve.
 | Command | What it protects |
 |---|---|
 | `npm run typecheck` | strict TypeScript, `exactOptionalPropertyTypes` on |
-| `npm run lint` | 24 project rules — see below |
+| `npm run lint` | 25 project rules |
 | `npm run depcruise` | no cycles, Node builtins stay in `platform`/`protocol`, packages never import the app |
 | `npm run codegen:check` | the generated wire descriptors still match the vendored `.proto` |
-| `npm test` | 50 tests |
+| `npm test` | 54 tests |
 | `npm run check` | all of the above |
 
 The lint rules encode one idea: never hand-roll what Effect provides. `no-if`,
 `no-try-catch`, `no-throw`, `no-await`, `no-timers`, `no-date-now`,
-`no-process-env`, `no-console`, `no-json-parse`, `no-schema-sync`,
-`no-as-cast`, `no-non-null`, `no-any` and more. `packages/platform/**`,
-`scripts/**` and tests carry narrow, documented exemptions.
+`no-process-env`, `no-console`, `no-json-parse`, `no-schema-sync`, `no-as-cast`,
+`no-non-null`, `no-any` and more. `packages/platform/**`, `scripts/**` and tests
+carry narrow, documented exemptions.
 
 ## Validation
 
@@ -217,34 +265,46 @@ container omits, an audio track that does not exist, a subtitle index that was
 not asked for, a probe that is not running.
 
 Two of these caught real bugs rather than style: `no-schema-sync` found
-`Schema.decodeSync` in the WebVTT codec turning parse failures into defects,
-and removing the `as` casts exposed an `Ipv4` brand that accepted
+`Schema.decodeSync` in the WebVTT codec turning parse failures into defects, and
+removing the `as` casts exposed an `Ipv4` brand that accepted
 `999.999.999.999`.
-
-## Control
-
-```sh
-cast status --ip 192.168.1.24     # what is it playing?
-cast toggle                       # pause if playing, resume if paused
-cast pause / cast resume
-cast volume --level 20
-cast stop
-```
-
-These attach to the running session rather than launching a new one, so
-pausing does not restart the film.
 
 ## Known gaps
 
-- **Effect has no TLS/TCP client socket.** `effect/unstable/socket` is
-  WebSocket-only, so `Platform/CastSocket.ts` wraps `node:tls` — but exposes it
-  as a real `Socket.Socket` via `Socket.fromTransformStream`.
-- **Effect has no UDP.** mDNS therefore uses `node:dgram` in `Platform/Mdns.ts`.
-- **Quality switches are visible.** Changing rung restarts ffmpeg and reissues
-  `LOAD`, which the viewer sees as a brief rebuffer. HLS with variant playlists
-  would let the receiver switch seamlessly; that is the natural next step.
-- **dependency-cruiser cannot see type-only imports here.** It does not yet
-  support TypeScript 7, so it runs without the TS transpiler and
-  `import type` edges are invisible to it. Value imports are checked.
+Ordered by how much they cost someone trying to watch something.
 
-See `docs/` for the protocol notes and the Effect adoption audit.
+- **Track selection is manual, and the listing cannot decide it.** See
+  [Subtitles](#subtitles). `--audio` and `--subs` take raw indices and the help
+  text says "see `cast streams`" — the tool hands its hardest judgement to the
+  person using it.
+- **There is no `cast seek`.** `SEEK` is implemented in the protocol package and
+  unreachable from the CLI, so rewinding means stopping and replaying with
+  `--seek`, which restarts the session.
+- **Not installable.** `bin` points at a `.ts` file and there is no build step,
+  so `npm i -g` will not work. It runs from the workspace only.
+- **Every command rediscovers.** Without `--ip`, each invocation runs a fresh
+  4-second mDNS sweep; nothing is remembered between commands.
+- **Quality switches are visible.** Changing rung restarts ffmpeg and reissues
+  `LOAD`, which the viewer sees as a brief rebuffer.
+- **The I/O modules are untested.** 54 tests cover the pure layers — brands,
+  framing, the WebVTT codec, the quality controller. `Session`, `CastSocket`,
+  `Mdns`, `Ffmpeg` and the HTTP routes have none, and the hang described above
+  lived in exactly that gap.
+- **No CI.** `npm run check` passes locally and nothing enforces that.
+- **Effect has no TLS/TCP client socket.** `effect/unstable/socket` is
+  WebSocket-only, so `packages/protocol/src/CastSocket.ts` wraps `node:tls` —
+  but exposes it as a real `Socket.Socket`.
+- **Effect has no UDP.** mDNS therefore uses `node:dgram` in
+  `packages/platform/src/Mdns.ts`.
+- **dependency-cruiser cannot see type-only imports here.** It does not yet
+  support TypeScript 7, so it runs without the TS transpiler and `import type`
+  edges are invisible to it. Value imports are checked. Found by deliberately
+  breaking rules and watching two of them fail to fire.
+
+## Documentation
+
+| | |
+|---|---|
+| [`docs/direction.md`](docs/direction.md) | What this should become, and what to delete |
+| [`docs/architecture.md`](docs/architecture.md) | Module map and the decisions worth explaining |
+| [`docs/cast-protocol.md`](docs/cast-protocol.md) | The wire protocol as verified against Chromium |
