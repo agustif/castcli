@@ -100,12 +100,19 @@ dialogue. Check the cue count before assuming.
 
 ## Seeking
 
-There is no usable seek for a live pipe: byte ranges are meaningless. Seeking is
-implemented by restarting ffmpeg at a new input offset and re-issuing `LOAD`.
-Input seeking (`-ss` before `-i`) rebases output timestamps to zero, which is
-what lets the receiver treat each restart as a fresh stream — and is also why
-the subtitle track has to be re-cut from the same offset, or it drifts by
-exactly the seek amount.
+There is no usable seek for a live pipe: byte ranges are meaningless, and the
+receiver's own `SEEK` command does not help. Sent one, it re-requests the same
+URL and restarts the stream from its beginning — while reporting the position
+that was asked for, so the command looks like it worked.
+
+Progressive seeking is therefore implemented by restarting ffmpeg at a new input
+offset and re-issuing `LOAD`. Input seeking (`-ss` before `-i`) rebases output
+timestamps to zero, which is what lets the receiver treat each restart as a
+fresh stream — and is also why the subtitle track has to be re-cut from the same
+offset, or it drifts by exactly the seek amount.
+
+Under HLS none of that applies. A VOD playlist makes every segment addressable,
+so `SEEK` means what it says and the subtitle track covers the whole film.
 
 ## Reconnection
 
@@ -136,6 +143,13 @@ artefacts, plus one that is more authoritative than the prose:
 The transport handshake (`CONNECT`, heartbeat, the receiver namespace) is the
 one part Google does not document; that is established by observation and by
 prior community work.
+
+The disagreements below are no longer transcribed by hand: the shipped
+framework's enum tables are extracted into
+`packages/protocol/vendor/cast_receiver_vocabulary.json` and generated into
+`GeneratedVocabulary.ts`, so an upstream change appears as a diff rather than as
+a device that ignores a message. Doing this corrected `HlsSegmentFormat`, which
+has eight values rather than the four recorded here.
 
 ### Where the prose and the shipped code disagree
 

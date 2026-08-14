@@ -45,10 +45,24 @@ server, hands the receiver a URL, and the receiver fetches from it:
 Almost every failure in this project came from forgetting that the second arrow
 points inward. The advertised URL has to be routable **from the TV**.
 
-ffmpeg remuxes on the fly into fragmented MP4. Video is stream-copied whenever
-the source is already H.264 8-bit 4:2:0 at 1080p or below; only the audio is
-always re-encoded, because Cast receivers reject AC-3 and E-AC-3 and never
-accept Matroska as a container whatever the source was.
+ffmpeg does the conversion. Video is stream-copied whenever the source is
+already H.264 8-bit 4:2:0 at 1080p or below; only the audio is always
+re-encoded, because Cast receivers reject AC-3 and E-AC-3 and never accept
+Matroska as a container whatever the source was.
+
+There are two ways to hand it over, and they fail differently:
+
+| | progressive (default) | `--hls` |
+|---|---|---|
+| What is served | one continuous fragmented MP4 | a VOD playlist per quality, every segment addressable |
+| Who picks the quality | we do, by measuring | the receiver does, from its own buffer |
+| Changing quality | restart ffmpeg, reissue `LOAD` — a visible rebuffer | next segment comes from another variant |
+| Seeking | restart ffmpeg at the new offset | the receiver seeks; nothing restarts |
+| Cost when idle | nothing | nothing: segments are encoded only when requested |
+
+HLS is the better design and is not yet the default, for one reason: the
+progressive path has been watched end to end on a real television and HLS has
+only been verified against an emulated one. See [Known gaps](#known-gaps).
 
 ## Install
 
@@ -80,6 +94,9 @@ cast streams movie.mkv
 
 # Override any of it
 cast play movie.mkv --device "Living Room" --audio 3 --subs 5 --seek 12:30
+
+# Let the receiver choose the quality and do its own seeking
+cast play movie.mkv --hls
 ```
 
 | Flag | Meaning | Default |
@@ -89,6 +106,7 @@ cast play movie.mkv --device "Living Room" --audio 3 --subs 5 --seek 12:30
 | `--audio <index>` | Audio stream index | first match for `CAST_AUDIO_LANGUAGES` |
 | `--subs <index>` | Subtitle stream index, served as a WebVTT sidecar | preferred language, most cues |
 | `--seek <time>` | Start position: `90`, `1:30` or `1:02:03` | where you stopped |
+| `--hls` | Serve HLS instead of one continuous stream | off |
 
 ### Control
 
@@ -104,19 +122,16 @@ cast stop
 These attach to the running session rather than launching a new one, so pausing
 does not restart the film.
 
-`seek` needs a word of explanation, because the obvious implementation does not
-work. What we serve is a live pipe from ffmpeg with no `Content-Length` and no
-byte ranges, so there is nothing for the receiver to seek *within*: sent the
-Cast `SEEK` command, it re-requests the same URL and starts the stream again
-from its beginning. That looked like it worked — the command printed a new
-position while the film played from the old one — which is worse than failing.
+`seek` behaves differently depending on what is being served, and the difference
+is not cosmetic. Under HLS every segment of the film is addressable, so the
+receiver seeks by itself and nothing restarts. Progressively there is nothing to
+seek *within* — a live pipe has no byte ranges — so `cast seek` asks the running
+`cast play` to restart ffmpeg at the new offset.
 
-So every seek is served by restarting ffmpeg at the new offset, the same thing
-`--seek` does at startup. `cast seek` writes the request into the state file and
-the running `cast play` picks it up. The arithmetic still matters for relative
-seeks: the receiver reports time within the current stream, which begins
-wherever the last `LOAD` started, so a position in the film is
-`offset + reported`, and `play` publishes that offset.
+That distinction was found by testing rather than reasoning: built on the Cast
+`SEEK` command, `--forward` reported a new position while the film carried on
+from the old one, because the receiver had quietly restarted the stream from its
+beginning.
 
 ### Environment
 
@@ -154,9 +169,10 @@ fiber was forked with its failure discarded and ended the message queue
 was no connect timeout at all, leaving TCP's own, in minutes. The symptom was a
 command that printed nothing, hung, and exited 0.
 
-## Adaptive quality
+## Adaptive quality (the progressive path)
 
-Quality adapts to the link automatically. The hard part is that **spare
+Under `--hls` the receiver chooses, and none of this runs. Progressively,
+quality adapts to the link automatically. The hard part is that **spare
 bandwidth cannot be measured directly**: in steady state the delivery rate
 equals the encoded bitrate, so throughput only ever tells you the current rung
 fits, never whether a higher one would. Three signals get around that:
@@ -241,6 +257,7 @@ packages/
   media/        ffmpeg invocations as typed values, WebVTT as a Schema codec
   quality/      ladder, signals (state → phase), controller (phase → action)
   platform/     generic Node bridges: UDP for mDNS, http.createServer
+  emulator/     a Cast device, emulated well enough to test against
 apps/
   cli/          commands, schema-validated flags, the media server routes
 tools/
@@ -258,8 +275,8 @@ such an import resolve.
 | `npm run typecheck` | strict TypeScript, `exactOptionalPropertyTypes` on |
 | `npm run lint` | 25 project rules |
 | `npm run depcruise` | no cycles, Node builtins stay in `platform`/`protocol`, packages never import the app |
-| `npm run codegen:check` | the generated wire descriptors still match the vendored `.proto` |
-| `npm test` | 88 tests |
+| `npm run codegen:check` | the generated wire descriptors and media vocabulary are not stale |
+| `npm test` | 102 tests, including one that runs the binary at an emulated device |
 | `npm run check` | all of the above — and the only thing CI runs |
 
 The lint rules encode one idea: never hand-roll what Effect provides. `no-if`,
@@ -267,6 +284,28 @@ The lint rules encode one idea: never hand-roll what Effect provides. `no-if`,
 `no-process-env`, `no-console`, `no-json-parse`, `no-schema-sync`, `no-as-cast`,
 `no-non-null`, `no-any` and more. `packages/platform/**`, `scripts/**` and tests
 carry narrow, documented exemptions.
+
+## Testing without a television
+
+`packages/emulator` is a Cast device: it serves the control channel over TLS and
+then does the half that matters — pulls the media over HTTP exactly as a
+receiver does, walking the master playlist to a variant and the variant to its
+segments. A *device* rather than a service, because it owns its own listener and
+there can be several at once.
+
+```sh
+npm test    # includes running the real binary at an emulated device
+```
+
+The end-to-end test spawns `cast play` and asserts on what the device fetched.
+It is the only test that exercises the inversion this tool is built around, and
+it found two bugs in the emulator's first hour: a connection scope that closed
+as soon as its handlers were attached, and replies addressed from the wrong
+source id. It skips where ffmpeg or openssl are missing, so CI stays honest
+without needing a media pipeline.
+
+What it cannot tell you is whether a *particular* television accepts the stream.
+That is why HLS is opt-in.
 
 ## Validation
 
@@ -294,19 +333,18 @@ removing the `as` casts exposed an `Ipv4` brand that accepted
 
 ## Known gaps
 
-Ordered by how much they cost someone trying to watch something.
-
-- **Quality switches are visible.** Changing rung restarts ffmpeg and reissues
-  `LOAD`, which the viewer sees as a brief rebuffer. This is the one remaining
-  gap that a viewer can actually see, and fixing it properly means HLS — which
-  would *delete* most of the quality controller rather than add to it. The
-  argument is in [`docs/direction.md`](docs/direction.md).
+- **HLS is not the default.** It is the better design — the receiver picks the
+  quality and does its own seeking, so neither costs a restart — and everything
+  about it is verified except the one thing that matters most: no real
+  television has played it. The emulated device walks the playlists and pulls
+  the segments, which catches a malformed playlist but not a receiver that
+  dislikes something about it. One confirmed session on a real device is all
+  that stands between `--hls` and the default.
+- **Progressive quality switches and seeks are visible.** Both restart ffmpeg
+  and reissue `LOAD`. This is what HLS exists to fix.
 - **`cast streams` reads every subtitle track.** Counting cues means extracting
   them, so listing a file with several subtitle tracks takes ~20 seconds. `play`
   only reads the candidates in one language, so it is much cheaper.
-- **Every seek restarts the stream.** It cannot be a receiver-side seek: a live
-  pipe has no byte ranges to seek within. The player reloads at the new offset
-  instead, which the viewer sees as a rebuffer. HLS would fix this too.
 - **The two processes talk through a file.** `cast seek` reaches the running
   `cast play` by writing a request into the state file, which the player polls
   once a second. Unglamorous, and a socket would be a great deal of machinery

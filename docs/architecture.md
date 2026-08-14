@@ -46,6 +46,7 @@ inbound. The advertised URL has to be routable **from the TV**.
 | `domain` | `Media` | ffprobe output, decoded rather than trusted |
 | `domain` | `Device` | A discovered Cast device |
 | `protocol` | `Frame` | Protobuf framing, descriptors generated from the `.proto` |
+| `protocol` | `GeneratedVocabulary` | Literal sets generated from the framework devices run |
 | `protocol` | `Namespace` | Namespaces, message types, player states, media commands |
 | `protocol` | `Messages` | Payload schemas; only the decoders are exported |
 | `protocol` | `Media` | LOAD/track schemas, from the published Cast reference |
@@ -55,10 +56,12 @@ inbound. The advertised URL has to be routable **from the TV**.
 | `media` | `Ffmpeg/Service` | probe, extract cues, transcode — all scoped |
 | `media` | `Vtt/Codec` | WebVTT as a `Schema` codec, plus `cutFrom` |
 | `media` | `Tracks/Select` | Which audio and subtitle track to play, and why |
+| `media` | `Hls/Playlist` | Master and media playlists as values |
 | `quality` | `Ladder` | Building the rung ladder |
 | `quality` | `Signals` | State, thresholds, and `phaseOf` — *what situation are we in* |
 | `quality` | `Controller` | *What to do about it* — one exhaustive match |
 | `platform` | `Mdns`, `HttpServer` | The generic Node bridges |
+| `emulator` | `Device`, `Certificate` | A Cast device to test against |
 | `cli` | `Server/Routes` | The two endpoints the device pulls |
 | `cli` | `Cli/*` | Schema-validated flags, time codes, control commands |
 | `cli` | `State` | What is remembered between invocations, and never load bearing |
@@ -105,6 +108,35 @@ from it: where the running stream starts, and — when the target is before that
 point — someone to issue a fresh `LOAD`. Both go through the state file, which
 the player polls once a second. A socket would be better engineering and much
 more machinery for one integer.
+
+### Two presentations, one server
+
+`/stream` is a single continuous transcode; `/master.m3u8` and its variants are
+an HLS VOD presentation of the same file. They are served side by side because
+they fail differently — we choose the quality for one, the receiver chooses for
+the other — and serving both costs nothing, since a segment does not exist until
+it is requested.
+
+The HLS playlist is arithmetic over the running time, so it is a pure function
+and lives in `media/Hls/Playlist`. Only the segment encoder touches ffmpeg, and
+it is scoped like every other process here: a receiver that abandons a request
+mid-switch takes the encoder with it.
+
+### The vocabulary is generated, not transcribed
+
+Player states, stream types, HLS segment formats and track kinds come from
+`cast_receiver_framework.js` — the code a Cast device actually runs — via
+`scripts/extract-receiver-vocabulary.ts`. Its enums survive minification as
+object literals keyed by constant name, so they can be recovered and diffed.
+
+Two vocabularies are deliberately wider than what is generated, each documented
+at the point it is widened: `PlayerState` also accepts `LOADING` and
+`StreamType` also accepts `OTHER`, because rejecting a word a device might send
+discards the whole message rather than the word.
+
+The extractor refuses to guess. Asked for `PlayerState` it found two tables with
+the same key set — the media player's, in caps, and the receiver application's,
+in lowercase — and stopped rather than binding the wrong one.
 
 ### Errors carry causes
 
@@ -169,6 +201,8 @@ defects, and `no-node-http` found `node:http` leaking into the CLI.
   because the configured port is a preference: the receiver is told which URL to
   pull, so any port works, and something else on the machine holding 8021 should
   not stop a film.
+- **A TLS server.** The emulator listens with `node:tls`, which is the same
+  gap as the client side and confined the same way, to one package.
 - **UDP.** No datagram module at all, so mDNS uses `node:dgram`. The datagram
   callback cannot run an Effect, so it hands packets to a `Queue` and a forked
   fiber folds them into a `Ref` — the same shape `CastSocket` uses.
