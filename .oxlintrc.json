@@ -1,0 +1,83 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "jsPlugins": [
+    "./oxlint-plugin-castcli.ts"
+  ],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "warn"
+  },
+  "rules": {
+    "castcli/no-node-child-process": "error",
+    "castcli/no-node-http": "error",
+    "castcli/no-timers": "error",
+    "castcli/no-json-parse": "warn",
+    "castcli/no-throw": "error",
+    "castcli/no-promise": "error",
+    "castcli/no-date-now": "warn",
+    "castcli/no-math-random": "warn",
+    "no-underscore-dangle": [
+      "warn",
+      {
+        "allow": [
+          "_tag",
+          "_op",
+          "__proto__"
+        ]
+      }
+    ],
+    "castcli/no-if": "error",
+    "castcli/no-try-catch": "error",
+    "castcli/no-await": "error",
+    "castcli/no-mutating-array": "warn",
+    "castcli/no-process-exit": "error",
+    "castcli/no-process-env": "error",
+    "castcli/no-console": "error",
+    "castcli/no-fetch": "error",
+    "castcli/no-node-fs": "error",
+    "castcli/no-schema-sync": "error",
+    "castcli/no-run-sync": "error",
+    "castcli/no-swallowed-errors": "error",
+    "castcli/no-or-die": "error"
+  },
+  "ignorePatterns": [
+    "dist/**",
+    "node_modules/**",
+    "*.mjs"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "src/Platform/**"
+      ],
+      "rules": {
+        "castcli/no-node-child-process": "off",
+        "castcli/no-node-http": "off",
+        "castcli/no-promise": "off",
+        "castcli/no-timers": "off",
+        "castcli/no-if": "off",
+        "castcli/no-try-catch": "off",
+        "castcli/no-await": "off",
+        "castcli/no-process-exit": "off"
+      }
+    },
+    {
+      "files": [
+        "scripts/**"
+      ],
+      "rules": {
+        "castcli/no-node-fs": "off",
+        "castcli/no-if": "off"
+      }
+    },
+    {
+      "files": [
+        "test/**"
+      ],
+      "rules": {
+        "castcli/no-node-fs": "off"
+      }
+    }
+  ]
+}

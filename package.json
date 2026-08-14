@@ -1,0 +1,32 @@
+{
+  "name": "castcli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "cast": "./dist/bin/cast.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "cast": "tsx src/bin/cast.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "lint": "oxlint",
+    "codegen": "tsx scripts/generate-protocol.ts",
+    "codegen:check": "tsx scripts/generate-protocol.ts --check"
+  },
+  "dependencies": {
+    "@effect/platform-node": "^4.0.0-rc.109",
+    "effect": "^4.0.0-rc.109"
+  },
+  "devDependencies": {
+    "@effect/language-service": "^0.87.2",
+    "@effect/vitest": "^4.0.0-rc.109",
+    "@types/node": "^26.2.0",
+    "effect-oxlint": "^0.3.3",
+    "oxlint": "^1.78.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}
