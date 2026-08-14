@@ -1,0 +1,136 @@
+strict digraph "dependency-cruiser output"{
+    rankdir="LR" splines="true" overlap="false" nodesep="0.16" ranksep="0.18" fontname="Helvetica-bold" fontsize="9" style="rounded,bold,filled" fillcolor="#ffffff" compound="true"
+    node [shape="box" style="rounded, filled" height="0.2" color="black" fillcolor="#ffffcc" fontcolor="black" fontname="Helvetica" fontsize="9"]
+    edge [arrowhead="normal" arrowsize="0.6" penwidth="2.0" color="#00000033" fontname="Helvetica" fontsize="9"]
+
+    subgraph "cluster_apps" {label="apps" subgraph "cluster_apps/cli" {label="cli" subgraph "cluster_apps/cli/src" {label="src" subgraph "cluster_apps/cli/src/Cli" {label="Cli" "apps/cli/src/Cli/Control.ts" [label=<Control.ts> tooltip="Control.ts" URL="apps/cli/src/Cli/Control.ts" fillcolor="#ddfeff"] } } } }
+    "apps/cli/src/Cli/Control.ts" -> "apps/cli/src/Config.ts"
+    "apps/cli/src/Cli/Control.ts" -> "apps/cli/src/Cli/TimeCode.ts"
+    "apps/cli/src/Cli/Control.ts" -> "packages/domain/src/index.ts"
+    "apps/cli/src/Cli/Control.ts" -> "packages/platform/src/index.ts"
+    "apps/cli/src/Cli/Control.ts" -> "packages/protocol/src/index.ts"
+    subgraph "cluster_apps" {label="apps" subgraph "cluster_apps/cli" {label="cli" subgraph "cluster_apps/cli/src" {label="src" subgraph "cluster_apps/cli/src/Cli" {label="Cli" "apps/cli/src/Cli/Flags.ts" [label=<Flags.ts> tooltip="Flags.ts" URL="apps/cli/src/Cli/Flags.ts" fillcolor="#ddfeff"] } } } }
+    "apps/cli/src/Cli/Flags.ts" -> "apps/cli/src/Cli/TimeCode.ts"
+    "apps/cli/src/Cli/Flags.ts" -> "packages/domain/src/index.ts"
+    subgraph "cluster_apps" {label="apps" subgraph "cluster_apps/cli" {label="cli" subgraph "cluster_apps/cli/src" {label="src" subgraph "cluster_apps/cli/src/Cli" {label="Cli" "apps/cli/src/Cli/TimeCode.ts" [label=<TimeCode.ts> tooltip="TimeCode.ts" URL="apps/cli/src/Cli/TimeCode.ts" fillcolor="#ddfeff"] } } } }
+    "apps/cli/src/Cli/TimeCode.ts" -> "packages/domain/src/index.ts"
+    subgraph "cluster_apps" {label="apps" subgraph "cluster_apps/cli" {label="cli" subgraph "cluster_apps/cli/src" {label="src" subgraph "cluster_apps/cli/src/Cli" {label="Cli" "apps/cli/src/Cli/TimeCode.ts" [label=<TimeCode.ts> tooltip="TimeCode.ts" URL="apps/cli/src/Cli/TimeCode.ts" fillcolor="#ddfeff"] } } } }
+    subgraph "cluster_apps" {label="apps" subgraph "cluster_apps/cli" {label="cli" subgraph "cluster_apps/cli/src" {label="src" "apps/cli/src/Config.ts" [label=<Config.ts> tooltip="Config.ts" URL="apps/cli/src/Config.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_apps" {label="apps" subgraph "cluster_apps/cli" {label="cli" subgraph "cluster_apps/cli/src" {label="src" "apps/cli/src/Config.ts" [label=<Config.ts> tooltip="Config.ts" URL="apps/cli/src/Config.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_apps" {label="apps" subgraph "cluster_apps/cli" {label="cli" subgraph "cluster_apps/cli/src" {label="src" subgraph "cluster_apps/cli/src/Server" {label="Server" "apps/cli/src/Server/Routes.ts" [label=<Routes.ts> tooltip="Routes.ts" URL="apps/cli/src/Server/Routes.ts" fillcolor="#ddfeff"] } } } }
+    "apps/cli/src/Server/Routes.ts" -> "packages/domain/src/index.ts"
+    "apps/cli/src/Server/Routes.ts" -> "packages/media/src/index.ts"
+    subgraph "cluster_apps" {label="apps" subgraph "cluster_apps/cli" {label="cli" subgraph "cluster_apps/cli/src" {label="src" subgraph "cluster_apps/cli/src/bin" {label="bin" "apps/cli/src/bin/cast.ts" [label=<cast.ts> tooltip="cast.ts" URL="apps/cli/src/bin/cast.ts" fillcolor="#ddfeff"] } } } }
+    "apps/cli/src/bin/cast.ts" -> "apps/cli/src/Cli/Control.ts"
+    "apps/cli/src/bin/cast.ts" -> "apps/cli/src/Cli/Flags.ts"
+    "apps/cli/src/bin/cast.ts" -> "apps/cli/src/Cli/TimeCode.ts"
+    "apps/cli/src/bin/cast.ts" -> "apps/cli/src/Config.ts"
+    "apps/cli/src/bin/cast.ts" -> "apps/cli/src/Server/Routes.ts"
+    "apps/cli/src/bin/cast.ts" -> "packages/domain/src/index.ts"
+    "apps/cli/src/bin/cast.ts" -> "packages/media/src/index.ts"
+    "apps/cli/src/bin/cast.ts" -> "packages/platform/src/index.ts"
+    "apps/cli/src/bin/cast.ts" -> "packages/protocol/src/index.ts"
+    "apps/cli/src/bin/cast.ts" -> "packages/quality/src/index.ts"
+    "apps/cli/src/bin/cast.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "apps/cli/src/bin/cast.ts" -> "path" [style="dashed" penwidth="1.0"]
+    "dgram" [label=<dgram> tooltip="dgram" URL="https://nodejs.org/api/dgram.html" color="grey" fontcolor="grey"]
+    "fs" [label=<fs> tooltip="fs" URL="https://nodejs.org/api/fs.html" color="grey" fontcolor="grey"]
+    "http" [label=<http> tooltip="http" URL="https://nodejs.org/api/http.html" color="grey" fontcolor="grey"]
+    "os" [label=<os> tooltip="os" URL="https://nodejs.org/api/os.html" color="grey" fontcolor="grey"]
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/domain" {label="domain" subgraph "cluster_packages/domain/src" {label="src" "packages/domain/src/Brands.ts" [label=<Brands.ts> tooltip="Brands.ts" URL="packages/domain/src/Brands.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/domain" {label="domain" subgraph "cluster_packages/domain/src" {label="src" "packages/domain/src/Device.ts" [label=<Device.ts> tooltip="Device.ts" URL="packages/domain/src/Device.ts" fillcolor="#ddfeff"] } } }
+    "packages/domain/src/Device.ts" -> "packages/domain/src/Brands.ts"
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/domain" {label="domain" subgraph "cluster_packages/domain/src" {label="src" "packages/domain/src/Errors.ts" [label=<Errors.ts> tooltip="Errors.ts" URL="packages/domain/src/Errors.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/domain" {label="domain" subgraph "cluster_packages/domain/src" {label="src" "packages/domain/src/Media.ts" [label=<Media.ts> tooltip="Media.ts" URL="packages/domain/src/Media.ts" fillcolor="#ddfeff"] } } }
+    "packages/domain/src/Media.ts" -> "packages/domain/src/Brands.ts"
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/domain" {label="domain" subgraph "cluster_packages/domain/src" {label="src" "packages/domain/src/Rung.ts" [label=<Rung.ts> tooltip="Rung.ts" URL="packages/domain/src/Rung.ts" fillcolor="#ddfeff"] } } }
+    "packages/domain/src/Rung.ts" -> "packages/domain/src/Brands.ts"
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/domain" {label="domain" subgraph "cluster_packages/domain/src" {label="src" "packages/domain/src/index.ts" [label=<index.ts> tooltip="index.ts" URL="packages/domain/src/index.ts" fillcolor="#ddfeff"] } } }
+    "packages/domain/src/index.ts" -> "packages/domain/src/Brands.ts" [arrowhead="inv"]
+    "packages/domain/src/index.ts" -> "packages/domain/src/Device.ts" [arrowhead="inv"]
+    "packages/domain/src/index.ts" -> "packages/domain/src/Errors.ts" [arrowhead="inv"]
+    "packages/domain/src/index.ts" -> "packages/domain/src/Media.ts" [arrowhead="inv"]
+    "packages/domain/src/index.ts" -> "packages/domain/src/Rung.ts" [arrowhead="inv"]
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/domain" {label="domain" subgraph "cluster_packages/domain/src" {label="src" "packages/domain/src/index.ts" [label=<index.ts> tooltip="index.ts" URL="packages/domain/src/index.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/media" {label="media" subgraph "cluster_packages/media/src" {label="src" subgraph "cluster_packages/media/src/Ffmpeg" {label="Ffmpeg" "packages/media/src/Ffmpeg/Args.ts" [label=<Args.ts> tooltip="Args.ts" URL="packages/media/src/Ffmpeg/Args.ts" fillcolor="#ddfeff"] } } } }
+    "packages/media/src/Ffmpeg/Args.ts" -> "packages/domain/src/index.ts"
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/media" {label="media" subgraph "cluster_packages/media/src" {label="src" subgraph "cluster_packages/media/src/Ffmpeg" {label="Ffmpeg" "packages/media/src/Ffmpeg/Service.ts" [label=<Service.ts> tooltip="Service.ts" URL="packages/media/src/Ffmpeg/Service.ts" fillcolor="#ddfeff"] } } } }
+    "packages/media/src/Ffmpeg/Service.ts" -> "packages/media/src/Vtt/Codec.ts"
+    "packages/media/src/Ffmpeg/Service.ts" -> "packages/media/src/Ffmpeg/Args.ts"
+    "packages/media/src/Ffmpeg/Service.ts" -> "packages/domain/src/index.ts"
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/media" {label="media" subgraph "cluster_packages/media/src" {label="src" subgraph "cluster_packages/media/src/Vtt" {label="Vtt" "packages/media/src/Vtt/Codec.ts" [label=<Codec.ts> tooltip="Codec.ts" URL="packages/media/src/Vtt/Codec.ts" fillcolor="#ddfeff"] } } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/media" {label="media" subgraph "cluster_packages/media/src" {label="src" subgraph "cluster_packages/media/src/Vtt" {label="Vtt" "packages/media/src/Vtt/Codec.ts" [label=<Codec.ts> tooltip="Codec.ts" URL="packages/media/src/Vtt/Codec.ts" fillcolor="#ddfeff"] } } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/media" {label="media" subgraph "cluster_packages/media/src" {label="src" "packages/media/src/index.ts" [label=<index.ts> tooltip="index.ts" URL="packages/media/src/index.ts" fillcolor="#ddfeff"] } } }
+    "packages/media/src/index.ts" -> "packages/media/src/Ffmpeg/Args.ts" [arrowhead="inv"]
+    "packages/media/src/index.ts" -> "packages/media/src/Ffmpeg/Service.ts" [arrowhead="inv"]
+    "packages/media/src/index.ts" -> "packages/media/src/Vtt/Codec.ts" [arrowhead="inv"]
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/media" {label="media" subgraph "cluster_packages/media/src" {label="src" "packages/media/src/index.ts" [label=<index.ts> tooltip="index.ts" URL="packages/media/src/index.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/media" {label="media" subgraph "cluster_packages/media/test" {label="test" "packages/media/test/Vtt.test.ts" [label=<Vtt.test.ts> tooltip="Vtt.test.ts" URL="packages/media/test/Vtt.test.ts" fillcolor="#ddfeff"] } } }
+    "packages/media/test/Vtt.test.ts" -> "packages/media/src/Vtt/Codec.ts"
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/platform" {label="platform" subgraph "cluster_packages/platform/src" {label="src" "packages/platform/src/HttpServer.ts" [label=<HttpServer.ts> tooltip="HttpServer.ts" URL="packages/platform/src/HttpServer.ts" fillcolor="#ddfeff"] } } }
+    "packages/platform/src/HttpServer.ts" -> "http" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/platform" {label="platform" subgraph "cluster_packages/platform/src" {label="src" "packages/platform/src/Mdns.ts" [label=<Mdns.ts> tooltip="Mdns.ts" URL="packages/platform/src/Mdns.ts" fillcolor="#ddfeff"] } } }
+    "packages/platform/src/Mdns.ts" -> "packages/domain/src/index.ts"
+    "packages/platform/src/Mdns.ts" -> "dgram" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/platform" {label="platform" subgraph "cluster_packages/platform/src" {label="src" "packages/platform/src/index.ts" [label=<index.ts> tooltip="index.ts" URL="packages/platform/src/index.ts" fillcolor="#ddfeff"] } } }
+    "packages/platform/src/index.ts" -> "packages/platform/src/HttpServer.ts" [arrowhead="inv"]
+    "packages/platform/src/index.ts" -> "packages/platform/src/Mdns.ts" [arrowhead="inv"]
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/platform" {label="platform" subgraph "cluster_packages/platform/src" {label="src" "packages/platform/src/index.ts" [label=<index.ts> tooltip="index.ts" URL="packages/platform/src/index.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/protocol" {label="protocol" subgraph "cluster_packages/protocol/src" {label="src" "packages/protocol/src/CastSocket.ts" [label=<CastSocket.ts> tooltip="CastSocket.ts" URL="packages/protocol/src/CastSocket.ts" fillcolor="#ddfeff"] } } }
+    "packages/protocol/src/CastSocket.ts" -> "packages/protocol/src/Frame.ts"
+    "packages/protocol/src/CastSocket.ts" -> "stream" [style="dashed" penwidth="1.0"]
+    "packages/protocol/src/CastSocket.ts" -> "tls" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/protocol" {label="protocol" subgraph "cluster_packages/protocol/src" {label="src" "packages/protocol/src/Frame.ts" [label=<Frame.ts> tooltip="Frame.ts" URL="packages/protocol/src/Frame.ts" fillcolor="#ddfeff"] } } }
+    "packages/protocol/src/Frame.ts" -> "packages/protocol/src/Generated.ts"
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/protocol" {label="protocol" subgraph "cluster_packages/protocol/src" {label="src" "packages/protocol/src/Frame.ts" [label=<Frame.ts> tooltip="Frame.ts" URL="packages/protocol/src/Frame.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/protocol" {label="protocol" subgraph "cluster_packages/protocol/src" {label="src" "packages/protocol/src/Generated.ts" [label=<Generated.ts> tooltip="Generated.ts" URL="packages/protocol/src/Generated.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/protocol" {label="protocol" subgraph "cluster_packages/protocol/src" {label="src" "packages/protocol/src/Generated.ts" [label=<Generated.ts> tooltip="Generated.ts" URL="packages/protocol/src/Generated.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/protocol" {label="protocol" subgraph "cluster_packages/protocol/src" {label="src" "packages/protocol/src/Media.ts" [label=<Media.ts> tooltip="Media.ts" URL="packages/protocol/src/Media.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/protocol" {label="protocol" subgraph "cluster_packages/protocol/src" {label="src" "packages/protocol/src/Messages.ts" [label=<Messages.ts> tooltip="Messages.ts" URL="packages/protocol/src/Messages.ts" fillcolor="#ddfeff"] } } }
+    "packages/protocol/src/Messages.ts" -> "packages/protocol/src/Namespace.ts"
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/protocol" {label="protocol" subgraph "cluster_packages/protocol/src" {label="src" "packages/protocol/src/Namespace.ts" [label=<Namespace.ts> tooltip="Namespace.ts" URL="packages/protocol/src/Namespace.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/protocol" {label="protocol" subgraph "cluster_packages/protocol/src" {label="src" "packages/protocol/src/Namespace.ts" [label=<Namespace.ts> tooltip="Namespace.ts" URL="packages/protocol/src/Namespace.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/protocol" {label="protocol" subgraph "cluster_packages/protocol/src" {label="src" "packages/protocol/src/Session.ts" [label=<Session.ts> tooltip="Session.ts" URL="packages/protocol/src/Session.ts" fillcolor="#ddfeff"] } } }
+    "packages/protocol/src/Session.ts" -> "packages/protocol/src/CastSocket.ts"
+    "packages/protocol/src/Session.ts" -> "packages/protocol/src/Frame.ts"
+    "packages/protocol/src/Session.ts" -> "packages/protocol/src/Messages.ts"
+    "packages/protocol/src/Session.ts" -> "packages/protocol/src/Namespace.ts"
+    "packages/protocol/src/Session.ts" -> "packages/domain/src/index.ts"
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/protocol" {label="protocol" subgraph "cluster_packages/protocol/src" {label="src" "packages/protocol/src/index.ts" [label=<index.ts> tooltip="index.ts" URL="packages/protocol/src/index.ts" fillcolor="#ddfeff"] } } }
+    "packages/protocol/src/index.ts" -> "packages/protocol/src/CastSocket.ts" [arrowhead="inv"]
+    "packages/protocol/src/index.ts" -> "packages/protocol/src/Frame.ts" [arrowhead="inv"]
+    "packages/protocol/src/index.ts" -> "packages/protocol/src/Media.ts" [arrowhead="inv"]
+    "packages/protocol/src/index.ts" -> "packages/protocol/src/Messages.ts" [arrowhead="inv"]
+    "packages/protocol/src/index.ts" -> "packages/protocol/src/Namespace.ts" [arrowhead="inv"]
+    "packages/protocol/src/index.ts" -> "packages/protocol/src/Session.ts" [arrowhead="inv"]
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/protocol" {label="protocol" subgraph "cluster_packages/protocol/src" {label="src" "packages/protocol/src/index.ts" [label=<index.ts> tooltip="index.ts" URL="packages/protocol/src/index.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/protocol" {label="protocol" subgraph "cluster_packages/protocol/test" {label="test" "packages/protocol/test/Frame.test.ts" [label=<Frame.test.ts> tooltip="Frame.test.ts" URL="packages/protocol/test/Frame.test.ts" fillcolor="#ddfeff"] } } }
+    "packages/protocol/test/Frame.test.ts" -> "packages/protocol/src/Frame.ts"
+    "packages/protocol/test/Frame.test.ts" -> "packages/protocol/src/Generated.ts"
+    "packages/protocol/test/Frame.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "packages/protocol/test/Frame.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/protocol" {label="protocol" subgraph "cluster_packages/protocol/test" {label="test" "packages/protocol/test/Media.test.ts" [label=<Media.test.ts> tooltip="Media.test.ts" URL="packages/protocol/test/Media.test.ts" fillcolor="#ddfeff"] } } }
+    "packages/protocol/test/Media.test.ts" -> "packages/protocol/src/Media.ts"
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/quality" {label="quality" subgraph "cluster_packages/quality/src" {label="src" "packages/quality/src/Controller.ts" [label=<Controller.ts> tooltip="Controller.ts" URL="packages/quality/src/Controller.ts" fillcolor="#ddfeff"] } } }
+    "packages/quality/src/Controller.ts" -> "packages/quality/src/Signals.ts"
+    "packages/quality/src/Controller.ts" -> "packages/domain/src/index.ts"
+    "packages/quality/src/Controller.ts" -> "packages/protocol/src/index.ts"
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/quality" {label="quality" subgraph "cluster_packages/quality/src" {label="src" "packages/quality/src/Ladder.ts" [label=<Ladder.ts> tooltip="Ladder.ts" URL="packages/quality/src/Ladder.ts" fillcolor="#ddfeff"] } } }
+    "packages/quality/src/Ladder.ts" -> "packages/domain/src/index.ts"
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/quality" {label="quality" subgraph "cluster_packages/quality/src" {label="src" "packages/quality/src/Signals.ts" [label=<Signals.ts> tooltip="Signals.ts" URL="packages/quality/src/Signals.ts" fillcolor="#ddfeff"] } } }
+    "packages/quality/src/Signals.ts" -> "packages/domain/src/index.ts"
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/quality" {label="quality" subgraph "cluster_packages/quality/src" {label="src" "packages/quality/src/Signals.ts" [label=<Signals.ts> tooltip="Signals.ts" URL="packages/quality/src/Signals.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/quality" {label="quality" subgraph "cluster_packages/quality/src" {label="src" "packages/quality/src/index.ts" [label=<index.ts> tooltip="index.ts" URL="packages/quality/src/index.ts" fillcolor="#ddfeff"] } } }
+    "packages/quality/src/index.ts" -> "packages/quality/src/Controller.ts" [arrowhead="inv"]
+    "packages/quality/src/index.ts" -> "packages/quality/src/Ladder.ts" [arrowhead="inv"]
+    "packages/quality/src/index.ts" -> "packages/quality/src/Signals.ts" [arrowhead="inv"]
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/quality" {label="quality" subgraph "cluster_packages/quality/src" {label="src" "packages/quality/src/index.ts" [label=<index.ts> tooltip="index.ts" URL="packages/quality/src/index.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_packages" {label="packages" subgraph "cluster_packages/quality" {label="quality" subgraph "cluster_packages/quality/test" {label="test" "packages/quality/test/Quality.test.ts" [label=<Quality.test.ts> tooltip="Quality.test.ts" URL="packages/quality/test/Quality.test.ts" fillcolor="#ddfeff"] } } }
+    "packages/quality/test/Quality.test.ts" -> "packages/quality/src/Controller.ts"
+    "packages/quality/test/Quality.test.ts" -> "packages/quality/src/Ladder.ts"
+    "packages/quality/test/Quality.test.ts" -> "packages/quality/src/Signals.ts"
+    "packages/quality/test/Quality.test.ts" -> "packages/domain/src/index.ts"
+    "path" [label=<path> tooltip="path" URL="https://nodejs.org/api/path.html" color="grey" fontcolor="grey"]
+    "stream" [label=<stream> tooltip="stream" URL="https://nodejs.org/api/stream.html" color="grey" fontcolor="grey"]
+    "tls" [label=<tls> tooltip="tls" URL="https://nodejs.org/api/tls.html" color="grey" fontcolor="grey"]
+}

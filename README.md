@@ -45,8 +45,12 @@ Requires Node 22+ and ffmpeg on `PATH`.
 
 ```sh
 npm install
-npm run build
+npm run check   # typecheck, lint, architecture, codegen drift, tests
 ```
+
+This is an npm workspace. `npm run cast -- <args>` runs the CLI from source;
+there is no build step in the loop, because package names resolve to each
+package's barrel through tsconfig paths.
 
 ## Usage
 
@@ -129,7 +133,7 @@ quality: 480p @ 1.2 Mbps accepted (no stalls)
 quality: 540p @ 1.8 Mbps accepted (no stalls)
 ```
 
-Pin it with `CAST_*` config or extend the ladder in `src/Quality/Ladder.ts`.
+Pin it with `CAST_*` config or extend the ladder in `packages/quality/src/Ladder.ts`.
 
 ## Subtitles
 
@@ -159,19 +163,44 @@ one with the cue count you expect.
 ## Layout
 
 ```
-src/
-  Domain/       Brands, Errors, Device, Media, Rung — the vocabulary
-  Cast/
-    Protocol/   Frame (protobuf), Messages (schemas), Namespace (literals)
-    Session.ts  virtual connections, heartbeat, launch, media control
-  Media/
-    Ffmpeg/     Args (typed invocations), Service
-    Vtt/        Codec — WebVTT as a Schema codec
-  Quality/      Ladder, Signals (state → phase), Controller (phase → action)
-  Server/       Routes the receiver pulls from
-  Platform/     the only Node-specific code
-  Cli/          schema-validated flags, time codes, control commands
+packages/
+  domain/       branded scalars, typed errors, media and device models
+  protocol/     Cast v2 wire format, message schemas, TLS transport, session,
+                and the vendored cast_channel.proto it is generated from
+  media/        ffmpeg invocations as typed values, WebVTT as a Schema codec
+  quality/      ladder, signals (state → phase), controller (phase → action)
+  platform/     generic Node bridges: UDP for mDNS, http.createServer
+apps/
+  cli/          commands, schema-validated flags, the media server routes
+tools/
+  oxlint-plugin/ the project's own lint rules
 ```
+
+`packages/domain` sits at the base of the graph and imports no other workspace
+package — enforced by a lint rule, because tsconfig paths would otherwise let
+such an import resolve.
+
+## Checks
+
+| Command | What it protects |
+|---|---|
+| `npm run typecheck` | strict TypeScript, `exactOptionalPropertyTypes` on |
+| `npm run lint` | 24 project rules — see below |
+| `npm run depcruise` | no cycles, Node builtins stay in `platform`/`protocol`, packages never import the app |
+| `npm run codegen:check` | the generated wire descriptors still match the vendored `.proto` |
+| `npm test` | 35 tests |
+| `npm run check` | all of the above |
+
+The lint rules encode one idea: never hand-roll what Effect provides. `no-if`,
+`no-try-catch`, `no-throw`, `no-await`, `no-timers`, `no-date-now`,
+`no-process-env`, `no-console`, `no-json-parse`, `no-schema-sync`,
+`no-as-cast`, `no-non-null`, `no-any` and more. `packages/platform/**`,
+`scripts/**` and tests carry narrow, documented exemptions.
+
+Two of these caught real bugs rather than style: `no-schema-sync` found
+`Schema.decodeSync` in the WebVTT codec turning parse failures into defects,
+and removing the `as` casts exposed an `Ipv4` brand that accepted
+`999.999.999.999`.
 
 ## Control
 
@@ -195,7 +224,8 @@ pausing does not restart the film.
 - **Quality switches are visible.** Changing rung restarts ffmpeg and reissues
   `LOAD`, which the viewer sees as a brief rebuffer. HLS with variant playlists
   would let the receiver switch seamlessly; that is the natural next step.
-- **No test suite yet.** The controller is written against `Clock` and
-  `Schedule` specifically so it can be driven by `TestClock`.
+- **dependency-cruiser cannot see type-only imports here.** It does not yet
+  support TypeScript 7, so it runs without the TS transpiler and
+  `import type` edges are invisible to it. Value imports are checked.
 
 See `docs/` for the protocol notes and the Effect adoption audit.

@@ -181,6 +181,19 @@ const noAnyType = Rule.banStatement("TSAnyKeyword", {
   message: "`any` disables checking entirely. Use `unknown` and decode it, or name the real type."
 })
 
+// Enabled only for packages/domain via .oxlintrc overrides. The vocabulary
+// package must not reach sideways or upward: everything else depends on it, so
+// anything it imports becomes a dependency of the entire workspace.
+//
+// dependency-cruiser cannot catch this one — `@castcli/protocol` is not a
+// declared dependency of `packages/domain`, so its resolver drops the import
+// entirely rather than reporting it. tsconfig `paths` still resolves it, which
+// is exactly the gap this rule closes.
+const noWorkspaceImport = Rule.banImport((source) => source.startsWith("@castcli/"), {
+  message:
+    "This package is the base of the dependency graph and must not import another workspace package."
+})
+
 export default Plugin.define({
   name: "castcli",
   specifier: "./oxlint-plugin-castcli.ts",
@@ -208,6 +221,7 @@ export default Plugin.define({
     "no-or-die": noOrDie,
     "no-as-cast": noAsCast,
     "no-non-null": noNonNull,
-    "no-any": noAnyType
+    "no-any": noAnyType,
+    "no-workspace-import": noWorkspaceImport
   }
 })

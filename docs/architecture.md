@@ -3,25 +3,30 @@
 ## Shape of the thing
 
 ```
-                    ┌──────────────────────────────────┐
-                    │            bin/cast              │  effect/unstable/cli
-                    │   play · scan · streams          │
-                    └───────────────┬──────────────────┘
-                                    │
-        ┌───────────────────────────┼───────────────────────────┐
-        │                           │                           │
-┌───────▼────────┐        ┌─────────▼─────────┐       ┌─────────▼─────────┐
-│  Cast/Session  │        │   Server/Routes   │       │ Quality/Controller│
-│  launch, load, │        │  /stream          │       │  ladder, probing, │
-│  heartbeat     │        │  /subs.vtt        │       │  back-off         │
-└───────┬────────┘        └─────────┬─────────┘       └─────────┬─────────┘
-        │                           │                           │
-┌───────▼────────┐        ┌─────────▼─────────┐       ┌─────────▼─────────┐
-│ Platform/      │        │  Media/Ffmpeg     │       │  Quality/Signals  │
-│ CastSocket     │        │  Args · Service   │       │  state → phase    │
-│ (node:tls)     │        │  Media/Vtt/Codec  │       └───────────────────┘
-└────────────────┘        └───────────────────┘
+                    ┌──────────────────────────────────────┐
+                    │              apps/cli                │  effect/unstable/cli
+                    │  play · scan · streams · status …    │
+                    └──────────────────┬───────────────────┘
+                                       │
+        ┌──────────────────────────────┼──────────────────────────────┐
+        │                              │                              │
+┌───────▼─────────┐          ┌─────────▼─────────┐          ┌─────────▼─────────┐
+│    protocol     │          │       media       │          │      quality      │
+│ Session · Frame │          │  Ffmpeg · Vtt     │          │ Controller        │
+│ CastSocket(tls) │          │                   │          │ Signals · Ladder  │
+└───────┬─────────┘          └─────────┬─────────┘          └─────────┬─────────┘
+        │                              │                              │
+        └──────────────┬───────────────┴──────────────────────────────┘
+                       │
+              ┌────────▼─────────┐        ┌──────────────────────┐
+              │      domain      │        │       platform       │
+              │ Brands · Errors  │        │  Mdns (udp)          │
+              │ Rung · Media     │        │  HttpServer          │
+              └──────────────────┘        └──────────────────────┘
 ```
+
+`domain` is the base: it imports no other workspace package, so nothing it
+depends on becomes a dependency of everything else.
 
 Two independent channels to the device, which is the thing to hold in mind:
 
@@ -33,26 +38,28 @@ inbound. The advertised URL has to be routable **from the TV**.
 
 ## Module map
 
-| Module | Responsibility |
-|---|---|
-| `Domain/Brands` | Branded scalars: `Seconds`, `Bitrate`, `Height`, `StreamIndex`, `Ipv4`, `Port` |
-| `Domain/Errors` | Every failure as a `Schema.TaggedError` |
-| `Domain/Rung` | `Copy \| Encode` — a quality rung as a tagged union |
-| `Domain/Media` | ffprobe output, decoded not trusted |
-| `Domain/Device` | A discovered Cast device |
-| `Cast/Protocol/Frame` | Protobuf framing, recursive parsers |
-| `Cast/Protocol/Namespace` | Namespaces, message types, player states as literals |
-| `Cast/Protocol/Messages` | Payload schemas + decoders |
-| `Cast/Session` | Virtual connections, heartbeat, launch, media commands |
-| `Media/Ffmpeg/Args` | ffmpeg invocations as typed values |
-| `Media/Ffmpeg/Service` | probe, extract cues, transcode — all scoped |
-| `Media/Vtt/Codec` | WebVTT as a `Schema` codec, plus `cutFrom` |
-| `Quality/Ladder` | Building the rung ladder |
-| `Quality/Signals` | State, thresholds, and `phaseOf` — *what situation are we in* |
-| `Quality/Controller` | *What to do about it* — one exhaustive match |
-| `Server/Routes` | The two endpoints the device pulls |
-| `Platform/*` | The only Node-specific code |
-| `Cli/*` | Schema-validated flags and time codes |
+| Package | Module | Responsibility |
+|---|---|---|
+| `domain` | `Brands` | Branded scalars, constructed through `.make`/`.makeOption`/`.makeEffect` |
+| `domain` | `Errors` | Every failure as a `Schema.TaggedError`, causes preserved |
+| `domain` | `Rung` | `Copy \| Encode` — a quality rung as a tagged union |
+| `domain` | `Media` | ffprobe output, decoded rather than trusted |
+| `domain` | `Device` | A discovered Cast device |
+| `protocol` | `Frame` | Protobuf framing, descriptors generated from the `.proto` |
+| `protocol` | `Namespace` | Namespaces, message types, player states, media commands |
+| `protocol` | `Messages` | Payload schemas; only the decoders are exported |
+| `protocol` | `Media` | LOAD/track schemas, from the published Cast reference |
+| `protocol` | `CastSocket` | TLS transport, as an Effect `Socket` |
+| `protocol` | `Session` | Virtual connections, heartbeat, launch, media commands |
+| `media` | `Ffmpeg/Args` | ffmpeg invocations as typed values |
+| `media` | `Ffmpeg/Service` | probe, extract cues, transcode — all scoped |
+| `media` | `Vtt/Codec` | WebVTT as a `Schema` codec, plus `cutFrom` |
+| `quality` | `Ladder` | Building the rung ladder |
+| `quality` | `Signals` | State, thresholds, and `phaseOf` — *what situation are we in* |
+| `quality` | `Controller` | *What to do about it* — one exhaustive match |
+| `platform` | `Mdns`, `HttpServer` | The generic Node bridges |
+| `cli` | `Server/Routes` | The two endpoints the device pulls |
+| `cli` | `Cli/*` | Schema-validated flags, time codes, control commands |
 
 ## Decisions worth explaining
 
@@ -116,8 +123,14 @@ project's one rule — never hand-roll what Effect provides:
 | `no-run-sync`, `no-swallowed-errors`, `no-or-die` | keep the fiber and the error channel intact |
 | `no-node-http`, `no-node-fs`, `no-fetch`, `no-node-child-process` | the Effect equivalents |
 
-`src/Platform/**` is exempt from the Node-interop rules: confining that code to
-one directory is the point of the directory.
+`packages/platform/**` is exempt from the Node-interop rules: confining that
+code to one package is the point of the package.
+
+Architecture is checked separately by dependency-cruiser — no cycles, Node
+builtins confined, packages never importing the app. One rule it *cannot*
+enforce lives in the lint plugin instead: `packages/domain` importing another
+workspace package resolves through tsconfig paths but is not a declared
+dependency, so dependency-cruiser drops the edge rather than reporting it.
 
 Two of these caught real bugs in code I had already written — `no-schema-sync`
 found `Schema.decodeSync` in the WebVTT codec turning parse failures into
@@ -126,8 +139,10 @@ defects, and `no-node-http` found `node:http` leaking into the CLI.
 ## What Effect does not cover
 
 - **TLS/TCP client sockets.** `effect/unstable/socket` is WebSocket-only. But
-  `Socket` itself is transport-agnostic, so `Platform/CastSocket` bridges
+  `Socket` itself is transport-agnostic, so `protocol/CastSocket` bridges
   `node:tls` through `Duplex.toWeb()` into `Socket.fromTransformStream` — the
   handshake is the only Node-specific part, and everything downstream consumes a
   real `Socket.Socket`.
-- **UDP.** No datagram module at all, so mDNS uses `node:dgram`.
+- **UDP.** No datagram module at all, so mDNS uses `node:dgram`. The datagram
+  callback cannot run an Effect, so it hands packets to a `Queue` and a forked
+  fiber folds them into a `Ref` — the same shape `CastSocket` uses.

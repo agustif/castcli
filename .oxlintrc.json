@@ -88,6 +88,14 @@
       "rules": {
         "castcli/no-as-cast": "off"
       }
+    },
+    {
+      "files": [
+        "packages/domain/**"
+      ],
+      "rules": {
+        "castcli/no-workspace-import": "error"
+      }
     }
   ]
 }

@@ -1,0 +1,65 @@
+/**
+ * Architectural rules the type system cannot express.
+ *
+ * The layering is the point of the workspace split: domain knows nothing about
+ * anyone, platform is where Node lives, and the application sits on top. A
+ * cycle or an upward import compiles perfectly well — it just quietly undoes
+ * the separation — so it is checked here instead.
+ */
+module.exports = {
+  forbidden: [
+    {
+      name: "no-circular",
+      severity: "error",
+      comment:
+        "A cycle between modules means neither can be understood or tested alone.",
+      from: {},
+      to: { circular: true }
+    },
+    {
+      name: "no-orphans",
+      severity: "warn",
+      comment: "Nothing imports this. It is either dead or wired up wrong.",
+      from: { orphan: true, pathNot: ["\\.d\\.ts$", "(^|/)index\\.ts$", "^scripts/", "^tools/"] },
+      to: {}
+    },
+    // Layering out of packages/domain is enforced by the `no-workspace-import`
+    // lint rule instead: @castcli/protocol is not a declared dependency of
+    // packages/domain, so this resolver drops such an import entirely rather
+    // than reporting it, and the rule here would silently never fire.
+    {
+      name: "node-stays-in-platform-and-protocol",
+      severity: "error",
+      comment:
+        "node: builtins belong behind platform (UDP, http.createServer) or the " +
+        "Cast TLS transport. Everywhere else uses the Effect equivalent.",
+      from: { pathNot: "^(packages/(platform|protocol)|scripts|tools)" },
+      // Core modules resolve to their bare name with the protocol recorded
+      // separately, so match on dependencyTypes rather than the `node:` prefix.
+      to: {
+        dependencyTypes: ["core"],
+        path: "^(dgram|tls|http|https|net|fs|child_process)$"
+      }
+    },
+    {
+      name: "packages-never-import-the-app",
+      severity: "error",
+      comment: "A library that reaches into its application is not a library.",
+      from: { path: "^packages/" },
+      to: { path: "^apps/" }
+    },
+    {
+      name: "no-dev-dep-in-src",
+      severity: "error",
+      comment: "Runtime code must not depend on a devDependency.",
+      from: { path: "^(packages|apps)/[^/]+/src", pathNot: "\\.test\\.ts$" },
+      to: { dependencyTypes: ["npm-dev"] }
+    }
+  ],
+  options: {
+    doNotFollow: { path: "node_modules" },
+    exclude: { path: "node_modules" },
+    enhancedResolveOptions: { exportsFields: ["exports"], conditionNames: ["import", "types"] },
+    reporterOptions: { text: { highlightFocused: true } }
+  }
+}
