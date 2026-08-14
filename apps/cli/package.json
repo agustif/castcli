@@ -1,0 +1,19 @@
+{
+  "name": "@castcli/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "cast \u2014 stream a local file to a Google Cast device",
+  "type": "module",
+  "bin": {
+    "cast": "./src/bin/cast.ts"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.109",
+    "@effect/platform-node": "4.0.0-rc.109",
+    "@castcli/domain": "*",
+    "@castcli/protocol": "*",
+    "@castcli/media": "*",
+    "@castcli/quality": "*",
+    "@castcli/platform": "*"
+  }
+}

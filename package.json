@@ -3,12 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": {
-    "cast": "./dist/bin/cast.js"
-  },
   "scripts": {
+    "cast": "tsx apps/cli/src/bin/cast.ts",
     "build": "tsc -p tsconfig.json",
-    "cast": "tsx src/bin/cast.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "lint": "oxlint",
@@ -28,5 +25,10 @@
     "tsx": "^4.23.12",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
-  }
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "tools/*"
+  ]
 }

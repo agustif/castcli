@@ -19,8 +19,8 @@ import * as path from "node:path"
 import * as process from "node:process"
 
 const ROOT = path.resolve(import.meta.dirname, "..")
-const PROTO = path.join(ROOT, "docs/reference/cast_channel.proto")
-const OUTPUT = path.join(ROOT, "src/Cast/Protocol/Generated.ts")
+const PROTO = path.join(ROOT, "packages/protocol/proto/cast_channel.proto")
+const OUTPUT = path.join(ROOT, "packages/protocol/src/Generated.ts")
 
 /** proto2 scalar types, mapped to protobuf wire types. Enums are varints. */
 const WIRE_TYPES: Record<string, "varint" | "length"> = {
@@ -30,10 +30,10 @@ const WIRE_TYPES: Record<string, "varint" | "length"> = {
   int32: "varint",
   int64: "varint",
   uint32: "varint",
-  uint64: "varint",
-  fixed32: "fixed32",
-  fixed64: "fixed64"
-} as Record<string, "varint" | "length">
+  uint64: "varint"
+  // Fixed-width types do not appear in cast_channel.proto; the conformance
+  // test fails loudly if that ever changes.
+}
 
 interface Field {
   readonly name: string
@@ -164,7 +164,7 @@ const emit = (parsed: ParseState): string => {
 
   return `// GENERATED — do not edit.
 //
-// Source: docs/reference/cast_channel.proto (Chromium, BSD-licensed).
+// Source: packages/protocol/proto/cast_channel.proto (Chromium, BSD-licensed).
 // Regenerate with \`npm run codegen\`; \`npm run codegen:check\` fails if stale.
 //
 // Wire keys are derived, not transcribed: key = (fieldNumber << 3) | wireType,

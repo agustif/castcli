@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "jsPlugins": [
-    "./oxlint-plugin-castcli.ts"
+    "./tools/oxlint-plugin/src/index.ts"
   ],
   "categories": {
     "correctness": "error",
@@ -48,14 +48,13 @@
   "overrides": [
     {
       "files": [
-        "src/Platform/**"
+        "packages/platform/**"
       ],
       "rules": {
         "castcli/no-node-child-process": "off",
         "castcli/no-node-http": "off",
         "castcli/no-promise": "off",
         "castcli/no-timers": "off",
-        "castcli/no-if": "off",
         "castcli/no-try-catch": "off",
         "castcli/no-await": "off",
         "castcli/no-process-exit": "off"
@@ -63,7 +62,8 @@
     },
     {
       "files": [
-        "scripts/**"
+        "scripts/**",
+        "tools/**"
       ],
       "rules": {
         "castcli/no-node-fs": "off",
@@ -72,7 +72,7 @@
     },
     {
       "files": [
-        "test/**"
+        "packages/*/test/**"
       ],
       "rules": {
         "castcli/no-node-fs": "off"

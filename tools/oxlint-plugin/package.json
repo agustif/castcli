@@ -1,0 +1,13 @@
+{
+  "name": "@castcli/oxlint-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Project lint rules: never hand-roll what Effect provides",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "effect-oxlint": "^0.3.3"
+  }
+}

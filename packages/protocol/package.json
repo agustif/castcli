@@ -1,0 +1,14 @@
+{
+  "name": "@castcli/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Google Cast v2 protocol: framing, message schemas, session",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.109",
+    "@castcli/domain": "*"
+  }
+}

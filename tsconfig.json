@@ -15,6 +15,17 @@
     "verbatimModuleSyntax": true,
     "rewriteRelativeImportExtensions": true,
 
+    // Workspace resolution without a build step: each package name maps to its
+    // barrel, so tsc, tsx and vitest all agree and there is no intermediate
+    // dist/ to keep in sync while iterating.
+    "paths": {
+      "@castcli/domain": ["./packages/domain/src/index.ts"],
+      "@castcli/protocol": ["./packages/protocol/src/index.ts"],
+      "@castcli/media": ["./packages/media/src/index.ts"],
+      "@castcli/quality": ["./packages/quality/src/index.ts"],
+      "@castcli/platform": ["./packages/platform/src/index.ts"]
+    },
+
     // Type safety
     "strict": true,
     "exactOptionalPropertyTypes": true,
@@ -29,11 +40,16 @@
     "sourceMap": true,
     "skipLibCheck": true,
 
-    "rootDir": "src",
     "outDir": "dist",
 
     // Effect Language Service: better diagnostics and refactors for Effect code
     "plugins": [{ "name": "@effect/language-service" }]
   },
-  "include": ["src/**/*.ts"]
+  "include": [
+    "packages/*/src/**/*.ts",
+    "packages/*/test/**/*.ts",
+    "apps/*/src/**/*.ts",
+    "scripts/**/*.ts",
+    "tools/*/src/**/*.ts"
+  ]
 }

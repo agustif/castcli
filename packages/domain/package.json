@@ -1,0 +1,13 @@
+{
+  "name": "@castcli/domain",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vocabulary: branded scalars, typed errors, media and device models",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.109"
+  }
+}
