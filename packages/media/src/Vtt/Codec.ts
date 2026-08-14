@@ -59,15 +59,25 @@ const parseCues = (text: string): Cues =>
     const lines = block.split(/\r?\n/)
     const timingIndex = lines.findIndex((line) => CUE_LINE.test(line))
     return Option.match(
+      // Both capture groups are required by the pattern, but the regex type
+      // cannot say so; pulling them out as an Option makes the compiler agree
+      // with the pattern instead of being told to trust it.
       Option.fromNullishOr(lines[timingIndex]).pipe(
-        Option.flatMap((line) => Option.fromNullishOr(CUE_LINE.exec(line)))
+        Option.flatMap((line) => Option.fromNullishOr(CUE_LINE.exec(line))),
+        Option.flatMap((match) =>
+          Option.all([
+            Option.fromNullishOr(match[1]),
+            Option.fromNullishOr(match[2]),
+            Option.some(match[3] ?? "")
+          ])
+        )
       ),
       {
         onNone: () => [],
-        onSome: (match) => [{
-          start: parseTimestamp(match[1]!),
-          end: parseTimestamp(match[2]!),
-          settings: (match[3] ?? "").trim(),
+        onSome: ([start, end, settings]) => [{
+          start: parseTimestamp(start),
+          end: parseTimestamp(end),
+          settings: settings.trim(),
           text: lines.slice(timingIndex + 1).join("\n").trim()
         }]
       }

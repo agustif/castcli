@@ -10,19 +10,19 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Duration, Effect, Fiber, Ref } from "effect"
 import { TestClock } from "effect/testing"
-import * as Brands from "@castcli/domain"
-import { Rung } from "@castcli/domain"
+import { Bitrate, Height, Rung } from "@castcli/domain"
 import * as Ladder from "../src/Ladder.ts"
 import * as Signals from "../src/Signals.ts"
 import * as Quality from "../src/Controller.ts"
 
 const rung = (height: number, bitrate: number) =>
-  Rung.Encode({ height: Brands.height(height), bitrate: Brands.bitrate(bitrate) })
+  Rung.Encode({ height: Height.make(height), bitrate: Bitrate.make(bitrate) })
 
 const LADDER = [rung(360, 800_000), rung(480, 1_200_000), rung(720, 2_500_000)]
 
 const baseState = (overrides: Partial<Signals.State> = {}): Signals.State => ({
   index: 1,
+  rung: LADDER[1] ?? rung(480, 1_200_000),
   capacity: 0,
   initialised: true,
   lastSwitchAt: 0,
@@ -52,9 +52,9 @@ describe("Ladder", () => {
 
   it("is strictly increasing in bitrate, so 'one rung up' is always better", () => {
     const ladder = Ladder.build({ sourceHeight: 1080, sourceBitrate: 4_000_000, canCopy: true })
-    ladder.forEach((r, i) => {
-      assert.isTrue(i === 0 || r.bitrate > ladder[i - 1]!.bitrate)
-    })
+    const bitrates = ladder.map((r) => r.bitrate)
+    assert.deepStrictEqual(bitrates, [...bitrates].toSorted((a, b) => a - b))
+    assert.strictEqual(new Set(bitrates).size, bitrates.length, "no duplicates")
   })
 })
 

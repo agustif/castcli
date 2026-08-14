@@ -39,7 +39,10 @@
     "castcli/no-schema-sync": "error",
     "castcli/no-run-sync": "error",
     "castcli/no-swallowed-errors": "error",
-    "castcli/no-or-die": "error"
+    "castcli/no-or-die": "error",
+    "castcli/no-as-cast": "error",
+    "castcli/no-non-null": "error",
+    "castcli/no-any": "error"
   },
   "ignorePatterns": [
     "dist/**",
@@ -76,6 +79,14 @@
       ],
       "rules": {
         "castcli/no-node-fs": "off"
+      }
+    },
+    {
+      "files": [
+        "packages/protocol/src/Generated.ts"
+      ],
+      "rules": {
+        "castcli/no-as-cast": "off"
       }
     }
   ]

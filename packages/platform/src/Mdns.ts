@@ -12,8 +12,7 @@
 
 import { Duration, Effect, Option, Queue, Ref, Schedule, Stream } from "effect"
 import * as dgram from "node:dgram"
-import { CastDevice } from "@castcli/domain"
-import { Brands } from "@castcli/domain"
+import { CastDevice, Ipv4, Port } from "@castcli/domain"
 
 const MDNS_ADDRESS = "224.0.0.251"
 const MDNS_PORT = 5353
@@ -227,8 +226,8 @@ const toDevices = (sweep: Sweep): ReadonlyArray<CastDevice> =>
               new CastDevice({
                 name: instance.txt.get("fn") ?? instance.instance.split(".")[0] ??
                   instance.instance,
-                ip: Brands.ipv4(ip),
-                port: Brands.port(port),
+                ip: Ipv4.make(ip),
+                port: Port.make(port),
                 model: instance.txt.get("md"),
                 status: instance.txt.get("rs"),
                 id: instance.txt.get("id")

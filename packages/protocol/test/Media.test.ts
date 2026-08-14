@@ -16,7 +16,7 @@ describe("Media vocabulary", () => {
     assert.isTrue(Schema.is(Media.HlsSegmentFormat)("ts_aac")))
 
   it("rejects the capitalised spelling the docs suggest", () =>
-    assert.isFalse(Schema.is(Media.HlsSegmentFormat)("TS_AAC" as never)))
+    assert.isFalse(Schema.is(Media.HlsSegmentFormat)("TS_AAC")))
 
   it("accepts both the sender's OTHER and the receiver's NONE stream type", () => {
     // Sender SDK documents OTHER; receiver framework ships NONE.
@@ -32,7 +32,7 @@ describe("Media vocabulary", () => {
 
   it("knows the four player states and four idle reasons", () => {
     assert.isTrue(Schema.is(Media.PlayerState)("BUFFERING"))
-    assert.isFalse(Schema.is(Media.PlayerState)("LOADING" as never))
+    assert.isFalse(Schema.is(Media.PlayerState)("LOADING"))
     assert.isTrue(Schema.is(Media.IdleReason)("FINISHED"))
   })
 })

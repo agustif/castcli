@@ -7,9 +7,9 @@
 import { Console, Duration, Effect, Match, Option, Stream } from "effect"
 import { Command, Flag } from "effect/unstable/cli"
 import { AppConfig } from "../Config.ts"
-import { Session as CastSession } from "@castcli/protocol"
+import { Namespace, Session as CastSession } from "@castcli/protocol"
 import { Mdns } from "@castcli/platform"
-import { Brands } from "@castcli/domain"
+import { Brands, Port } from "@castcli/domain"
 import { CastDevice } from "@castcli/domain"
 import { DeviceNotFoundError } from "@castcli/domain"
 import * as TimeCode from "./TimeCode.ts"
@@ -31,7 +31,7 @@ const target = Effect.fn("Control.target")(function*(ip: Option.Option<Brands.Ip
         new CastDevice({
           name: address,
           ip: address,
-          port: Brands.port(config.devicePort)
+          port: Port.make(config.devicePort)
         })
       ),
     onNone: () =>
@@ -118,19 +118,22 @@ const toggle = Command.make(
   { ip: deviceIp },
   Effect.fn(function*({ ip }) {
     yield* withSession(ip, (session, current) =>
-      // Anything that is not PAUSED counts as playing: receivers spend a lot of
-      // time in BUFFERING, and a toggle that silently does nothing there is
-      // worse than one that treats it as playing.
+      // Exhaustive over the receiver's own state vocabulary, so a state added
+      // upstream is a compile error rather than a toggle that silently does
+      // nothing. BUFFERING and LOADING count as playing: receivers spend a lot
+      // of time there, and doing nothing in those states is worse than
+      // treating them as playing.
       Match.value(
-        Option.match(current, {
-          onNone: () => "PLAYING" as const,
-          onSome: (playing) => playing.playerState
-        })
+        Option.getOrElse(
+          Option.map(current, (playing) => playing.playerState),
+          (): Namespace.PlayerState => "PLAYING"
+        )
       ).pipe(
-        Match.when("PAUSED", () =>
+        Match.whenOr("PAUSED", "IDLE", () =>
           Effect.andThen(session.mediaCommand("PLAY"), Console.log("resumed"))),
-        Match.orElse(() =>
-          Effect.andThen(session.mediaCommand("PAUSE"), Console.log("paused")))
+        Match.whenOr("PLAYING", "BUFFERING", "LOADING", () =>
+          Effect.andThen(session.mediaCommand("PAUSE"), Console.log("paused"))),
+        Match.exhaustive
       ))
   })
 ).pipe(Command.withDescription("Pause if playing, resume if paused"))

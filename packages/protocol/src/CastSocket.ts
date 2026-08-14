@@ -42,7 +42,7 @@ const acquireTls = (host: string, port: number) =>
         ))
     }),
     (socket) => Effect.sync(() => socket.destroy())
-  ).pipe(Effect.map((socket) => Duplex.toWeb(socket) as Socket.InputTransformStream))
+  ).pipe(Effect.map((socket) => Duplex.toWeb(socket)))
 
 /**
  * Connect to a Cast device and expose it as framed protocol messages.

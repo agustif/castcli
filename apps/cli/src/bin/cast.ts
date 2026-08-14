@@ -7,7 +7,18 @@
 // (http://fe80::...%en0:8010/...) which is unroutable from the TV, so every
 // load fails. Here the advertised address is an explicit LAN IPv4.
 
-import { Console, Duration, Effect, Layer, Option, Queue, Ref, Schedule, Stream } from "effect"
+import {
+  Array,
+  Console,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Queue,
+  Ref,
+  Schedule,
+  Stream
+} from "effect"
 import { Argument, Command } from "effect/unstable/cli"
 import * as Flags from "../Cli/Flags.ts"
 import * as Control from "../Cli/Control.ts"
@@ -19,15 +30,15 @@ import * as path from "node:path"
 
 import { AppConfig } from "../Config.ts"
 import { canStreamCopy, Ffmpeg } from "@castcli/media"
-import { describeRung, type Rung } from "@castcli/domain"
+import { Ipv4, Port, type Rung, Seconds, StreamIndex, TrackId, describeRung } from "@castcli/domain"
 import {
   ConnectionLostError,
   DeviceNotFoundError,
+  EmptyLadderError,
   NoLocalAddressError,
   NoVideoStreamError
 } from "@castcli/domain"
 import { CastDevice } from "@castcli/domain"
-import { Brands } from "@castcli/domain"
 import { Mdns } from "@castcli/platform"
 import { Controller as Quality } from "@castcli/quality"
 import { Ladder } from "@castcli/quality"
@@ -39,7 +50,7 @@ import { routes, type SessionState } from "../Server/Routes.ts"
 const CAST_SERVICE = "_googlecast._tcp.local"
 
 /** Unique only within one MediaInformation, so a constant is enough. */
-const SUBTITLE_TRACK_ID = Brands.trackId(1)
+const SUBTITLE_TRACK_ID = TrackId.make(1)
 
 /**
  * Pick the LAN IPv4 to advertise. Never IPv6: a link-local v6 address with a
@@ -133,8 +144,8 @@ const resolveDevice = (
       Effect.succeed(
         new CastDevice({
           name: address,
-          ip: Brands.ipv4(address),
-          port: Brands.port(devicePort)
+          ip: Ipv4.make(address),
+          port: Port.make(devicePort)
         })
       ),
     onNone: () => discoverDevice(name, timeout)
@@ -171,7 +182,7 @@ const play = Command.make(
     const firstAudio = info.audioStreams[0]?.index
     const audioIndex = Option.getOrElse(
       audio,
-      () => firstAudio === undefined ? null : Brands.streamIndex(firstAudio)
+      () => firstAudio === undefined ? null : StreamIndex.make(firstAudio)
     )
     const subtitleIndex = Option.getOrUndefined(subs) ?? null
     const subtitleLanguage = info.subtitleStreams.find((s) => s.index === subtitleIndex)?.language ??
@@ -190,13 +201,18 @@ const play = Command.make(
     const ladder = Ladder.build({
       sourceHeight: video.height ?? 1080,
       sourceBitrate: Number(video.bit_rate) || null,
-      canCopy: canStreamCopy(video.codec_name, video.pix_fmt, video.height)
+      canCopy: canStreamCopy(video)
     })
     const startIndex = Ladder.startingIndex(ladder)
 
+    const startingRung = yield* Option.match(Array.get(ladder, startIndex), {
+      onNone: () => Effect.fail(new EmptyLadderError()),
+      onSome: (rung) => Effect.succeed(rung)
+    })
+
     const state = yield* Ref.make<SessionState>({
       offsetSeconds: seek,
-      rung: ladder[startIndex]!,
+      rung: startingRung,
       cues
     })
 
@@ -229,7 +245,7 @@ const play = Command.make(
     const server = HttpRouter.serve(
       routes({
         file: absolute,
-        videoIndex: Brands.streamIndex(video.index),
+        videoIndex: StreamIndex.make(video.index),
         audioIndex,
         audioBitrate: config.audioBitrate,
         state,
@@ -327,7 +343,7 @@ const play = Command.make(
           const current = yield* Ref.get(state)
           yield* Ref.set(
             position,
-            Brands.seconds(current.offsetSeconds + status.currentTimeSeconds)
+            Seconds.make(current.offsetSeconds + status.currentTimeSeconds)
           )
         }))
 

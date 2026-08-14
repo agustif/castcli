@@ -8,7 +8,7 @@ import { Effect, Ref, Stream } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { Ffmpeg } from "@castcli/media"
 import type { Rung } from "@castcli/domain"
-import { Brands } from "@castcli/domain"
+import { Brands, Seconds } from "@castcli/domain"
 import { Vtt } from "@castcli/media"
 
 export interface SessionState {
@@ -29,7 +29,7 @@ interface MediaServerOptions {
 /** The receiver echoes back the offset we put in the URL. */
 const queryOffset = (request: HttpServerRequest.HttpServerRequest): Brands.Seconds => {
   const url = new URL(request.originalUrl, "http://localhost")
-  return Brands.seconds(Math.max(0, Number(url.searchParams.get("o")) || 0))
+  return Seconds.make(Math.max(0, Number(url.searchParams.get("o")) || 0))
 }
 
 // The requirement type is inferred: v4 tracks each handler's error and service

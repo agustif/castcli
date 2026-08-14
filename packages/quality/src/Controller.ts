@@ -25,8 +25,11 @@
 // *what situation we are in* lives in Signals.ts; this module only acts, as one
 // exhaustive match.
 
-import { Clock, Duration, Effect, Match, Ref, Schedule } from "effect"
-import { describeRung, type Rung } from "@castcli/domain"
+import { Array, Clock, Duration, Effect, Match, Option, Ref, Schedule } from "effect"
+import { describeRung, EmptyLadderError, type Rung } from "@castcli/domain"
+import { Namespace } from "@castcli/protocol"
+
+type PlayerState = Namespace.PlayerState
 import * as Signals from "./Signals.ts"
 
 export const make = Effect.fn("Quality.make")(function*(options: {
@@ -36,8 +39,14 @@ export const make = Effect.fn("Quality.make")(function*(options: {
 }) {
   const { initialIndex, ladder, onSwitch } = options
   const now = yield* Clock.currentTimeMillis
+  const initialRung = yield* Option.match(Array.get(ladder, initialIndex), {
+    onNone: () => Effect.fail(new EmptyLadderError()),
+    onSome: (rung) => Effect.succeed(rung)
+  })
+
   const state = yield* Ref.make<Signals.State>({
     index: initialIndex,
+    rung: initialRung,
     capacity: 0,
     initialised: false,
     lastSwitchAt: now,
@@ -51,18 +60,23 @@ export const make = Effect.fn("Quality.make")(function*(options: {
 
   const switchTo = Effect.fn("Quality.switchTo")(function*(index: number, reason: string) {
     const current = yield* Ref.get(state)
-    yield* Effect.when(
-      Effect.gen(function*() {
-        yield* Ref.set(state, { ...current, index })
-        yield* Effect.logInfo(
-          `quality: ${describeRung(ladder[current.index]!)} -> ` +
-            `${describeRung(ladder[index]!)} (${reason})`
+    // Off either end of the ladder there is nothing to switch to, which is an
+    // ordinary outcome rather than an error.
+    yield* Option.match(Array.get(ladder, index), {
+      onNone: () => Effect.void,
+      onSome: (rung) =>
+        Effect.when(
+          Effect.gen(function*() {
+            yield* Ref.set(state, { ...current, index, rung })
+            yield* Effect.logInfo(
+              `quality: ${describeRung(current.rung)} -> ${describeRung(rung)} (${reason})`
+            )
+            // The caller restarts the stream, which calls noteRestart().
+            yield* onSwitch(rung)
+          }),
+          Effect.succeed(index !== current.index)
         )
-        // The caller restarts the stream, which calls noteRestart().
-        yield* onSwitch(ladder[index]!)
-      }),
-      Effect.succeed(index !== current.index && ladder[index] !== undefined)
-    )
+    })
   })
 
   const onMeasuring = Effect.fn("Quality.onMeasuring")(function*(at: number) {
@@ -92,7 +106,7 @@ export const make = Effect.fn("Quality.make")(function*(options: {
 
   const onProbeAccepted = Effect.fn("Quality.onProbeAccepted")(function*() {
     const current = yield* Ref.get(state)
-    const rung = ladder[current.index]!
+    const rung = current.rung
     yield* Ref.set(state, {
       ...current,
       probingSince: 0,
@@ -104,7 +118,7 @@ export const make = Effect.fn("Quality.make")(function*(options: {
 
   const onStalled = Effect.fn("Quality.onStalled")(function*(at: number, clustered: number) {
     const current = yield* Ref.get(state)
-    const rung = ladder[current.index]!
+    const rung = current.rung
     const penalties = new Map(current.penalties)
     penalties.set(current.index, { at, capacity: current.capacity })
     yield* Ref.set(state, {
@@ -133,7 +147,7 @@ export const make = Effect.fn("Quality.make")(function*(options: {
         Ref.set(state, { ...current, probingSince: at }),
         switchTo(next, "stable, probing higher")
       ),
-      Effect.succeed(ladder[next] !== undefined && !Signals.isPenalised(current, next, at))
+      Effect.succeed(Option.isSome(Array.get(ladder, next)) && !Signals.isPenalised(current, next, at))
     )
   })
 
@@ -168,7 +182,7 @@ export const make = Effect.fn("Quality.make")(function*(options: {
       }),
 
     /** The receiver's reported player state. */
-    noteState: (playerState: string) =>
+    noteState: (playerState: PlayerState) =>
       Effect.when(
         Effect.gen(function*() {
           const at = yield* Clock.currentTimeMillis
@@ -193,7 +207,7 @@ export const make = Effect.fn("Quality.make")(function*(options: {
       }))
     }),
 
-    currentRung: Effect.map(Ref.get(state), (current) => ladder[current.index]!),
+    currentRung: Effect.map(Ref.get(state), (current) => current.rung),
 
     /** Runs the control loop until interrupted. Fork it. */
     run: Effect.repeat(tick, Schedule.spaced("2 seconds"))

@@ -10,7 +10,8 @@
 // equivalent (`effect/unstable/socket` is WebSocket-only, and there is no UDP
 // module). Those live behind `src/Platform/` and are documented as such.
 
-import { Plugin, Rule } from "effect-oxlint"
+import { Diagnostic, Plugin, Rule, RuleContext, Visitor } from "effect-oxlint"
+import { Effect } from "effect"
 
 const noNodeChildProcess = Rule.banImport("node:child_process", {
   message:
@@ -133,6 +134,53 @@ const noOrDie = Rule.banCallOfMember("Effect", ["orDie", "orDieWith"], {
   message: "Keep the error typed rather than converting it into a defect with orDie."
 })
 
+// --- no escape hatches ---------------------------------------------------
+//
+// A cast and a non-null assertion are the same move: telling the compiler to
+// stop checking. Where a value genuinely arrives untyped, decode it with a
+// Schema — that produces the same narrowing with a runtime guarantee behind it.
+
+// `as const` is not an escape hatch — it narrows a literal's type without
+// telling the compiler to stop checking anything — so it is allowed. Every
+// other assertion is banned.
+const noAsCast = Rule.define({
+  name: "no-as-cast",
+  meta: Rule.meta({
+    type: "problem",
+    description: "Assert nothing; decode with a Schema or narrow with Option/Match"
+  }),
+  create: function*() {
+    const ctx = yield* RuleContext
+    // Built with Visitor.on rather than an object literal: the visitor map's
+    // keys are optional, which a concrete object cannot satisfy under
+    // exactOptionalPropertyTypes.
+    return Visitor.on("TSAsExpression", (node) => {
+      // `as const` reads as a TSTypeReference whose type name is the
+      // identifier `const`.
+      const annotation = node.typeAnnotation
+      const isAsConst = annotation.type === "TSTypeReference" &&
+        annotation.typeName.type === "Identifier" &&
+        annotation.typeName.name === "const"
+      return isAsConst ? Effect.void : ctx.report(
+        Diagnostic.make({
+          node,
+          message:
+            "Do not assert a type. Decode with a Schema, or narrow with Option/Match, so the narrowing is backed by a runtime check."
+        })
+      )
+    })
+  }
+})
+
+const noNonNull = Rule.banStatement("TSNonNullExpression", {
+  message:
+    "Do not assert non-null. Use Array.get / Option so the absent case is handled rather than assumed."
+})
+
+const noAnyType = Rule.banStatement("TSAnyKeyword", {
+  message: "`any` disables checking entirely. Use `unknown` and decode it, or name the real type."
+})
+
 export default Plugin.define({
   name: "castcli",
   specifier: "./oxlint-plugin-castcli.ts",
@@ -157,6 +205,9 @@ export default Plugin.define({
     "no-schema-sync": noSchemaSync,
     "no-run-sync": noRunSync,
     "no-swallowed-errors": noSwallowedErrors,
-    "no-or-die": noOrDie
+    "no-or-die": noOrDie,
+    "no-as-cast": noAsCast,
+    "no-non-null": noNonNull,
+    "no-any": noAnyType
   }
 })

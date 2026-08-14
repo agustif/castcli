@@ -28,9 +28,12 @@ const fieldsFromProto = (): ReadonlyMap<string, { number: number; type: string }
       .flatMap((line) => {
         const match = /^\s*(required|optional)\s+([A-Za-z0-9_.]+)\s+([a-z0-9_]+)\s*=\s*(\d+)/
           .exec(line)
-        return match === null
+        const name = match?.[3]
+        const number = match?.[4]
+        const type = match?.[2]
+        return name === undefined || number === undefined || type === undefined
           ? []
-          : [[match[3]!, { number: Number(match[4]), type: match[2]! }] as const]
+          : [[name, { number: Number(number), type }] as const]
       })
   )
 }
@@ -46,8 +49,8 @@ describe("Generated descriptors", () => {
 
   it("assigns each field the number the proto gives it", () => {
     fieldsFromProto().forEach((declared, name) => {
-      const generated = CastMessageFields[name as keyof typeof CastMessageFields]
-      assert.strictEqual(generated.number, declared.number, `${name} field number`)
+      const generated = Object.entries(CastMessageFields).find(([key]) => key === name)?.[1]
+      assert.strictEqual(generated?.number, declared.number, `${name} field number`)
     })
   })
 

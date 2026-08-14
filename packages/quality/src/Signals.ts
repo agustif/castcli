@@ -46,6 +46,13 @@ interface Penalty {
 
 export interface State {
   readonly index: number
+  /**
+   * The rung the index refers to, carried alongside it. Looking it up on every
+   * use meant asserting the index was in range at six separate call sites; the
+   * ladder is only indexed where a neighbour is genuinely being sought, and
+   * that lookup returns an Option.
+   */
+  readonly rung: Rung
   /** Best estimate of link capacity in bits per second, 0 until first measured. */
   readonly capacity: number
   readonly initialised: boolean

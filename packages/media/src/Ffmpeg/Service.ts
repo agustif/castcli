@@ -5,19 +5,36 @@
 // closing the scope kills the encoder. That replaces the manual bookkeeping of
 // tracking spawned processes in a Set and remembering to SIGKILL them.
 
-import { Context, Effect, Layer, type Scope, Schema, Stream } from "effect"
+import { Context, Effect, Layer, Option, type Scope, Schema, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { MediaInfo } from "@castcli/domain"
-import { MediaProbeError, TranscodeError } from "@castcli/domain"
-import type { StreamIndex } from "@castcli/domain"
+import {
+  Height,
+  MediaInfo,
+  MediaProbeError,
+  MediaStream,
+  type StreamIndex,
+  TranscodeError
+} from "@castcli/domain"
 
 /** Re-exported so callers need only this module. */
 export type TranscodeOptions = Args.TranscodeOptions
 import * as Vtt from "../Vtt/Codec.ts"
 import * as Args from "./Args.ts"
 
-/** Cast receivers decode H.264 up to 1080p; anything else has to be re-encoded. */
-const CAST_MAX_HEIGHT = 1080
+/**
+ * The ceiling the Default Media Receiver decodes. Branded, so it can only be
+ * compared against another height.
+ */
+const CAST_MAX_HEIGHT = Height.make(1080)
+
+/** Containers report the codec by name; only this one can be passed through. */
+const COPYABLE_CODEC = "h264"
+
+/**
+ * 8-bit 4:2:0 only. `yuv420p10le` shares the prefix but is 10-bit, which the
+ * receiver cannot decode — hence matching the whole name rather than a prefix.
+ */
+const COPYABLE_PIXEL_FORMATS = new Set(["yuv420p", "yuvj420p"])
 
 export class Ffmpeg extends Context.Service<Ffmpeg, {
   readonly probe: (file: string) => Effect.Effect<MediaInfo, MediaProbeError>
@@ -90,13 +107,28 @@ export class Ffmpeg extends Context.Service<Ffmpeg, {
   )
 }
 
-/** Can this video be passed through untouched? Copying is best quality and free. */
-export const canStreamCopy = (
-  codec: string | undefined,
-  pixelFormat: string | undefined,
-  height: number | undefined
-): boolean =>
-  codec === "h264" &&
-  (pixelFormat ?? "").startsWith("yuv420p") &&
-  !(pixelFormat ?? "").includes("10") &&
-  (height ?? 0) <= CAST_MAX_HEIGHT
+/**
+ * Can this video be passed through untouched? Copying is both the best quality
+ * and the cheapest CPU, so it is worth asking precisely.
+ *
+ * Takes the decoded stream rather than three loose strings: every field it
+ * needs is optional in ffprobe's output, and `?? ""` defaults turned "the
+ * container did not say" into "definitely not copyable" without saying so.
+ * Absence is now explicit — an unknown pixel format is not copyable, and the
+ * reason is visible in the code.
+ */
+export const canStreamCopy = (stream: MediaStream): boolean =>
+  Option.match(
+    Option.all({
+      codec: Option.fromNullishOr(stream.codec_name),
+      pixelFormat: Option.fromNullishOr(stream.pix_fmt),
+      height: Option.fromNullishOr(stream.height)
+    }),
+    {
+      onNone: () => false,
+      onSome: ({ codec, height, pixelFormat }) =>
+        codec === COPYABLE_CODEC &&
+        COPYABLE_PIXEL_FORMATS.has(pixelFormat) &&
+        height <= CAST_MAX_HEIGHT
+    }
+  )

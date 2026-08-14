@@ -43,6 +43,19 @@ interface Field {
   readonly wire: "varint" | "length"
 }
 
+/** One capture group as an Option; `null` match and absent group are the same. */
+const group = (match: RegExpExecArray | null, index: number): Option.Option<string> =>
+  Option.flatMap(Option.fromNullishOr(match), (m) => Option.fromNullishOr(m[index]))
+
+/** Two groups at once; absent if either is missing. Tuple-typed, so
+ * destructuring yields strings rather than string | undefined. */
+const group2 = (match: RegExpExecArray | null, a: number, b: number) =>
+  Option.all([group(match, a), group(match, b)] as const)
+
+/** Four groups at once, for a field declaration. */
+const group4 = (match: RegExpExecArray | null, a: number, b: number, c: number, d: number) =>
+  Option.all([group(match, a), group(match, b), group(match, c), group(match, d)] as const)
+
 const MESSAGE_RE = /^\s*message\s+([A-Za-z0-9_]+)\s*\{/
 const ENUM_RE = /^\s*enum\s+([A-Za-z0-9_]+)\s*\{/
 const FIELD_RE = /^\s*(required|optional|repeated)\s+([A-Za-z0-9_.]+)\s+([a-z0-9_]+)\s*=\s*(\d+)/
@@ -68,24 +81,28 @@ const append = <K, V>(
  */
 const step = (state: ParseState, line: string): ParseState => {
   const enclosingMessage = state.stack.findLast((entry) => !entry.startsWith("enum:"))
-  const currentEnum = state.stack.at(-1)?.startsWith("enum:") === true
-    ? state.stack.at(-1)!.slice("enum:".length)
+  // A regex match guarantees its groups at runtime but not in the type; read
+  // them as Options so the compiler agrees with the pattern rather than being
+  // told to trust it.
+  const top = state.stack.at(-1)
+  const currentEnum = top?.startsWith("enum:") === true
+    ? top.slice("enum:".length)
     : undefined
 
-  return Option.match(Option.fromNullishOr(MESSAGE_RE.exec(line)), {
-    onSome: (match) => ({
+  return Option.match(group(MESSAGE_RE.exec(line), 1), {
+    onSome: (name) => ({
       ...state,
-      stack: [...state.stack, match[1]!],
-      messages: new Map(state.messages).set(match[1]!, [])
+      stack: [...state.stack, name],
+      messages: new Map(state.messages).set(name, [])
     }),
     onNone: () =>
-      Option.match(Option.fromNullishOr(ENUM_RE.exec(line)), {
-        onSome: (match) => {
+      Option.match(group(ENUM_RE.exec(line), 1), {
+        onSome: (declared) => {
           // Nested enums are qualified by their enclosing message, matching how
           // field declarations refer to them.
           const name = enclosingMessage === undefined
-            ? match[1]!
-            : `${enclosingMessage}.${match[1]}`
+            ? declared
+            : `${enclosingMessage}.${declared}`
           return {
             ...state,
             stack: [...state.stack, `enum:${name}`],
@@ -94,23 +111,23 @@ const step = (state: ParseState, line: string): ParseState => {
         },
         onNone: () =>
           currentEnum !== undefined
-            ? Option.match(Option.fromNullishOr(ENUM_VALUE_RE.exec(line)), {
-              onSome: (match) => ({
+            ? Option.match(group2(ENUM_VALUE_RE.exec(line), 1, 2), {
+              onSome: ([label, value]) => ({
                 ...state,
-                enums: append(state.enums, currentEnum, [match[1]!, Number(match[2])] as const)
+                enums: append(state.enums, currentEnum, [label, Number(value)] as const)
               }),
               onNone: () => (CLOSE_RE.test(line) ? { ...state, stack: state.stack.slice(0, -1) } : state)
             })
-            : Option.match(Option.fromNullishOr(FIELD_RE.exec(line)), {
-              onSome: (match) =>
+            : Option.match(group4(FIELD_RE.exec(line), 1, 2, 3, 4), {
+              onSome: ([rule, type, name, number]) =>
                 enclosingMessage === undefined ? state : {
                   ...state,
                   messages: append(state.messages, enclosingMessage, {
-                    name: match[3]!,
-                    number: Number(match[4]),
-                    rule: match[1]!,
-                    type: match[2]!,
-                    wire: WIRE_TYPES[match[2]!] ?? "varint"
+                    name,
+                    number: Number(number),
+                    rule,
+                    type,
+                    wire: WIRE_TYPES[type] ?? "varint"
                   })
                 },
               onNone: () => (CLOSE_RE.test(line) ? { ...state, stack: state.stack.slice(0, -1) } : state)

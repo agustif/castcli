@@ -6,6 +6,7 @@
 // types instead of `any`.
 
 import { Schema } from "effect"
+import { Bitrate } from "./Brands.ts"
 
 export class MediaStream extends Schema.Class<MediaStream>("MediaStream")({
   index: Schema.Number,
@@ -16,7 +17,8 @@ export class MediaStream extends Schema.Class<MediaStream>("MediaStream")({
   height: Schema.optional(Schema.Number),
   channels: Schema.optional(Schema.Number),
   pix_fmt: Schema.optional(Schema.String),
-  bit_rate: Schema.optional(Schema.String),
+  /** ffprobe writes this as a numeric string, or omits it entirely. */
+  bit_rate: Schema.optional(Schema.FiniteFromString.pipe(Schema.decodeTo(Bitrate))),
   tags: Schema.optional(
     Schema.Struct({
       language: Schema.optional(Schema.String),

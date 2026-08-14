@@ -46,8 +46,15 @@ export type StreamIndex = typeof StreamIndex.Type
  * link-local address reaching a field that had to be IPv4: making the type
  * refuse anything else moves that failure to compile time.
  */
+const OCTET = "(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)"
+
 export const Ipv4 = Schema.String.pipe(
-  Schema.check(Schema.isPattern(/^(\d{1,3}\.){3}\d{1,3}$/)),
+  // The octet ranges are part of the pattern, not merely its shape. The
+  // previous `\d{1,3}` version accepted 999.999.999.999 and 256.0.0.1 — which
+  // defeats the point of a brand whose whole job is rejecting addresses a
+  // device cannot be reached at. Leading zeros are rejected too: they read as
+  // octal to some resolvers.
+  Schema.check(Schema.isPattern(new RegExp(`^(${OCTET}\\.){3}${OCTET}$`))),
   Schema.brand("Ipv4")
 )
 export type Ipv4 = typeof Ipv4.Type
@@ -63,22 +70,18 @@ export type Port = typeof Port.Type
 export const TrackId = Schema.Int.pipe(Schema.brand("TrackId"))
 export type TrackId = typeof TrackId.Type
 
-// --- constructors -----------------------------------------------------------
+// --- constructing branded values ------------------------------------------
 //
-// Two ways in, deliberately:
+// Every schema carries its own constructors, so there is no hand-rolled helper
+// here and nothing is asserted into place:
 //
-//   * the schemas above, for values arriving from outside (ffprobe output, CLI
-//     flags, mDNS records, config) — these validate;
-//   * the functions below, for literals written in this repo, where the value
-//     is known good and the point of the brand is to stop it being confused
-//     with a different number.
+//   Bitrate.makeEffect(1_800_000)   validates, failure stays in the error channel
+//   Bitrate.makeOption(value)       validates, absent on failure
+//   Bitrate.make(1_800_000)         validates, throws — for values this repo
+//                                   controls, where a failure is a programming
+//                                   error rather than bad input
 //
-// Anything untrusted must use the schema. These are not a way around that.
-
-export const seconds = (value: number): Seconds => value as Seconds
-export const bitrate = (value: number): Bitrate => value as Bitrate
-export const height = (value: number): Height => value as Height
-export const streamIndex = (value: number): StreamIndex => value as StreamIndex
-export const ipv4 = (value: string): Ipv4 => value as Ipv4
-export const port = (value: number): Port => value as Port
-export const trackId = (value: number): TrackId => value as TrackId
+// The previous version of this file exported `(value: number) => value as Bitrate`
+// helpers. Those were casts: they carried the brand's *type* with none of its
+// guarantee, so `Port.make(70000)` produced a "validated" port that had never
+// been checked.

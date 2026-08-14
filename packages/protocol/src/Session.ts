@@ -5,7 +5,7 @@
 // each addressed by a destination id. You must CONNECT to a destination before
 // it will accept anything, and the receiver drops you if heartbeats stop.
 
-import { Effect, Match, Option, PubSub, Ref, Schedule, Stream } from "effect"
+import { Effect, Match, Option, PubSub, Ref, Schedule, Schema, Stream } from "effect"
 import { CastProtocolError, LoadFailedError } from "@castcli/domain"
 import * as Ns from "./Namespace.ts"
 import * as Messages from "./Messages.ts"
@@ -19,10 +19,15 @@ const RECEIVER = Ns.RECEIVER_ID
 const payloadText = (message: Frame.CastMessage): string =>
   message.payload._tag === "Text" ? message.payload.value : ""
 
-export interface PlayerStatus {
-  readonly playerState: string
-  readonly currentTimeSeconds: number
-}
+/**
+ * Derived from the schema rather than restated, so the state can only ever be
+ * one the receiver actually reports.
+ */
+export const PlayerStatus = Schema.Struct({
+  playerState: Ns.PlayerState,
+  currentTimeSeconds: Schema.Number
+})
+export type PlayerStatus = typeof PlayerStatus.Type
 
 export interface Session {
   readonly launch: Effect.Effect<void, CastProtocolError>
@@ -35,7 +40,10 @@ export interface Session {
   /** Attach to a running session rather than starting a new one. */
   readonly join: Effect.Effect<void, CastProtocolError>
   readonly load: (media: unknown, activeTrackIds: ReadonlyArray<number>) => Effect.Effect<void>
-  readonly mediaCommand: (type: string, extra?: Record<string, unknown>) => Effect.Effect<void>
+  readonly mediaCommand: (
+    type: Ns.MediaCommand,
+    extra?: Record<string, unknown>
+  ) => Effect.Effect<void>
   readonly setVolume: (level: number) => Effect.Effect<void>
   readonly stopReceiver: Effect.Effect<void>
   readonly statuses: Stream.Stream<PlayerStatus>
@@ -53,7 +61,7 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
 
   // A failed write is logged rather than discarded: silently dropping it was
   // how a dead control socket could look like a working one.
-  const send = (destinationId: string, namespace: string, payload: unknown) =>
+  const send = (destinationId: string, namespace: Ns.Namespace, payload: unknown) =>
     socket.send({
       sourceId: SENDER,
       destinationId,

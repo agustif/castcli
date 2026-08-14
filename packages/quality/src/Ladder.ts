@@ -4,8 +4,8 @@
 // better and the controller can reason about direction without comparing
 // heights and bitrates separately.
 
-import { Brands } from "@castcli/domain"
-import { Rung } from "@castcli/domain"
+import { Array, Order } from "effect"
+import { Bitrate, Height, Rung } from "@castcli/domain"
 
 interface LadderOptions {
   readonly sourceHeight: number
@@ -27,21 +27,25 @@ export const build = (options: LadderOptions): ReadonlyArray<Rung> => {
   const encoded = ENCODED_RUNGS
     .filter(([height]) => height <= options.sourceHeight)
     .map(([height, bitrate]) =>
-      Rung.Encode({ height: Brands.height(height), bitrate: Brands.bitrate(bitrate) })
+      Rung.Encode({ height: Height.make(height), bitrate: Bitrate.make(bitrate) })
     )
 
   // Copying is both the best quality and the cheapest CPU, so it belongs at the
   // top of any ladder whose link can carry it.
   const copy = options.canCopy && options.sourceBitrate !== null
     ? [Rung.Copy({
-      height: Brands.height(options.sourceHeight),
-      bitrate: Brands.bitrate(options.sourceBitrate)
+      height: Height.make(options.sourceHeight),
+      bitrate: Bitrate.make(options.sourceBitrate)
     })]
     : []
 
-  return [...encoded, ...copy]
-    .toSorted((a, b) => a.bitrate - b.bitrate)
-    .filter((rung, index, all) => index === 0 || rung.bitrate > all[index - 1]!.bitrate)
+  // Sorted and deduped by bitrate through Effect's combinators: subtraction as
+  // a comparator is wrong for large or non-finite values, and the hand-written
+  // dedupe had to index the previous element.
+  return Array.dedupeWith(
+    Array.sortWith([...encoded, ...copy], (rung) => rung.bitrate, Order.Number),
+    (a, b) => a.bitrate === b.bitrate
+  )
 }
 
 /** Index of the rung to start on: low enough that the picture appears at once. */

@@ -84,3 +84,18 @@ export class ConnectionLostError extends Schema.TaggedError<ConnectionLostError>
     return "the Cast control connection closed"
   }
 }
+
+/**
+ * A quality ladder with no rungs. Reachable only if the source resolution is
+ * below every rung, which the builder is written to prevent — but the type
+ * cannot say so, and asserting it would be exactly the escape hatch this
+ * codebase bans.
+ */
+export class EmptyLadderError extends Schema.TaggedError<EmptyLadderError>()(
+  "EmptyLadderError",
+  {}
+) {
+  override get message(): string {
+    return "no quality rung fits this source"
+  }
+}

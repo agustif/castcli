@@ -43,6 +43,20 @@ export const InboundType = Schema.Literals([
 export type InboundType = typeof InboundType.Type
 
 /**
+ * Commands we may send on the media namespace. A closed set, so a typo is a
+ * compile error rather than a message the receiver silently discards.
+ */
+export const MediaCommand = Schema.Literals([
+  "PLAY",
+  "PAUSE",
+  "STOP",
+  "SEEK",
+  "GET_STATUS",
+  "EDIT_TRACKS_INFO"
+])
+export type MediaCommand = typeof MediaCommand.Type
+
+/**
  * Player states the receiver reports. `BUFFERING` is the one that matters most:
  * it is the only unambiguous evidence that the current bitrate does not fit.
  */

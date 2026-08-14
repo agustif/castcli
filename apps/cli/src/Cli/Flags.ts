@@ -12,7 +12,7 @@
 // same parsing rules instead of restating them.
 
 import { Argument, Flag } from "effect/unstable/cli"
-import { Ipv4, type Seconds, StreamIndex } from "@castcli/domain"
+import { Ipv4, Seconds, StreamIndex } from "@castcli/domain"
 import { TimeCode } from "./TimeCode.ts"
 
 /** The media file. `mustExist` turns a typo into a parse error, not a probe failure. */
@@ -50,5 +50,5 @@ export const subtitleStream = Flag.integer("subs").pipe(
 export const seek = Flag.string("seek").pipe(
   Flag.withSchema(TimeCode),
   Flag.withDescription("Start position: seconds, mm:ss or h:mm:ss"),
-  Flag.withDefault(0 as Seconds)
+  Flag.withDefault(Seconds.make(0))
 )
