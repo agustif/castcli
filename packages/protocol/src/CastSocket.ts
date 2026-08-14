@@ -9,7 +9,8 @@
 // So the only Node-specific part is the handshake below; everything downstream
 // consumes a real `Socket.Socket` and Effect's own combinators.
 
-import { Cause, Effect, Queue, Ref, Stream } from "effect"
+import { Cause, Effect, Exit, Queue, Ref, Stream } from "effect"
+import { DeviceUnreachableError } from "@castcli/domain"
 import { Socket } from "effect/unstable/socket"
 import { Duplex } from "node:stream"
 import * as tls from "node:tls"
@@ -17,8 +18,15 @@ import { type CastMessage, encodeFrame, takeFrames } from "./Frame.ts"
 
 export interface CastSocket {
   readonly send: (message: CastMessage) => Effect.Effect<void, Socket.SocketError>
-  readonly messages: Stream.Stream<CastMessage>
+  readonly messages: Stream.Stream<CastMessage, Socket.SocketError>
 }
+
+/**
+ * A device that is off, asleep or on another network accepts nothing and
+ * answers nothing, so without this the CLI simply hangs — no message, no
+ * failure. TCP's own timeout is minutes.
+ */
+const CONNECT_TIMEOUT_MS = 5_000
 
 /**
  * Acquire a TLS connection and hand it over as a web transform stream. Cast
@@ -32,6 +40,16 @@ const acquireTls = (host: string, port: number) =>
         resume(Effect.succeed(socket))
       })
       socket.setNoDelay(true)
+      socket.setTimeout(CONNECT_TIMEOUT_MS, () => {
+        socket.destroy()
+        resume(
+          Effect.fail(
+            new Socket.SocketError({
+              reason: new Socket.SocketOpenError({ kind: "Timeout", cause: undefined })
+            })
+          )
+        )
+      })
       socket.once("error", (cause) =>
         resume(
           Effect.fail(
@@ -42,7 +60,7 @@ const acquireTls = (host: string, port: number) =>
         ))
     }),
     (socket) => Effect.sync(() => socket.destroy())
-  ).pipe(Effect.map((socket) => Duplex.toWeb(socket)))
+  )
 
 /**
  * Connect to a Cast device and expose it as framed protocol messages.
@@ -54,10 +72,26 @@ export const connect = Effect.fn("CastSocket.connect")(function*(
   host: string,
   port: number
 ) {
-  const socket = yield* Socket.fromTransformStream(acquireTls(host, port))
+  // Acquired eagerly rather than handed to `fromTransformStream` as a lazy
+  // effect: a lazily-opened socket defers the connection to the first read or
+  // write, so an unreachable device produced a write that never settled and a
+  // command that hung with nothing printed. Yielding here means "device is off"
+  // is a typed failure at the point of connecting.
+  const tlsSocket = yield* acquireTls(host, port).pipe(
+    Effect.catchTag(
+      "SocketError",
+      (cause) => Effect.fail(new DeviceUnreachableError({ ip: host, port, cause }))
+    )
+  )
+  const socket = yield* Socket.fromTransformStream(
+    Effect.sync(() => Duplex.toWeb(tlsSocket))
+  )
   // The `Done` error channel lets the queue be ended when the socket closes,
-  // which terminates the message stream instead of leaving it hanging.
-  const queue = yield* Queue.unbounded<CastMessage, Cause.Done>()
+  // which terminates the message stream instead of leaving it hanging. A socket
+  // *failure* is a different thing and ends the queue with the cause, so that a
+  // device which is off or unreachable surfaces as an error rather than as a
+  // stream that politely produced nothing.
+  const queue = yield* Queue.unbounded<CastMessage, Socket.SocketError | Cause.Done>()
   const pending = yield* Ref.make<Buffer>(Buffer.alloc(0))
 
   yield* Effect.forkScoped(
@@ -70,7 +104,11 @@ export const connect = Effect.fn("CastSocket.connect")(function*(
           discard: true
         })
       })
-    ).pipe(Effect.ensuring(Queue.end(queue)))
+    ).pipe(
+      Effect.onExit((exit) =>
+        Exit.isFailure(exit) ? Queue.failCause(queue, exit.cause) : Queue.end(queue)
+      )
+    )
   )
 
   const write = yield* socket.writer

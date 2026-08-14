@@ -438,5 +438,10 @@ cast.pipe(
   Command.run({ version: "0.1.0" }),
   Effect.scoped,
   Effect.provide(MainLayer),
-  NodeRuntime.runMain
+  // Every expected failure is a domain error that renders itself, so the
+  // message is the useful part and the stack trace is noise — "the TV is off"
+  // does not need thirty frames of Effect internals. The failure still
+  // propagates, so the exit code stays non-zero.
+  Effect.tapError((error) => Console.error(`error: ${error.message}`)),
+  NodeRuntime.runMain({ disableErrorReporting: true })
 )

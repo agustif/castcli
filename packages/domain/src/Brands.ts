@@ -13,28 +13,34 @@ import { Schema } from "effect"
 
 /** A position or duration in seconds. Never negative. */
 export const Seconds = Schema.Number.pipe(
-  Schema.check(Schema.isGreaterThanOrEqualTo(0)),
+  Schema.check(
+    Schema.isGreaterThanOrEqualTo(0, { message: "expected a position at or after the start" })
+  ),
   Schema.brand("Seconds")
 )
 export type Seconds = typeof Seconds.Type
 
 /** Bits per second. Distinct from Seconds so the two cannot be confused. */
 export const Bitrate = Schema.Number.pipe(
-  Schema.check(Schema.isGreaterThan(0)),
+  Schema.check(Schema.isGreaterThan(0, { message: "expected a bitrate in bits per second" })),
   Schema.brand("Bitrate")
 )
 export type Bitrate = typeof Bitrate.Type
 
 /** A vertical resolution, e.g. 720. */
 export const Height = Schema.Int.pipe(
-  Schema.check(Schema.isGreaterThan(0)),
+  Schema.check(Schema.isGreaterThan(0, { message: "expected a height in pixels, such as 720" })),
   Schema.brand("Height")
 )
 export type Height = typeof Height.Type
 
 /** An index into a container's stream table, as ffmpeg's `-map 0:N` uses. */
 export const StreamIndex = Schema.Int.pipe(
-  Schema.check(Schema.isGreaterThanOrEqualTo(0)),
+  Schema.check(
+    Schema.isGreaterThanOrEqualTo(0, {
+      message: "expected a stream index as listed by `cast streams`"
+    })
+  ),
   Schema.brand("StreamIndex")
 )
 export type StreamIndex = typeof StreamIndex.Type
@@ -54,14 +60,25 @@ export const Ipv4 = Schema.String.pipe(
   // defeats the point of a brand whose whole job is rejecting addresses a
   // device cannot be reached at. Leading zeros are rejected too: they read as
   // octal to some resolvers.
-  Schema.check(Schema.isPattern(new RegExp(`^(${OCTET}\\.){3}${OCTET}$`))),
+  // The annotation matters as much as the pattern: without it a mistyped --ip
+  // shows the raw regular expression, which tells a person nothing about what
+  // to type instead.
+  Schema.check(
+    Schema.isPattern(new RegExp(`^(${OCTET}\\.){3}${OCTET}$`), {
+      message: "expected an IPv4 address such as 192.168.1.24"
+    })
+  ),
   Schema.brand("Ipv4")
 )
 export type Ipv4 = typeof Ipv4.Type
 
 /** A TCP port. */
 export const Port = Schema.Int.pipe(
-  Schema.check(Schema.isBetween({ minimum: 1, maximum: 65_535 })),
+  Schema.check(
+    Schema.isBetween({ minimum: 1, maximum: 65_535 }, {
+      message: "expected a port between 1 and 65535"
+    })
+  ),
   Schema.brand("Port")
 )
 export type Port = typeof Port.Type
@@ -93,7 +110,9 @@ export type MediaSessionId = typeof MediaSessionId.Type
  * pattern rather than a number because it is passed through to ffmpeg verbatim.
  */
 export const AudioBitrate = Schema.String.pipe(
-  Schema.check(Schema.isPattern(/^\d+k$/)),
+  Schema.check(
+    Schema.isPattern(/^\d+k$/, { message: "expected an audio bitrate such as 128k" })
+  ),
   Schema.brand("AudioBitrate")
 )
 export type AudioBitrate = typeof AudioBitrate.Type
@@ -104,7 +123,11 @@ export type AudioBitrate = typeof AudioBitrate.Type
  * twenty percent — quietly became full volume.
  */
 export const VolumeLevel = Schema.Number.pipe(
-  Schema.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+  Schema.check(
+    Schema.isBetween({ minimum: 0, maximum: 1 }, {
+      message: "expected a volume between 0 and 1 — the CLI takes a percentage and converts"
+    })
+  ),
   Schema.brand("VolumeLevel")
 )
 export type VolumeLevel = typeof VolumeLevel.Type
@@ -114,7 +137,7 @@ export type VolumeLevel = typeof VolumeLevel.Type
  * many other strings passed to ffmpeg — a codec name, a muxer, a URL.
  */
 export const FilePath = Schema.String.pipe(
-  Schema.check(Schema.isMinLength(1)),
+  Schema.check(Schema.isMinLength(1, { message: "expected a path to a media file" })),
   Schema.brand("FilePath")
 )
 export type FilePath = typeof FilePath.Type

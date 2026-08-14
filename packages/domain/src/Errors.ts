@@ -72,6 +72,21 @@ export class NoVideoStreamError extends Schema.TaggedError<NoVideoStreamError>()
 }
 
 /**
+ * The device did not answer on the control port. It is off, asleep, or on
+ * another network — an ordinary situation, and the one a person is most likely
+ * to hit, so it says what to check rather than showing a socket trace.
+ */
+export class DeviceUnreachableError extends Schema.TaggedError<DeviceUnreachableError>()(
+  "DeviceUnreachableError",
+  { ip: Schema.String, port: Schema.Number, cause: Schema.Defect() }
+) {
+  override get message(): string {
+    return `could not reach a Cast device at ${this.ip}:${this.port} — ` +
+      "check that it is switched on and on this network (`cast scan` lists what is reachable)"
+  }
+}
+
+/**
  * The control socket closed. On a weak link the device resets it with no
  * warning, so this is an ordinary, recoverable condition rather than a fault:
  * the session is rebuilt and playback resumes from the last known position.
