@@ -1,6 +1,7 @@
 # cast
 
-Stream a local video file to a Google Cast device from the command line.
+Stream a local video file to a television from the command line — Google Cast
+or DLNA, whichever the device speaks.
 
 ```sh
 cast play movie.mkv
@@ -43,7 +44,21 @@ server, hands the receiver a URL, and the receiver fetches from it:
 ```
 
 Almost every failure in this project came from forgetting that the second arrow
-points inward. The advertised URL has to be routable **from the TV**.
+points inward. The advertised URL has to be routable **from the TV**. This is
+not a Cast quirk: DLNA's fault code 716 means precisely the same thing, and it
+is the first thing to suspect on either protocol.
+
+That inversion is also why supporting a second protocol cost so little. Cast and
+DLNA agree on almost nothing — one launches an application over a persistent TLS
+connection and speaks protobuf, the other posts SOAP at a URL and keeps no
+connection at all — but both are pull models, so probing the file, choosing the
+tracks, extracting the subtitles and serving the media are the same work either
+way. Only the last step differs.
+
+There is deliberately **no adapter interface**. Two implementations of one thing
+is a shape traced around the first; instead a tagged `Target` and an exhaustive
+match make every site that acts on a device handle both, and the compiler says
+so. A third protocol would make the right interface visible.
 
 ffmpeg does the conversion. Video is stream-copied whenever the source is
 already H.264 8-bit 4:2:0 at 1080p or below; only the audio is always
@@ -106,7 +121,7 @@ cast play movie.mkv --hls
 | `--audio <index>` | Audio stream index | first match for `CAST_AUDIO_LANGUAGES` |
 | `--subs <index>` | Subtitle stream index, served as a WebVTT sidecar | preferred language, most cues |
 | `--seek <time>` | Start position: `90`, `1:30` or `1:02:03` | where you stopped |
-| `--hls` | Serve HLS instead of one continuous stream | off |
+| `--hls` | Serve HLS instead of one continuous stream (Cast only) | off |
 
 ### Control
 
@@ -256,8 +271,10 @@ packages/
                 and the vendored cast_channel.proto it is generated from
   media/        ffmpeg invocations as typed values, WebVTT as a Schema codec
   quality/      ladder, signals (state → phase), controller (phase → action)
+  dlna/         DLNA/UPnP: SSDP, SOAP, DIDL-Lite, and actions generated from
+                the vendored service descriptions
   platform/     generic Node bridges: UDP for mDNS, http.createServer
-  emulator/     a Cast device, emulated well enough to test against
+  emulator/     devices, emulated well enough to test against
 apps/
   cli/          commands, schema-validated flags, the media server routes
 tools/
@@ -276,9 +293,9 @@ such an import resolve.
 | `npm run lint` | 25 project rules |
 | `npm run vocabulary:sync` | refetch the media vocabulary from Google (needs the network) |
 | `npm run depcruise` | no cycles, Node builtins stay in `platform`/`protocol`, packages never import the app |
-| `npm run codegen:check` | the generated wire descriptors and media vocabulary are not stale |
-| `npm test` | 112 tests, in about a second |
-| `npm run test:e2e` | 3 tests that run the built binary at an emulated device |
+| `npm run codegen:check` | generated wire descriptors, media vocabulary and UPnP actions are not stale |
+| `npm test` | 196 tests, in about a second |
+| `npm run test:e2e` | 4 tests that run the built binary at emulated devices, Cast and DLNA |
 | `npm run check` | all of the above — and the only thing CI runs |
 
 The lint rules encode one idea: never hand-roll what Effect provides. `no-if`,
@@ -289,7 +306,7 @@ carry narrow, documented exemptions.
 
 ## Testing without a television
 
-`packages/emulator` is a Cast device: it serves the control channel over TLS and
+`packages/emulator` holds two devices. The Cast one serves the control channel over TLS and
 then does the half that matters — pulls the media over HTTP exactly as a
 receiver does, walking the master playlist to a variant and the variant to its
 segments. A *device* rather than a service, because it owns its own listener and
@@ -316,8 +333,31 @@ finds a real device — which is the only way to exercise discovery, the path
 people actually use. It is off by default: advertising a Cast device on a real
 network is not a private act.
 
-What it cannot tell you is whether a *particular* television accepts the stream.
-That is why HLS is opt-in.
+The DLNA one is its HTTP sibling: it serves a device description, accepts SOAP
+at the two control URLs, answers a proper `401 Invalid Action` fault for anything
+it does not implement, and pulls the media when told to play.
+
+What neither can tell you is whether a *particular* television accepts the
+stream. That is why HLS is opt-in and why DLNA has not been near a real set.
+
+## Generated, not transcribed
+
+Three wire vocabularies come from their own sources rather than from someone
+reading a document:
+
+| Generated | From | Caught |
+|---|---|---|
+| Cast frame descriptors | Chromium's `cast_channel.proto` | field numbers that were right by transcription and would decay |
+| Cast media vocabulary | `cast_receiver_framework.js`, the code a device runs | `HlsSegmentFormat` has eight values, not the four written by hand |
+| UPnP actions | the `AVTransport:1` / `RenderingControl:1` SCPDs | argument order, which SOAP carries positionally |
+
+That last one matters more than it sounds. `SetAVTransportURI` with its URI and
+metadata the wrong way round is a well-formed request that a television accepts
+and then ignores. The generated builders take a named record and emit the order
+the service declared, so the mistake cannot be made.
+
+`npm run codegen:check` fails when any of them is stale; `npm run vocabulary:sync`
+refetches the Cast one from Google.
 
 ## Validation
 

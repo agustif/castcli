@@ -12,7 +12,7 @@
 // interface these two share is worth extracting; with two it would be a shape
 // traced around the first one.
 
-import { Duration, Effect, Option, Schema, Scope } from "effect"
+import { Duration, Effect, Option, Schedule, Schema, Scope } from "effect"
 import { HttpBody, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { Brands, CastProtocolError } from "@castcli/domain"
 import * as Actions from "./GeneratedActions.ts"
@@ -127,6 +127,17 @@ export const connect = (
           body: HttpBody.text(Soap.envelope(action), "text/xml")
         })
       ).pipe(
+        // Retried because a transport failure here usually is not one. UPnP
+        // control is a series of small POSTs to a device that closes idle
+        // connections aggressively, so a pooled socket is routinely shut just
+        // as the next request claims it. Observed within seconds of playback
+        // starting, against a device that was working perfectly.
+        //
+        // Only the send is retried. A fault is the device answering, and
+        // answering twice would be worse than answering once.
+        Effect.retry(
+          Schedule.spaced(Duration.millis(200)).pipe(Schedule.upTo({ times: 2 }))
+        ),
         Effect.flatMap((response) => response.text),
         Effect.mapError((cause) =>
           new CastProtocolError({ message: `${action.name} could not be sent: ${cause}` })
