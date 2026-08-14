@@ -325,6 +325,15 @@ const play = Command.make(
     // report one cannot be presented that way at all. Saying so and carrying on
     // beats refusing: the progressive path needs no duration.
     const duration = info.durationSeconds
+
+    // HLS variants are encoded rungs only. A stream-copy variant cannot be cut
+    // into segments at arbitrary times: `-ss` lands on the nearest keyframe, so
+    // with a GOP that does not divide the segment length the pieces overlap and
+    // drift from what the playlist declares — measured at 5s/10s/15s for
+    // segments announced as 6s/12s/18s, an error that grows with every one.
+    // Re-encoding forces a keyframe at the segment start, which is the whole
+    // premise of switching variants mid-film.
+    const hlsLadder = ladder.filter((rung) => rung._tag === "Encode")
     const useHls = hls && Option.isSome(duration)
     yield* Effect.when(
       Console.log("this file reports no duration, so HLS is not possible — streaming instead"),
@@ -393,7 +402,7 @@ const play = Command.make(
           audioIndex,
           audioBitrate: config.audioBitrate,
           audioBitsPerSecond: bitsPerSecond(config.audioBitrate),
-          ladder,
+          ladder: hlsLadder,
           state,
           onBytes: controller.noteBytes
         })
@@ -428,7 +437,11 @@ const play = Command.make(
 
     const baseUrl = `http://${advertise}:${servingPort}`
 
-    yield* Effect.forkScoped(controller.run)
+    // Under HLS the receiver chooses the quality from its own buffer, so
+    // running the controller as well means two parties deciding: it would
+    // measure the segment fetches, decide to switch, and reissue LOAD —
+    // restarting the film to overrule a receiver that was managing fine.
+    yield* Effect.when(Effect.forkScoped(controller.run), Effect.succeed(!useHls))
 
     const sendLoad = Effect.fn("cast.sendLoad")(function*(session: CastSession.Session) {
       const current = yield* Ref.get(state)
@@ -576,6 +589,8 @@ const play = Command.make(
         )
       )
 
+      // Reloading is how the progressive path changes quality. HLS has no use
+      // for it — switching is the next segment — and the queue stays empty.
       yield* Effect.forkScoped(
         Stream.runForEach(Stream.fromQueue(reloads), (rung) =>
           Effect.gen(function*() {

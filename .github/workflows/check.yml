@@ -1,9 +1,10 @@
 # The one gate. `npm run check` is what runs locally, so CI running anything
 # else would be a second definition of "passing" to keep in sync.
 #
-# ffmpeg is deliberately absent: every test either exercises pure code or fakes
-# the ffmpeg service, and a suite that needs a media pipeline installed to run
-# is a suite people stop running.
+# ffmpeg is installed because the end-to-end test needs it — that test runs the
+# real binary at an emulated Cast device and is the only one that exercises the
+# inversion this tool is built around. It skips silently where ffmpeg is
+# missing, which is convenient locally and useless in CI, so CI provides it.
 
 name: check
 
@@ -22,6 +23,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      # The end-to-end test skips without these, and a test that never runs is
+      # not a test. openssl is already present on the runner.
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - run: npm ci
 

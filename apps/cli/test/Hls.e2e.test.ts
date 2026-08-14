@@ -31,15 +31,28 @@ const hasBinary = (name: string) =>
   )
 
 /**
- * Thirty seconds of test pattern, which is five HLS segments and change — long
- * enough that a playlist has several entries and short enough to encode in a
- * couple of seconds.
+ * Thirty seconds of test pattern with a subtitle track, which is five HLS
+ * segments and change — long enough that a playlist has several entries and
+ * short enough to encode in a couple of seconds.
+ *
+ * The subtitles matter: they are served as a side-loaded WebVTT track rather
+ * than inside the presentation, and whether a receiver fetches that when handed
+ * an HLS master playlist is exactly the kind of thing only a device can answer.
  */
 const makeSample = (into: string) =>
   Effect.gen(function*() {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+    const fs = yield* FileSystem
     const path = yield* Path
     const file = path.join(into, "sample.mkv")
+    const subtitles = path.join(into, "sample.srt")
+
+    yield* fs.writeFileString(
+      subtitles,
+      "1\n00:00:01,000 --> 00:00:04,000\nfirst line\n\n" +
+        "2\n00:00:08,000 --> 00:00:12,000\nsecond line\n\n" +
+        "3\n00:00:20,000 --> 00:00:24,000\nthird line\n"
+    )
     yield* spawner.string(
       ChildProcess.make("ffmpeg", [
         "-hide_banner",
@@ -66,7 +79,30 @@ const makeSample = (into: string) =>
         file
       ])
     )
-    return file
+    // Muxed in a second pass: -shortest and a subtitle input do not combine.
+    const withSubtitles = path.join(into, "sample-subbed.mkv")
+    yield* spawner.string(
+      ChildProcess.make("ffmpeg", [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        file,
+        "-i",
+        subtitles,
+        "-map",
+        "0",
+        "-map",
+        "1",
+        "-c",
+        "copy",
+        "-metadata:s:s:0",
+        "language=eng",
+        withSubtitles
+      ])
+    )
+    return withSubtitles
   })
 
 /**
@@ -74,7 +110,9 @@ const makeSample = (into: string) =>
  *
  * Generous timeouts on purpose: this spawns `npx tsx` and encodes video while
  * the rest of the suite runs alongside it, and a flake here would be blamed on
- * the code rather than on a loaded machine.
+ * the code rather than on a loaded machine. They have to sum to less than the
+ * test's own timeout, or the last wait is the one that fails and the message
+ * says nothing about which step was slow.
  */
 const eventually = <A>(
   effect: Effect.Effect<A>,
@@ -192,11 +230,23 @@ describe("cast play, against an emulated device", () => {
             // 3. Segments came back with content rather than an error page.
             const segments = fetched.filter((url) => url.endsWith(".ts"))
             assert.isAtLeast(segments.length, 1)
+
+            // 4. The subtitle track is side-loaded rather than part of the
+            //    presentation, so it has to be fetched separately — and under
+            //    HLS it must cover the whole film, not start at an offset.
+            yield* eventually(
+              device.fetched,
+              (urls) => urls.some((url) => url.includes("/subs.vtt")),
+              Duration.seconds(30)
+            )
+            const subtitleUrl = (yield* device.fetched).find((url) => url.includes("/subs.vtt"))
+            assert.isDefined(subtitleUrl, "the device never fetched the subtitle track")
+            assert.include(subtitleUrl ?? "", "o=0")
           }).pipe(Effect.scoped),
           Effect.succeed(ffmpeg && openssl)
         )
       }).pipe(Effect.provide(TestServices)),
-    { timeout: 180_000 }
+    { timeout: 300_000 }
   )
 
   it.live(
@@ -243,6 +293,6 @@ describe("cast play, against an emulated device", () => {
           Effect.succeed(ffmpeg && openssl)
         )
       }).pipe(Effect.provide(TestServices)),
-    { timeout: 180_000 }
+    { timeout: 300_000 }
   )
 })

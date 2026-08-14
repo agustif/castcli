@@ -19,7 +19,7 @@
 // deliberate act, while `codegen` and its check must work offline, in CI, and
 // produce the same bytes every time.
 
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { NodeRuntime } from "@effect/platform-node"
 import { createHash } from "node:crypto"
 import { readFileSync, writeFileSync } from "node:fs"
@@ -163,12 +163,25 @@ const findTable = (
     )
 }
 
-interface Snapshot {
-  readonly source: string
-  readonly sha256: string
-  readonly extractedFrom: string
-  readonly vocabularies: Record<string, { readonly description: string; readonly values: ReadonlyArray<string> }>
-}
+/**
+ * Decoded rather than trusted, even though this script wrote it: the snapshot
+ * is a file on disk that outlives any one version of this script, and a shape
+ * that has drifted should say so here rather than produce a confusing
+ * TypeScript file.
+ */
+const Snapshot = Schema.Struct({
+  source: Schema.String,
+  sha256: Schema.String,
+  extractedFrom: Schema.String,
+  vocabularies: Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      description: Schema.String,
+      values: Schema.Array(Schema.String)
+    })
+  )
+})
+type Snapshot = typeof Snapshot.Type
 
 const sync = Effect.gen(function*() {
   yield* Effect.logInfo(`fetching ${SOURCE_URL}`)
@@ -207,12 +220,17 @@ const sync = Effect.gen(function*() {
 const OUTPUT = path.join(ROOT, "packages/protocol/src/GeneratedVocabulary.ts")
 
 const readSnapshot = Effect.try({
-  try: (): Snapshot => JSON.parse(readFileSync(SNAPSHOT, "utf8")),
+  try: () => readFileSync(SNAPSHOT, "utf8"),
   catch: () =>
     new Error(
       `no vocabulary snapshot at ${path.relative(ROOT, SNAPSHOT)} — run \`npm run vocabulary:sync\``
     )
-})
+}).pipe(
+  Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(Snapshot))),
+  Effect.mapError((cause) =>
+    new Error(`${path.relative(ROOT, SNAPSHOT)} is not a vocabulary snapshot: ${cause}`)
+  )
+)
 
 const asLiterals = (name: string, description: string, values: ReadonlyArray<string>) =>
   `/** ${description} */\nexport const ${name} = Schema.Literals([\n` +
