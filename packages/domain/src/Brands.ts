@@ -109,6 +109,16 @@ export const VolumeLevel = Schema.Number.pipe(
 )
 export type VolumeLevel = typeof VolumeLevel.Type
 
+/**
+ * An absolute path to a media file. Branded so it cannot be confused with the
+ * many other strings passed to ffmpeg — a codec name, a muxer, a URL.
+ */
+export const FilePath = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("FilePath")
+)
+export type FilePath = typeof FilePath.Type
+
 /** Identifier for a text track offered to the receiver. */
 export const TrackId = Schema.Int.pipe(Schema.brand("TrackId"))
 export type TrackId = typeof TrackId.Type

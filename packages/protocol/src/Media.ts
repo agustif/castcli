@@ -82,10 +82,11 @@ export class MediaInformation extends Schema.Class<MediaInformation>("MediaInfor
   duration: Schema.optional(Schema.Number),
   /** `contentUrl` wins when present, freeing contentId to be a real identifier. */
   contentUrl: Schema.optional(Schema.String),
-  metadata: Schema.optional(Schema.Unknown),
+  /** One of the chrome.cast.media.*Metadata shapes; arbitrary but JSON. */
+  metadata: Schema.optional(Schema.Json),
   tracks: Schema.optional(Schema.Array(Track)),
   hlsSegmentFormat: Schema.optional(HlsSegmentFormat),
-  customData: Schema.optional(Schema.Unknown)
+  customData: Schema.optional(Schema.Json)
 }) {}
 
 export class LoadRequest extends Schema.Class<LoadRequest>("LoadRequest")({
@@ -97,7 +98,7 @@ export class LoadRequest extends Schema.Class<LoadRequest>("LoadRequest")({
   /** Seconds from the start of the content. */
   currentTime: Schema.optional(Schema.Number),
   activeTrackIds: Schema.optional(Schema.Array(Schema.Number)),
-  customData: Schema.optional(Schema.Unknown)
+  customData: Schema.optional(Schema.Json)
 }) {}
 
 /**
@@ -111,7 +112,7 @@ export class EditTracksInfoRequest
     requestId: Schema.Number,
     mediaSessionId: Schema.Number,
     activeTrackIds: Schema.optional(Schema.Array(Schema.Number)),
-    textTrackStyle: Schema.optional(Schema.Unknown)
+    textTrackStyle: Schema.optional(Schema.Json)
   })
 {}
 

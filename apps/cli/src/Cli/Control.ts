@@ -7,7 +7,7 @@
 import { Console, Duration, Effect, Match, Option, Schema, Stream } from "effect"
 import { Command, Flag } from "effect/unstable/cli"
 import { AppConfig } from "../Config.ts"
-import { Namespace, Session as CastSession } from "@castcli/protocol"
+import { Namespace, Session, Session as CastSession } from "@castcli/protocol"
 import { Mdns } from "@castcli/platform"
 import { Brands, Port } from "@castcli/domain"
 import { CastDevice, VolumeLevel } from "@castcli/domain"
@@ -102,7 +102,7 @@ const pause = Command.make(
   "pause",
   { ip: deviceIp },
   Effect.fn(function*({ ip }) {
-    yield* withSession(ip, (session) => session.mediaCommand("PAUSE"))
+    yield* withSession(ip, (session) => session.mediaCommand(Session.MediaCommand.PAUSE()))
     yield* Console.log("paused")
   })
 ).pipe(Command.withDescription("Pause playback"))
@@ -111,7 +111,7 @@ const resume = Command.make(
   "resume",
   { ip: deviceIp },
   Effect.fn(function*({ ip }) {
-    yield* withSession(ip, (session) => session.mediaCommand("PLAY"))
+    yield* withSession(ip, (session) => session.mediaCommand(Session.MediaCommand.PLAY()))
     yield* Console.log("resumed")
   })
 ).pipe(Command.withDescription("Resume playback"))
@@ -133,9 +133,9 @@ const toggle = Command.make(
         )
       ).pipe(
         Match.whenOr("PAUSED", "IDLE", () =>
-          Effect.andThen(session.mediaCommand("PLAY"), Console.log("resumed"))),
+          Effect.andThen(session.mediaCommand(Session.MediaCommand.PLAY()), Console.log("resumed"))),
         Match.whenOr("PLAYING", "BUFFERING", "LOADING", () =>
-          Effect.andThen(session.mediaCommand("PAUSE"), Console.log("paused"))),
+          Effect.andThen(session.mediaCommand(Session.MediaCommand.PAUSE()), Console.log("paused"))),
         Match.exhaustive
       ))
   })

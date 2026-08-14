@@ -13,7 +13,7 @@
 // order of `push` calls.
 
 import { Data, Match, Option, Schema } from "effect"
-import type { Bitrate, Seconds, StreamIndex } from "@castcli/domain"
+import type { AudioBitrate, Bitrate, FilePath, Seconds, StreamIndex } from "@castcli/domain"
 import { Rung } from "@castcli/domain"
 
 // --- closed vocabularies -----------------------------------------------------
@@ -55,7 +55,7 @@ export type Arg = Data.TaggedEnum<{
   readonly NoStdin: {}
   /** Input seeking. Must come before `Input` to be fast and to rebase timestamps. */
   readonly SeekInput: { readonly at: Seconds }
-  readonly Input: { readonly path: string }
+  readonly Input: { readonly path: FilePath }
   readonly Map: { readonly stream: StreamIndex }
   readonly Video: { readonly codec: VideoCodec }
   readonly Audio: { readonly codec: AudioCodec }
@@ -66,7 +66,7 @@ export type Arg = Data.TaggedEnum<{
   readonly Gop: { readonly frames: number }
   readonly ScaleHeight: { readonly height: number }
   readonly AudioChannels: { readonly count: number }
-  readonly AudioBitrate: { readonly rate: string }
+  readonly AudioBitrate: { readonly rate: AudioBitrate }
   readonly Format: { readonly muxer: Muxer }
   readonly MovFlags: { readonly flags: ReadonlyArray<MovFlag> }
   readonly Output: { readonly target: string }
@@ -103,12 +103,12 @@ const renderAll = (args: ReadonlyArray<Arg>): ReadonlyArray<string> =>
 // --- invocations -------------------------------------------------------------
 
 export interface TranscodeOptions {
-  readonly file: string
+  readonly file: FilePath
   readonly offsetSeconds: Seconds
   readonly videoIndex: StreamIndex
   readonly audioIndex: Option.Option<StreamIndex>
   readonly rung: Rung
-  readonly audioBitrate: string
+  readonly audioBitrate: AudioBitrate
 }
 
 /** Video options for a rung. Exhaustive: a new rung kind will not compile. */
@@ -164,7 +164,7 @@ export const transcode = (options: TranscodeOptions): ReadonlyArray<string> =>
   ])
 
 /** Extract one subtitle track as WebVTT on stdout. */
-export const extractSubtitles = (file: string, stream: StreamIndex): ReadonlyArray<string> =>
+export const extractSubtitles = (file: FilePath, stream: StreamIndex): ReadonlyArray<string> =>
   renderAll([
     ...preamble,
     Arg.Input({ path: file }),
@@ -174,7 +174,7 @@ export const extractSubtitles = (file: string, stream: StreamIndex): ReadonlyArr
   ])
 
 /** ffprobe is a different binary with a different flag vocabulary. */
-export const probe = (file: string): ReadonlyArray<string> => [
+export const probe = (file: FilePath): ReadonlyArray<string> => [
   "-v",
   "error",
   "-print_format",

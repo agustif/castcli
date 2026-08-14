@@ -18,10 +18,10 @@ export interface SessionState {
 }
 
 interface MediaServerOptions {
-  readonly file: string
+  readonly file: Brands.FilePath
   readonly videoIndex: Brands.StreamIndex
   readonly audioIndex: Option.Option<Brands.StreamIndex>
-  readonly audioBitrate: string
+  readonly audioBitrate: Brands.AudioBitrate
   readonly state: Ref.Ref<SessionState>
   readonly onBytes: (count: number) => Effect.Effect<void>
 }

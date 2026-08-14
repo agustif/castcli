@@ -29,9 +29,10 @@ import * as os from "node:os"
 import * as path from "node:path"
 
 import { AppConfig } from "../Config.ts"
-import { canStreamCopy, Ffmpeg } from "@castcli/media"
+import { canStreamCopy, Ffmpeg, Vtt } from "@castcli/media"
 import {
   describeRung,
+  FilePath,
   Height,
   Ipv4,
   Port,
@@ -173,7 +174,8 @@ const play = Command.make(
   Effect.fn(function*({ audio, device, file, ip, seek, subs }) {
     const config = yield* AppConfig
     const ffmpeg = yield* Ffmpeg
-    const absolute = path.resolve(file)
+    // `Argument.file({ mustExist: true })` already proved it is there.
+    const absolute = FilePath.make(path.resolve(file))
 
     const info = yield* ffmpeg.probe(absolute)
 
@@ -195,19 +197,29 @@ const play = Command.make(
         Array.head(info.audioStreams),
         (stream) => StreamIndex.makeOption(stream.index)
       ))
-    const subtitleIndex = Option.getOrUndefined(subs) ?? null
-    const subtitleLanguage = info.subtitleStreams.find((s) => s.index === subtitleIndex)?.language ??
-      "und"
+    const subtitleIndex = subs
+    // RFC 5646 tag. Mandatory when the subtype is SUBTITLES — a track without
+    // one is ignored by the receiver without any error.
+    const subtitleLanguage = Option.getOrElse(
+      Option.flatMap(subtitleIndex, (index) =>
+        Option.map(
+          Array.findFirst(info.subtitleStreams, (stream) => stream.index === index),
+          (stream) => stream.language
+        )),
+      () => "und"
+    )
 
     // Extracted once up front rather than per request: a Cast receiver handed a
     // slowly-arriving text track stacks cues on screen instead of replacing
     // them, and re-running ffmpeg per seek costs seconds each time.
-    const cues = subtitleIndex === null
-      ? []
-      : yield* Effect.tap(
-        ffmpeg.extractCues(absolute, subtitleIndex),
-        (loaded) => Console.log(`loaded ${loaded.length} subtitle cues`)
-      )
+    const cues = yield* Option.match(subtitleIndex, {
+      onNone: () => Effect.succeed<Vtt.Cues>([]),
+      onSome: (index) =>
+        Effect.tap(
+          ffmpeg.extractCues(absolute, index),
+          (loaded) => Console.log(`loaded ${loaded.length} subtitle cues`)
+        )
+    })
 
     const ladder = Ladder.build({
       // ffprobe omits either field for some containers; the schema already
@@ -289,7 +301,7 @@ const play = Command.make(
         contentId: `${baseUrl}/stream?o=${current.offsetSeconds}`,
         contentType: "video/mp4",
         streamType: "BUFFERED",
-        ...(subtitleIndex === null ? {} : {
+        ...(Option.isNone(subtitleIndex) ? {} : {
           tracks: [
             new Media.Track({
               trackId: SUBTITLE_TRACK_ID,
@@ -306,10 +318,10 @@ const play = Command.make(
       // Clear any previous text track first, or the receiver keeps its already
       // rendered cues painted on screen and draws the new ones above them.
       yield* Effect.when(
-        session.mediaCommand("EDIT_TRACKS_INFO", { activeTrackIds: [] }),
-        Effect.succeed(subtitleIndex !== null)
+        session.mediaCommand(CastSession.MediaCommand.EDIT_TRACKS_INFO({ activeTrackIds: [] })),
+        Effect.succeed(Option.isSome(subtitleIndex))
       )
-      yield* session.load(media, subtitleIndex === null ? [] : [SUBTITLE_TRACK_ID])
+      yield* session.load(media, Option.isNone(subtitleIndex) ? [] : [SUBTITLE_TRACK_ID])
       yield* controller.noteRestart
     })
 
@@ -393,7 +405,7 @@ const streams = Command.make(
   { file: Argument.string("file").pipe(Argument.withDescription("Path to the media file")) },
   Effect.fn(function*({ file }) {
     const ffmpeg = yield* Ffmpeg
-    const info = yield* ffmpeg.probe(path.resolve(file))
+    const info = yield* ffmpeg.probe(FilePath.make(path.resolve(file)))
     yield* Effect.forEach(info.streams, (stream) =>
       Console.log(
         `  [${stream.index}] ${stream.codec_type.padEnd(8)} ${stream.codec_name ?? "?"} ` +

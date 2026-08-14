@@ -5,7 +5,18 @@
 // each addressed by a destination id. You must CONNECT to a destination before
 // it will accept anything, and the receiver drops you if heartbeats stop.
 
-import { Effect, Match, Option, PubSub, Ref, Schedule, Schema, Stream } from "effect"
+import {
+  Data,
+  Effect,
+  Match,
+  Option,
+  PubSub,
+  Ref,
+  Schedule,
+  Schema,
+  Stream,
+  Struct
+} from "effect"
 import {
   CastProtocolError,
   LoadFailedError,
@@ -23,6 +34,42 @@ import * as Frame from "./Frame.ts"
 
 const SENDER = Ns.SENDER_ID
 const RECEIVER = Ns.RECEIVER_ID
+
+/**
+ * What may cross the wire.
+ *
+ * Narrower than `unknown`, which is what this was: the payload is about to go
+ * through JSON.stringify, so a Date or a Map would silently become something
+ * the receiver cannot read. `undefined` is permitted because stringify drops
+ * those keys, which is how optional fields encode.
+ */
+type WireValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | ReadonlyArray<WireValue>
+  | { readonly [key: string]: WireValue }
+
+type WirePayload = { readonly [key: string]: WireValue }
+
+/**
+ * A command for the media namespace, with whatever that particular command
+ * carries. Previously this was a bare type string plus
+ * `Record<string, unknown>`, so nothing related the two: `EDIT_TRACKS_INFO`
+ * without `activeTrackIds` compiled perfectly and silently did nothing.
+ */
+export type MediaCommand = Data.TaggedEnum<{
+  readonly PLAY: {}
+  readonly PAUSE: {}
+  readonly STOP: {}
+  readonly GET_STATUS: {}
+  readonly SEEK: { readonly currentTime: number }
+  readonly EDIT_TRACKS_INFO: { readonly activeTrackIds: ReadonlyArray<TrackId> }
+}>
+
+export const MediaCommand = Data.taggedEnum<MediaCommand>()
 
 /** Only text payloads carry JSON; the device-auth namespace sends binary. */
 const payloadText = (message: Frame.CastMessage): string =>
@@ -52,10 +99,7 @@ export interface Session {
     media: MediaNs.MediaInformation,
     activeTrackIds: ReadonlyArray<TrackId>
   ) => Effect.Effect<void>
-  readonly mediaCommand: (
-    type: Ns.MediaCommand,
-    extra?: Record<string, unknown>
-  ) => Effect.Effect<void>
+  readonly mediaCommand: (command: MediaCommand) => Effect.Effect<void>
   readonly setVolume: (level: VolumeLevel) => Effect.Effect<void>
   readonly stopReceiver: Effect.Effect<void>
   readonly statuses: Stream.Stream<PlayerStatus>
@@ -75,7 +119,7 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
 
   // A failed write is logged rather than discarded: silently dropping it was
   // how a dead control socket could look like a working one.
-  const send = (destinationId: string, namespace: Ns.Namespace, payload: unknown) =>
+  const send = (destinationId: string, namespace: Ns.Namespace, payload: WirePayload) =>
     socket.send({
       sourceId: SENDER,
       destinationId,
@@ -289,18 +333,36 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
         Effect.gen(function*() {
           const id = yield* nextRequestId
           const currentSession = yield* Ref.get(sessionId)
-          yield* send(transport, Ns.Media, {
-            type: "LOAD",
-            requestId: id,
-            sessionId: Option.getOrUndefined(currentSession),
-            media,
-            autoplay: true,
-            currentTime: 0,
-            ...(activeTrackIds.length > 0 ? { activeTrackIds } : {})
+          // Encoded through the schema rather than serialised as-is. A
+          // Schema.Class instance is not JSON, and the difference only shows up
+          // once the receiver rejects the payload.
+          const request = yield* MediaNs.encodeLoad(
+            new MediaNs.LoadRequest({
+              type: "LOAD",
+              requestId: id,
+              media,
+              autoplay: true,
+              currentTime: 0,
+              ...Option.match(currentSession, {
+                onNone: () => ({}),
+                onSome: (value) => ({ sessionId: value })
+              }),
+              ...(activeTrackIds.length > 0 ? { activeTrackIds } : {})
+            })
+          ).pipe(
+            // Encoding a request we built ourselves can only fail if the
+            // schema and this call site have drifted apart, so log it rather
+            // than widening the interface's error channel for it.
+            Effect.tapError((cause) => Effect.logError(`LOAD failed to encode: ${cause}`)),
+            Effect.option
+          )
+          yield* Option.match(request, {
+            onNone: () => Effect.void,
+            onSome: (payload) => send(transport, Ns.Media, payload)
           })
         })),
 
-    mediaCommand: (type, extra = {}) =>
+    mediaCommand: (command) =>
       withTransport((transport) =>
         Effect.gen(function*() {
           const media = yield* Ref.get(mediaSessionId)
@@ -309,11 +371,12 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
           yield* Option.match(media, {
             onNone: () => Effect.void,
             onSome: (mediaSession) =>
+              // The union discriminates on `_tag`; the wire calls it `type`.
               send(transport, Ns.Media, {
-                type,
+                ...Struct.omit(command, ["_tag"]),
+                type: command._tag,
                 requestId: id,
-                mediaSessionId: mediaSession,
-                ...extra
+                mediaSessionId: mediaSession
               })
           })
         })),

@@ -8,6 +8,7 @@
 import { Context, Effect, Layer, Option, type Scope, Schema, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import {
+  FilePath,
   Height,
   MediaInfo,
   MediaProbeError,
@@ -37,9 +38,9 @@ const COPYABLE_CODEC = "h264"
 const COPYABLE_PIXEL_FORMATS = new Set(["yuv420p", "yuvj420p"])
 
 export class Ffmpeg extends Context.Service<Ffmpeg, {
-  readonly probe: (file: string) => Effect.Effect<MediaInfo, MediaProbeError>
+  readonly probe: (file: FilePath) => Effect.Effect<MediaInfo, MediaProbeError>
   readonly extractCues: (
-    file: string,
+    file: FilePath,
     streamIndex: StreamIndex
   ) => Effect.Effect<Vtt.Cues, MediaProbeError>
   readonly transcode: (
@@ -51,7 +52,7 @@ export class Ffmpeg extends Context.Service<Ffmpeg, {
     Effect.gen(function*() {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
 
-    const probe = Effect.fn("Ffmpeg.probe")(function*(file: string) {
+    const probe = Effect.fn("Ffmpeg.probe")(function*(file: FilePath) {
       const json = yield* spawner.string(
         ChildProcess.make("ffprobe", Args.probe(file))
       ).pipe(
@@ -72,7 +73,7 @@ export class Ffmpeg extends Context.Service<Ffmpeg, {
      * them.
      */
     const extractCues = Effect.fn("Ffmpeg.extractCues")(function*(
-      file: string,
+      file: FilePath,
       streamIndex: StreamIndex
     ) {
       const vtt = yield* spawner.string(
