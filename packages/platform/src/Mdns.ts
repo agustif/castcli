@@ -213,6 +213,34 @@ const absorb = (
 }
 
 /** An instance is only usable once it has both an address and a port. */
+/**
+ * Fold a batch of received packets into the devices they describe.
+ *
+ * This is the whole parsing pipeline — the same three steps the discovery loop
+ * runs, in the same order — pulled out as a function of packets so it can be
+ * tested. A Cast device answers with its records spread across several
+ * datagrams, and the assembly of an address from PTR + SRV + TXT + A is fiddly
+ * enough that "it found the TV on my network" is not much of a check.
+ */
+export const devicesFrom = (
+  packets: ReadonlyArray<Buffer>,
+  service: string
+): ReadonlyArray<CastDevice> =>
+  toDevices(
+    packets.reduce<Sweep>(
+      (sweep, message) =>
+        Option.match(parseMessage(message), {
+          onNone: () => sweep,
+          onSome: (records) =>
+            records.reduce<Sweep>(
+              (acc, record) => absorb(acc, message, record, service),
+              sweep
+            )
+        }),
+      { instances: new Map(), addresses: new Map() }
+    )
+  )
+
 const toDevices = (sweep: Sweep): ReadonlyArray<CastDevice> =>
   [...sweep.instances.values()].flatMap((instance) =>
     Option.match(
@@ -271,6 +299,8 @@ const discover = Effect.fn("Mdns.discover")(function*(
           Ref.update(sweep, (current) =>
             records.reduce((acc, record) => absorb(acc, message, record, service), current))
       }))
+    // Kept as the same three steps `devicesFrom` performs; if these ever
+    // diverge, the tests are testing something other than what runs.
   )
 
   yield* Effect.callback<void>((resume) => {

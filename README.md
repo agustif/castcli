@@ -253,7 +253,7 @@ such an import resolve.
 | `npm run lint` | 25 project rules |
 | `npm run depcruise` | no cycles, Node builtins stay in `platform`/`protocol`, packages never import the app |
 | `npm run codegen:check` | the generated wire descriptors still match the vendored `.proto` |
-| `npm test` | 82 tests |
+| `npm test` | 88 tests |
 | `npm run check` | all of the above — and the only thing CI runs |
 
 The lint rules encode one idea: never hand-roll what Effect provides. `no-if`,
@@ -309,8 +309,7 @@ Ordered by how much they cost someone trying to watch something.
   WebSocket-only, so `packages/protocol/src/CastSocket.ts` wraps `node:tls` —
   but exposes it as a real `Socket.Socket`.
 - **Effect has no UDP.** mDNS therefore uses `node:dgram` in
-  `packages/platform/src/Mdns.ts`, and its packet parsing is the one piece of
-  I/O still without tests.
+  `packages/platform/src/Mdns.ts`.
 - **dependency-cruiser cannot see type-only imports here.** It does not yet
   support TypeScript 7, so it runs without the TS transpiler and `import type`
   edges are invisible to it. Value imports are checked. Found by deliberately

@@ -155,8 +155,8 @@ what made this possible, and it immediately found a real bug: a media command
 issued before the receiver reported a media session was silently discarded while
 the caller printed "paused".
 
-5. ~~Tests for `Session`, `CastSocket` and the routes, against a fake receiver
-   rather than a real TV.~~ `Mdns` packet parsing is still untested.
+5. ~~Tests for `Session`, `CastSocket`, `Mdns` and the routes, against fakes
+   rather than a real TV.~~
 6. ~~CI running `npm run check`.~~
 7. ~~An installable binary.~~ A single bundled file, because the workspace
    packages do not resolve outside the workspace.
@@ -171,8 +171,6 @@ Everything above the line is done, which makes the remaining list short and
 worth stating plainly:
 
 - **HLS**, on the trigger — the only remaining thing a viewer can see.
-- **mDNS packet parsing has no tests.** It is the last piece of I/O without
-  them, and the parsing is fiddly enough to deserve some.
 - **`cast streams` costs ~20 seconds** on a file with several subtitle tracks,
   because counting cues means extracting them. `play` is cheaper — it only reads
   one language — but the listing could cache what it learns.
