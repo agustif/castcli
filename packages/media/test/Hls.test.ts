@@ -7,7 +7,14 @@
 
 import { assert, describe, it } from "@effect/vitest"
 import { Bitrate, Height, Rung, Seconds } from "@castcli/domain"
-import { master, media, segmentCount, segmentLength, segmentStart } from "../src/Hls/Playlist.ts"
+import {
+  master,
+  media,
+  segmentCount,
+  segmentLength,
+  segmentStart,
+  variantsFor
+} from "../src/Hls/Playlist.ts"
 
 const rung = (height: number, bitrate: number) =>
   Rung.Encode({ height: Height.make(height), bitrate: Bitrate.make(bitrate) })
@@ -39,6 +46,27 @@ describe("segment arithmetic", () => {
     assert.strictEqual(segmentLength(0, Seconds.make(31)), 6)
     assert.strictEqual(segmentLength(4, Seconds.make(31)), 6)
     assert.strictEqual(segmentLength(5, Seconds.make(31)), 1)
+  })
+})
+
+describe("variantsFor", () => {
+  it("offers the encoded rungs", () => {
+    assert.deepStrictEqual(variantsFor(LADDER).map((rung) => rung.height), [360, 720])
+  })
+
+  it("refuses a stream copy, which cannot be cut into segments", () => {
+    // Input seeking lands on the nearest keyframe, so a copy segment overlaps
+    // its neighbour and drifts from what the playlist declares — measured at
+    // 5s/10s/15s for segments announced as 6s/12s/18s.
+    const copy = Rung.Copy({ height: Height.make(1080), bitrate: Bitrate.make(8_000_000) })
+    assert.deepStrictEqual(variantsFor([...LADDER, copy]).map((rung) => rung.height), [360, 720])
+  })
+
+  it("is empty for a source below every encoded rung", () => {
+    // A 240p file has nothing but a copy. The caller has to read this as "HLS
+    // is not possible here" rather than serving a playlist with no variants.
+    const copy = Rung.Copy({ height: Height.make(240), bitrate: Bitrate.make(300_000) })
+    assert.deepStrictEqual(variantsFor([copy]), [])
   })
 })
 

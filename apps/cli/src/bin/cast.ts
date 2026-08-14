@@ -326,18 +326,23 @@ const play = Command.make(
     // beats refusing: the progressive path needs no duration.
     const duration = info.durationSeconds
 
-    // HLS variants are encoded rungs only. A stream-copy variant cannot be cut
-    // into segments at arbitrary times: `-ss` lands on the nearest keyframe, so
-    // with a GOP that does not divide the segment length the pieces overlap and
-    // drift from what the playlist declares — measured at 5s/10s/15s for
-    // segments announced as 6s/12s/18s, an error that grows with every one.
-    // Re-encoding forces a keyframe at the segment start, which is the whole
-    // premise of switching variants mid-film.
-    const hlsLadder = ladder.filter((rung) => rung._tag === "Encode")
-    const useHls = hls && Option.isSome(duration)
+    const hlsLadder = Hls.variantsFor(ladder)
+    // HLS needs two things this file may not have: a duration to compute the
+    // playlist from, and at least one variant that can be cut into segments.
+    // Saying so and carrying on beats refusing — the progressive path needs
+    // neither.
+    const useHls = hls && Option.isSome(duration) && hlsLadder.length > 0
+
     yield* Effect.when(
       Console.log("this file reports no duration, so HLS is not possible — streaming instead"),
       Effect.succeed(hls && Option.isNone(duration))
+    )
+    yield* Effect.when(
+      Console.log(
+        "this file is smaller than every encoded rung, so its only quality is a " +
+          "stream copy, which cannot be segmented — streaming instead"
+      ),
+      Effect.succeed(hls && Option.isSome(duration) && hlsLadder.length === 0)
     )
 
     const startingRung = yield* Option.match(Array.get(ladder, startIndex), {

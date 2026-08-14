@@ -16,6 +16,7 @@ import { FileSystem } from "effect/FileSystem"
 import { Path } from "effect/Path"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { NodeServices } from "@effect/platform-node"
+import * as process from "node:process"
 import { FetchHttpClient } from "effect/unstable/http"
 import { Certificate, Device } from "@castcli/emulator"
 
@@ -146,9 +147,23 @@ const play = (
       Effect.scoped(
         Effect.flatMap(
           spawner.spawn(
+            // `node --import tsx`, not `npx tsx`: npx spawns tsx which spawns
+            // node, and killing the top of that tree orphans the bottom of it.
+            // Nine stray `cast play` processes accumulated across test runs
+            // before this was noticed, holding ports and CPU until the suite
+            // starved. One process can actually be killed.
             ChildProcess.make(
-              "npx",
-              ["tsx", "apps/cli/src/bin/cast.ts", "play", file, "--ip", "127.0.0.1", ...extra],
+              process.execPath,
+              [
+                "--import",
+                "tsx",
+                "apps/cli/src/bin/cast.ts",
+                "play",
+                file,
+                "--ip",
+                "127.0.0.1",
+                ...extra
+              ],
               {
                 extendEnv: true,
                 env: {
@@ -159,7 +174,13 @@ const play = (
               }
             )
           ),
-          (handle) => Effect.andThen(handle.exitCode, Effect.void)
+          (handle) =>
+            // Killed when the scope closes, whatever the fiber was doing. The
+            // player never exits on its own — that is the point of it.
+            Effect.andThen(
+              Effect.addFinalizer(() => Effect.orElseSucceed(handle.kill(), () => undefined)),
+              Effect.andThen(handle.exitCode, Effect.void)
+            )
         )
       )
     ))

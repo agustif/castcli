@@ -54,6 +54,23 @@ export const segmentLength = (index: number, duration: Seconds): number =>
 const widthFor = (height: Height): number => Math.round((height * 16) / 9 / 2) * 2
 
 /**
+ * Which rungs can be offered as HLS variants: the encoded ones only.
+ *
+ * A stream-copy rung cannot be cut into segments at arbitrary times. Input
+ * seeking lands on the nearest keyframe, so with a GOP that does not divide the
+ * segment length the pieces overlap and drift from what the playlist declares —
+ * measured at 5s/10s/15s for segments announced as 6s/12s/18s, durations
+ * 7.1/8.1/9.2, an error that grows with every one. Re-encoding forces a keyframe
+ * at the segment start, which is the premise of switching variants mid-film.
+ *
+ * The result can be empty — a source below every encoded rung has nothing but a
+ * copy — and the caller has to treat that as "HLS is not possible for this
+ * file" rather than serving a playlist with no variants in it.
+ */
+export const variantsFor = (ladder: ReadonlyArray<Rung>): ReadonlyArray<Rung> =>
+  ladder.filter((rung) => rung._tag === "Encode")
+
+/**
  * The master playlist: one variant per rung.
  *
  * `BANDWIDTH` is what the receiver picks on, so it has to be the *peak* rate
