@@ -245,7 +245,7 @@ const toDevices = (sweep: Sweep): ReadonlyArray<CastDevice> =>
  * Scoped: the socket closes with the surrounding scope, so an interrupted sweep
  * does not leak a bound port.
  */
-export const discover = Effect.fn("Mdns.discover")(function*(
+const discover = Effect.fn("Mdns.discover")(function*(
   service: string,
   timeout: Duration.Duration
 ) {

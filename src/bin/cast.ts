@@ -39,7 +39,7 @@ import { routes, type SessionState } from "../Server/Routes.ts"
 const CAST_SERVICE = "_googlecast._tcp.local"
 
 /** Unique only within one MediaInformation, so a constant is enough. */
-const SUBTITLE_TRACK_ID = 1
+const SUBTITLE_TRACK_ID = Brands.trackId(1)
 
 /**
  * Pick the LAN IPv4 to advertise. Never IPv6: a link-local v6 address with a
@@ -125,7 +125,7 @@ const discoverDevice = Effect.fn("cast.discoverDevice")(function*(
 const resolveDevice = (
   ip: Option.Option<string>,
   name: Option.Option<string>,
-  devicePort: Brands.Port,
+  devicePort: number,
   timeout: Duration.Duration
 ) =>
   Option.match(ip, {
@@ -134,7 +134,7 @@ const resolveDevice = (
         new CastDevice({
           name: address,
           ip: Brands.ipv4(address),
-          port: devicePort
+          port: Brands.port(devicePort)
         })
       ),
     onNone: () => discoverDevice(name, timeout)
@@ -296,6 +296,15 @@ const play = Command.make(
       const session = yield* CastSession.make(target.ip, target.port)
       yield* session.launch
       yield* sendLoad(session)
+
+      // A rejected LOAD is otherwise indistinguishable from a slow start.
+      yield* Effect.forkScoped(
+        Stream.runForEach(session.loadFailures, (failure) =>
+          Console.error(
+            `\n  the receiver rejected the stream: ${failure.detail}\n` +
+              "  try a different --audio stream, or check `cast streams` for the track indices"
+          ))
+      )
 
       yield* Effect.forkScoped(
         Stream.runForEach(Stream.fromQueue(reloads), (rung) =>

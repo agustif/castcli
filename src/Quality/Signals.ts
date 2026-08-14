@@ -14,15 +14,15 @@ import type { Rung } from "../Domain/Rung.ts"
 /** How long after a (re)start the drain rate still reflects real link capacity. */
 export const BURST = Duration.seconds(14)
 /** Grace after a switch, before its result is judged. */
-export const SETTLE = Duration.seconds(15)
+const SETTLE = Duration.seconds(15)
 /** Each switch costs a visible reload, so probing must be rare enough to be worth it. */
 export const PROBE_AFTER = Duration.minutes(4)
 /** Baseline blacklist duration for a rung that stalled. */
 export const PENALTY = Duration.minutes(5)
 /** Recency window for "did it just stall". */
-export const STALL_WINDOW = Duration.seconds(12)
+const STALL_WINDOW = Duration.seconds(12)
 /** Repeated stalls inside this window mean fall harder. */
-export const STALL_CLUSTER = Duration.seconds(45)
+const STALL_CLUSTER = Duration.seconds(45)
 /** A probe surviving this long without a stall is accepted. */
 export const PROBE_HOLD = Duration.minutes(1)
 /** Continuous buffering is collapsed into one stall event within this window. */
@@ -39,7 +39,7 @@ export interface Bucket {
   readonly bytes: number
 }
 
-export interface Penalty {
+interface Penalty {
   readonly at: number
   readonly capacity: number
 }

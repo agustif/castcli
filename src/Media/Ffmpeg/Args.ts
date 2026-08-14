@@ -18,34 +18,34 @@ import { Rung } from "../../Domain/Rung.ts"
 
 // --- closed vocabularies -----------------------------------------------------
 
-export const VideoCodec = Schema.Literals(["copy", "h264_videotoolbox", "libx264"])
-export type VideoCodec = typeof VideoCodec.Type
+const VideoCodec = Schema.Literals(["copy", "h264_videotoolbox", "libx264"])
+type VideoCodec = typeof VideoCodec.Type
 
 /** AAC-LC is the one audio codec every Cast receiver accepts. */
-export const AudioCodec = Schema.Literals(["copy", "aac", "libmp3lame"])
-export type AudioCodec = typeof AudioCodec.Type
+const AudioCodec = Schema.Literals(["copy", "aac", "libmp3lame"])
+type AudioCodec = typeof AudioCodec.Type
 
-export const Muxer = Schema.Literals(["mp4", "matroska", "webvtt", "mpegts"])
-export type Muxer = typeof Muxer.Type
+const Muxer = Schema.Literals(["mp4", "matroska", "webvtt", "mpegts"])
+type Muxer = typeof Muxer.Type
 
-export const LogLevel = Schema.Literals(["quiet", "error", "warning", "info", "debug"])
-export type LogLevel = typeof LogLevel.Type
+const LogLevel = Schema.Literals(["quiet", "error", "warning", "info", "debug"])
+type LogLevel = typeof LogLevel.Type
 
 /**
  * `frag_keyframe+empty_moov+default_base_moof` is what makes an MP4 playable
  * before it is complete — without it the receiver waits for a moov atom that a
  * live pipe never produces.
  */
-export const MovFlag = Schema.Literals([
+const MovFlag = Schema.Literals([
   "frag_keyframe",
   "empty_moov",
   "default_base_moof",
   "faststart"
 ])
-export type MovFlag = typeof MovFlag.Type
+type MovFlag = typeof MovFlag.Type
 
-export const H264Profile = Schema.Literals(["baseline", "main", "high"])
-export type H264Profile = typeof H264Profile.Type
+const H264Profile = Schema.Literals(["baseline", "main", "high"])
+type H264Profile = typeof H264Profile.Type
 
 // --- options -----------------------------------------------------------------
 
@@ -74,7 +74,7 @@ export type Arg = Data.TaggedEnum<{
 
 export const Arg = Data.taggedEnum<Arg>()
 
-export const render: (arg: Arg) => ReadonlyArray<string> = Match.type<Arg>().pipe(
+const render: (arg: Arg) => ReadonlyArray<string> = Match.type<Arg>().pipe(
   Match.tag("Banner", ({ hidden }) => hidden ? ["-hide_banner"] : []),
   Match.tag("Log", ({ level }) => ["-loglevel", level]),
   Match.tag("NoStdin", () => ["-nostdin"]),
@@ -97,7 +97,7 @@ export const render: (arg: Arg) => ReadonlyArray<string> = Match.type<Arg>().pip
   Match.exhaustive
 )
 
-export const renderAll = (args: ReadonlyArray<Arg>): ReadonlyArray<string> =>
+const renderAll = (args: ReadonlyArray<Arg>): ReadonlyArray<string> =>
   args.flatMap(render)
 
 // --- invocations -------------------------------------------------------------

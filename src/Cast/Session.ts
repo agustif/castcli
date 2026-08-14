@@ -6,7 +6,7 @@
 // it will accept anything, and the receiver drops you if heartbeats stop.
 
 import { Effect, Match, Option, PubSub, Ref, Schedule, Stream } from "effect"
-import { CastProtocolError } from "../Domain/Errors.ts"
+import { CastProtocolError, LoadFailedError } from "../Domain/Errors.ts"
 import * as Ns from "./Protocol/Namespace.ts"
 import * as Messages from "./Protocol/Messages.ts"
 import * as CastSocket from "../Platform/CastSocket.ts"
@@ -15,6 +15,10 @@ import * as Frame from "./Protocol/Frame.ts"
 const SENDER = Ns.SENDER_ID
 const RECEIVER = Ns.RECEIVER_ID
 
+/** Only text payloads carry JSON; the device-auth namespace sends binary. */
+const payloadText = (message: Frame.CastMessage): string =>
+  message.payload._tag === "Text" ? message.payload.value : ""
+
 export interface PlayerStatus {
   readonly playerState: string
   readonly currentTimeSeconds: number
@@ -22,6 +26,12 @@ export interface PlayerStatus {
 
 export interface Session {
   readonly launch: Effect.Effect<void, CastProtocolError>
+  /**
+   * The receiver refusing the media. It answers LOAD with LOAD_FAILED and then
+   * says nothing further, so without watching for this a rejected stream looks
+   * exactly like a stream that is merely slow to start.
+   */
+  readonly loadFailures: Stream.Stream<LoadFailedError>
   /** Attach to a running session rather than starting a new one. */
   readonly join: Effect.Effect<void, CastProtocolError>
   readonly load: (media: unknown, activeTrackIds: ReadonlyArray<number>) => Effect.Effect<void>
@@ -77,6 +87,7 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
   // re-triggers its on-screen media overlay and pins it over the video, and
   // polling a Ref locally just burns a fiber to observe nothing.
   const statuses = yield* PubSub.unbounded<PlayerStatus>()
+  const loadFailures = yield* PubSub.unbounded<LoadFailedError>()
 
   /** Answer heartbeats, or the receiver hangs up on us. */
   const onPing = (message: { readonly sourceId: string }) =>
@@ -123,6 +134,9 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
         })
     })
 
+  const onLoadFailed = (payload: string) =>
+    PubSub.publish(loadFailures, new LoadFailedError({ detail: payload }))
+
   // Route by the payload's `type` discriminator. Match keeps the dispatch table
   // flat and total instead of a ladder of string comparisons.
   const route = (message: Frame.CastMessage) =>
@@ -145,6 +159,8 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
             "MEDIA_STATUS",
             () => onMediaStatus(message.payload._tag === "Text" ? message.payload.value : "")
           ),
+          Match.when("LOAD_FAILED", () => onLoadFailed(payloadText(message))),
+          Match.when("LOAD_CANCELLED", () => onLoadFailed(payloadText(message))),
           Match.orElse(() => Effect.void)
         )
     })
@@ -274,7 +290,8 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
       )
     }),
 
-    statuses: Stream.fromPubSub(statuses)
+    statuses: Stream.fromPubSub(statuses),
+    loadFailures: Stream.fromPubSub(loadFailures)
   }
 
   return session

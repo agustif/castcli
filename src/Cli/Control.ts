@@ -31,7 +31,7 @@ const target = Effect.fn("Control.target")(function*(ip: Option.Option<Brands.Ip
         new CastDevice({
           name: address,
           ip: address,
-          port: config.devicePort
+          port: Brands.port(config.devicePort)
         })
       ),
     onNone: () =>
@@ -87,7 +87,7 @@ const report = (status: Option.Option<CastSession.PlayerStatus>) =>
       )
   })
 
-export const status = Command.make(
+const status = Command.make(
   "status",
   { ip: deviceIp },
   Effect.fn(function*({ ip }) {
@@ -95,7 +95,7 @@ export const status = Command.make(
   })
 ).pipe(Command.withDescription("Show what the device is playing"))
 
-export const pause = Command.make(
+const pause = Command.make(
   "pause",
   { ip: deviceIp },
   Effect.fn(function*({ ip }) {
@@ -104,7 +104,7 @@ export const pause = Command.make(
   })
 ).pipe(Command.withDescription("Pause playback"))
 
-export const resume = Command.make(
+const resume = Command.make(
   "resume",
   { ip: deviceIp },
   Effect.fn(function*({ ip }) {
@@ -113,7 +113,7 @@ export const resume = Command.make(
   })
 ).pipe(Command.withDescription("Resume playback"))
 
-export const toggle = Command.make(
+const toggle = Command.make(
   "toggle",
   { ip: deviceIp },
   Effect.fn(function*({ ip }) {
@@ -135,7 +135,7 @@ export const toggle = Command.make(
   })
 ).pipe(Command.withDescription("Pause if playing, resume if paused"))
 
-export const volume = Command.make(
+const volume = Command.make(
   "volume",
   {
     ip: deviceIp,
@@ -149,7 +149,7 @@ export const volume = Command.make(
   })
 ).pipe(Command.withDescription("Set the device volume"))
 
-export const stop = Command.make(
+const stop = Command.make(
   "stop",
   { ip: deviceIp },
   Effect.fn(function*({ ip }) {

@@ -44,7 +44,7 @@ export class MediaStream extends Schema.Class<MediaStream>("MediaStream")({
   }
 }
 
-export class MediaFormat extends Schema.Class<MediaFormat>("MediaFormat")({
+class MediaFormat extends Schema.Class<MediaFormat>("MediaFormat")({
   duration: Schema.optional(Schema.String),
   bit_rate: Schema.optional(Schema.String)
 }) {}

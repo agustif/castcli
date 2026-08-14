@@ -17,7 +17,7 @@ export interface SessionState {
   readonly cues: Vtt.Cues
 }
 
-export interface MediaServerOptions {
+interface MediaServerOptions {
   readonly file: string
   readonly videoIndex: Brands.StreamIndex
   readonly audioIndex: Brands.StreamIndex | null

@@ -21,6 +21,3 @@ export const describe: (rung: Rung) => string = Match.type<Rung>().pipe(
   Match.tag("Encode", (rung) => `${rung.height}p @ ${(rung.bitrate / 1_000_000).toFixed(1)} Mbps`),
   Match.exhaustive
 )
-
-/** Ordering key. Copying is the top of any ladder it appears in. */
-export const bitrateOf = (rung: Rung): number => rung.bitrate

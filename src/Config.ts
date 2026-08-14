@@ -6,17 +6,16 @@
 // variable rather than silently becoming NaN.
 
 import { Config, Duration, Schema } from "effect"
-import * as Brands from "./Domain/Brands.ts"
 
 const withDefault = <T>(codec: Schema.ConstraintCodec<T, unknown>, path: string, fallback: T) =>
   Config.schema(codec, path).pipe(Config.withDefault(fallback))
 
 export const AppConfig = Config.all({
   /** Port the media server listens on for the receiver to pull from. */
-  port: withDefault(Brands.Port, "CAST_PORT", Brands.port(8021)),
+  port: withDefault(Config.Port, "CAST_PORT", 8021),
 
   /** Cast devices always listen on 8009; overridable for emulators and tests. */
-  devicePort: withDefault(Brands.Port, "CAST_DEVICE_PORT", Brands.port(8009)),
+  devicePort: withDefault(Config.Port, "CAST_DEVICE_PORT", 8009),
 
   /** How long each mDNS sweep waits for replies. */
   discoveryTimeout: withDefault(

@@ -7,7 +7,7 @@
 import * as Brands from "../Domain/Brands.ts"
 import { Rung } from "../Domain/Rung.ts"
 
-export interface LadderOptions {
+interface LadderOptions {
   readonly sourceHeight: number
   readonly sourceBitrate: number | null
   /** Whether the source can be passed through without re-encoding. */
