@@ -51,7 +51,9 @@
   "overrides": [
     {
       "files": [
-        "packages/platform/**"
+        "packages/platform/**",
+        "packages/dlna/**",
+        "packages/emulator/**"
       ],
       "rules": {
         "castcli/no-node-child-process": "off",

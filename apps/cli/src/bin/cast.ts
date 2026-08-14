@@ -10,6 +10,8 @@
 import {
   Array,
   Console,
+  Data,
+  Match,
   Duration,
   Effect,
   Layer,
@@ -23,7 +25,7 @@ import { Argument, Command } from "effect/unstable/cli"
 import * as Flags from "../Cli/Flags.ts"
 import * as Control from "../Cli/Control.ts"
 import * as TimeCode from "../Cli/TimeCode.ts"
-import { HttpRouter } from "effect/unstable/http"
+import { FetchHttpClient, HttpClient, HttpRouter } from "effect/unstable/http"
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { FileSystem } from "effect/FileSystem"
 import * as os from "node:os"
@@ -54,6 +56,12 @@ import {
 } from "@castcli/domain"
 import { CastDevice } from "@castcli/domain"
 import { Mdns } from "@castcli/platform"
+import {
+  Description as DlnaDescription,
+  Discovery as Ssdp,
+  Renderer as DlnaRenderer,
+  Ssdp as DlnaSsdp
+} from "@castcli/dlna"
 import { Controller as Quality } from "@castcli/quality"
 import { Ladder } from "@castcli/quality"
 import { Session as CastSession } from "@castcli/protocol"
@@ -91,32 +99,119 @@ const localAddress = (override: Option.Option<string>) =>
 
 // ------------------------------------------------------------------- scan
 
+/**
+ * A device we could play to, whichever protocol it speaks.
+ *
+ * A tagged union rather than an interface with two implementations. The two
+ * protocols agree on almost nothing — one launches an application over a
+ * persistent TLS connection, the other posts SOAP at a URL — and the single
+ * thing they share, that the *device* fetches the media from us, is a property
+ * of the media server rather than of any object. With two protocols an
+ * interface would be a shape traced around the first one; a union makes every
+ * site that acts on a target handle both, and `Match.exhaustive` says so at
+ * compile time.
+ */
+type Target = Data.TaggedEnum<{
+  readonly Cast: { readonly device: CastDevice }
+  readonly Dlna: { readonly renderer: DlnaDescription.Renderer; readonly location: string }
+}>
+
+const Target = Data.taggedEnum<Target>()
+
+const describeTarget: (target: Target) => string = Match.type<Target>().pipe(
+  Match.tag("Cast", ({ device }) => `${device.name} — Cast at ${device.ip}:${device.port}`),
+  Match.tag("Dlna", ({ renderer }) => `${renderer.friendlyName} — DLNA`),
+  Match.exhaustive
+)
+
+/**
+ * Fetch a renderer's description and read it.
+ *
+ * An SSDP advertisement is only a pointer: it says a device exists and where
+ * its description lives, and nothing about whether it can play video. A media
+ * *server* on a NAS answers the same search, so the description is what tells
+ * a television apart from a filing cabinet.
+ *
+ * A device that fails to answer is dropped rather than reported: it was found
+ * by a broadcast we sent to the whole network, and something on it being
+ * unreachable is not an error in what the person asked for.
+ */
+const describeRenderer = (client: HttpClient.HttpClient, location: string) =>
+  client.get(location).pipe(
+    Effect.flatMap((response) => response.text),
+    Effect.map((xml) => DlnaDescription.parseRenderer(xml, location)),
+    Effect.orElseSucceed(() => Option.none<DlnaDescription.Renderer>())
+  )
+
+/**
+ * Everything on the network we could play to.
+ *
+ * Both sweeps run at once because they are independent waits on different
+ * sockets, and running them one after the other would double the time a person
+ * spends looking at "scanning…" for no reason.
+ */
+const discoverTargets = (timeout: Duration.Duration) =>
+  Effect.map(
+    Effect.all(
+      [
+        Effect.orElseSucceed(Mdns.discoverWithRetry(CAST_SERVICE, timeout), () => []),
+        Effect.orElseSucceed(
+          Effect.scoped(Ssdp.search(DlnaSsdp.MEDIA_RENDERER, timeout)),
+          () => []
+        )
+      ],
+      { concurrency: 2 }
+    ),
+    ([cast, upnp]) => ({ cast, upnp })
+  )
+
 const scan = Command.make(
   "scan",
   {},
   Effect.fn(function*() {
     const config = yield* AppConfig
-    yield* Console.log("scanning for Cast devices…")
-    const devices = yield* Mdns.discoverWithRetry(CAST_SERVICE, config.discoveryTimeout)
-    yield* Effect.when(
-      Console.log("none found — check the TV is awake and on this network"),
-      Effect.succeed(devices.length === 0)
-    )
-    yield* Effect.forEach(devices, (device) =>
+    const client = yield* HttpClient.HttpClient
+    yield* Console.log("scanning…")
+
+    const found = yield* discoverTargets(config.discoveryTimeout)
+
+    yield* Effect.forEach(found.cast, (device) =>
       Console.log(
-        `\n  ${device.name}\n    address   ${device.address}` +
+        `\n  ${device.name}\n    protocol  Cast` +
+          `\n    address   ${device.address}` +
           `\n    model     ${device.model ?? "unknown"}` +
           `\n    status    ${device.status ?? "idle"}`
       ), { discard: true })
+
+    // A renderer's advertisement is only a pointer: what it is called, and
+    // whether it can play video at all, live in the description at that URL.
+    yield* Effect.forEach(found.upnp, (device) =>
+      Effect.flatMap(
+        describeRenderer(client, device.location),
+        Option.match({
+          onNone: () => Effect.void,
+          onSome: (renderer) =>
+            Console.log(
+              `\n  ${renderer.friendlyName}\n    protocol  DLNA` +
+                `\n    address   ${new URL(device.location).host}` +
+                `\n    model     ${Option.getOrElse(renderer.modelName, () => "unknown")}`
+            )
+        })
+      ), { concurrency: 4, discard: true })
+
+    yield* Effect.when(
+      Console.log("none found — check the device is awake and on this network"),
+      Effect.succeed(found.cast.length === 0 && found.upnp.length === 0)
+    )
     yield* Effect.when(
       Effect.flatMap(
         localAddress(config.advertiseHost),
         (address) => Console.log(`\nlocal address to advertise: ${address}`)
       ),
-      Effect.succeed(devices.length > 0)
+      Effect.succeed(found.cast.length > 0 || found.upnp.length > 0)
     )
   })
-).pipe(Command.withDescription("List Cast devices on this network"))
+).pipe(Command.withDescription("List devices on this network, Cast and DLNA alike"))
 
 // ------------------------------------------------------------------- play
 
@@ -151,31 +246,160 @@ const discoverDevice = Effect.fn("cast.discoverDevice")(function*(
 const deviceAt = (address: Ipv4, devicePort: number) =>
   new CastDevice({ name: address, ip: address, port: Port.make(devicePort) })
 
-const resolveDevice = (
-  ip: Option.Option<Ipv4>,
-  name: Option.Option<string>,
-  devicePort: number,
-  timeout: Duration.Duration
-) =>
-  Option.match(ip, {
-    // An explicit address is obeyed exactly.
-    onSome: (given) => Effect.succeed(deviceAt(given, devicePort)),
+/**
+ * Find something to play to.
+ *
+ * An explicit address is obeyed exactly and is always Cast — nothing else
+ * listens on a bare address without a description to fetch first. Otherwise the
+ * name decides, and both networks are searched at once, because a person naming
+ * their television does not know or care which protocol it speaks.
+ *
+ * With no name at all the last Cast device is used, which keeps the common case
+ * free of a four second sweep. DLNA has no equivalent shortcut on purpose: its
+ * description URL carries a port the device may change when it reboots, so a
+ * remembered one would be a stale answer rather than a fast one.
+ */
+const resolveTarget = Effect.fn("cast.resolveTarget")(function*(options: {
+  readonly ip: Option.Option<Ipv4>
+  readonly name: Option.Option<string>
+  readonly devicePort: number
+  readonly timeout: Duration.Duration
+}) {
+  const client = yield* HttpClient.HttpClient
+
+  const remembered = Option.isSome(options.name)
+    ? Option.none<Ipv4>()
+    : yield* State.rememberedDevice
+
+  const shortcut = Option.orElse(options.ip, () => remembered)
+
+  return yield* Option.match(shortcut, {
+    onSome: (address) =>
+      Effect.succeed(Target.Cast({ device: deviceAt(address, options.devicePort) })),
+
     onNone: () =>
-      // A name has to be matched, so it always goes through discovery.
-      // Otherwise the device from the last session is worth trying first: it
-      // saves a four second sweep, and if it has gone stale — a different
-      // network, a device that moved — discovery still runs, so the shortcut
-      // can only save time.
-      Option.isSome(name)
-        ? discoverDevice(name, timeout)
-        : Effect.flatMap(State.rememberedDevice, (last) =>
-          Option.match(last, {
-            onNone: () => discoverDevice(name, timeout),
-            onSome: (known) => Effect.succeed(deviceAt(known, devicePort))
-          }))
+      Effect.gen(function*() {
+        yield* Console.log("scanning…")
+        const found = yield* discoverTargets(options.timeout)
+
+        const wanted = Option.map(options.name, (name) => name.toLowerCase())
+        const matches = (candidate: string) =>
+          Option.match(wanted, {
+            onNone: () => true,
+            onSome: (name) => candidate.toLowerCase().includes(name)
+          })
+
+        // Cast first when both answer to the name. It is the protocol this
+        // tool knows best and the one whose behaviour has been watched end to
+        // end on a real television; DLNA is the fallback, not the preference.
+        const cast = Array.findFirst(found.cast, (candidate) => matches(candidate.name))
+
+        return yield* Option.match(cast, {
+          onSome: (device) => Effect.succeed(Target.Cast({ device })),
+          onNone: () =>
+            Effect.flatMap(
+              Effect.forEach(
+                found.upnp,
+                (device) =>
+                  Effect.map(describeRenderer(client, device.location), (described) =>
+                    Option.map(described, (renderer) => ({
+                      renderer,
+                      location: device.location
+                    }))),
+                { concurrency: 4 }
+              ),
+              (described) =>
+                Option.match(
+                  Array.findFirst(
+                    Array.getSomes(described),
+                    (candidate) => matches(candidate.renderer.friendlyName)
+                  ),
+                  {
+                    onSome: (candidate) => Effect.succeed(Target.Dlna(candidate)),
+                    onNone: () =>
+                      Effect.fail(
+                        new DeviceNotFoundError({
+                          query: Option.getOrElse(options.name, () => "(first available)"),
+                          found: [
+                            ...found.cast.map((device) => device.name),
+                            ...Array.getSomes(described).map((one) => one.renderer.friendlyName)
+                          ]
+                        })
+                      )
+                  }
+                )
+            )
+        })
+      })
   })
+})
 
 /**
+ * Play to a DLNA renderer and follow it until it stops.
+ *
+ * Much shorter than its Cast counterpart because UPnP asks less of a sender:
+ * there is no application to launch, no connection to keep alive, and no
+ * quality to manage — the device is handed a URL and told to play it.
+ *
+ * What it does not do is adapt. A renderer plays what it is given at the
+ * bitrate it is given, so the quality ladder is not consulted here and the
+ * stream is whatever the media server produces first.
+ */
+const playOnRenderer = Effect.fn("cast.playOnRenderer")(function*(options: {
+  readonly renderer: DlnaDescription.Renderer
+  readonly url: string
+  readonly title: string
+  readonly durationSeconds: Option.Option<Seconds>
+  readonly subtitleUrl: Option.Option<string>
+  readonly from: Seconds
+}) {
+  const renderer = yield* DlnaRenderer.connect(options.renderer)
+
+  yield* renderer.play({
+    url: options.url,
+    contentType: "video/mp4",
+    title: options.title,
+    durationSeconds: options.durationSeconds,
+    subtitleUrl: options.subtitleUrl
+  })
+
+  // Seeking is a separate step: a renderer will not accept a position until it
+  // has something loaded, and several answer 701 to a seek sent alongside the
+  // URI. Resuming therefore means playing from the start and then moving,
+  // which the viewer sees briefly.
+  yield* Effect.when(
+    renderer.seek(options.from).pipe(
+      // Not fatal — the film is already playing, from the beginning — but not
+      // silent either: a viewer who asked to resume and got the opening titles
+      // deserves to know the device refused rather than that we forgot.
+      Effect.catchCause((cause) =>
+        Console.log(
+          `  could not resume at ${TimeCode.format(options.from)}, playing from the start` +
+            ` (${cause})`
+        )
+      )
+    ),
+    Effect.succeed(options.from > 0)
+  )
+
+  // There is no status stream to subscribe to — UPnP has no channel back — so
+  // the position is polled. Once a second matches what the receiver-side
+  // equivalent reports and is slow enough not to bother a television.
+  yield* Effect.repeat(
+    Effect.flatMap(
+      renderer.status,
+      Option.match({
+        onNone: () => Effect.void,
+        onSome: (playback) =>
+          Effect.logDebug(`${playback.state} at ${TimeCode.format(playback.position)}`)
+      })
+    ),
+    Schedule.spaced(Duration.seconds(1))
+  )
+})
+
+/**
+ * Say which subtitle track was chosen/**
  * Say which subtitle track was chosen and, when there was a contest, what it
  * beat. The runner-up line is the point: it is how someone notices that the
  * track their container flags as `default` holds 24 cues of signage, without
@@ -372,13 +596,21 @@ const play = Command.make(
       cues
     })
 
-    const target = yield* resolveDevice(
+    const target = yield* resolveTarget({
       ip,
-      device,
-      config.devicePort,
-      config.discoveryTimeout
+      name: device,
+      devicePort: config.devicePort,
+      timeout: config.discoveryTimeout
+    })
+
+    // Only a Cast address is worth remembering. A DLNA renderer is reached
+    // through a description URL that its own advertisement supplies, and
+    // caching that would cache a port the device is free to change on reboot.
+    yield* Match.value(target).pipe(
+      Match.tag("Cast", ({ device: found }) => State.rememberDevice(found.ip)),
+      Match.tag("Dlna", () => Effect.void),
+      Match.exhaustive
     )
-    yield* State.rememberDevice(target.ip)
     const advertise = yield* localAddress(config.advertiseHost)
 
     // Where the viewer actually is, tracked from the receiver's own reports so
@@ -536,7 +768,7 @@ const play = Command.make(
         `\n  audio    ${describeAudio(chosenAudio)}` +
         `\n  quality  adaptive — ${ladder.map(describeRung).join(" | ")}` +
         `\n  serving  ${baseUrl}/stream` +
-        `\n  device   ${target.name} (${target.ip}:${target.port})\n`
+        `\n  device   ${describeTarget(target)}\n`
     )
 
     // One attempt at a session: connect, load, and pump status until the socket
@@ -687,23 +919,43 @@ const play = Command.make(
       )
       )
 
-    yield* attempt(target).pipe(
-      // The remembered address is a shortcut, so it must not become a new way
-      // to fail: a device that took a different lease is found by discovery,
-      // not reported as switched off.
-      Option.isSome(ip)
-        ? (self) => self
-        : Effect.catchTag(
-          "DeviceUnreachableError",
-          () =>
-            Effect.flatMap(
-              Effect.tap(
-                discoverDevice(device, config.discoveryTimeout),
-                (found) => State.rememberDevice(found.ip)
-              ),
-              attempt
+    // The one place the two protocols diverge. Everything above — probing the
+    // file, choosing the tracks, extracting the subtitles, serving the media —
+    // is the same work, because both are pull models and the device does the
+    // fetching either way.
+    yield* Match.value(target).pipe(
+      Match.tag("Cast", ({ device: castDevice }) =>
+        attempt(castDevice).pipe(
+          // The remembered address is a shortcut, so it must not become a new
+          // way to fail: a device that took a different lease is found by
+          // discovery, not reported as switched off.
+          Option.isSome(ip)
+            ? (self) => self
+            : Effect.catchTag(
+              "DeviceUnreachableError",
+              () =>
+                Effect.flatMap(
+                  Effect.tap(
+                    discoverDevice(device, config.discoveryTimeout),
+                    (found) => State.rememberDevice(found.ip)
+                  ),
+                  attempt
+                )
             )
-        )
+        )),
+      Match.tag("Dlna", ({ renderer }) =>
+        playOnRenderer({
+          renderer,
+          url: `${baseUrl}/stream?o=${resumed}`,
+          title: path.basename(absolute),
+          durationSeconds: duration,
+          subtitleUrl: Option.map(
+            subtitleIndex,
+            () => `${baseUrl}/subs.vtt?o=${resumed}`
+          ),
+          from: resumed
+        })),
+      Match.exhaustive
     )
   })
 ).pipe(Command.withDescription("Stream a file to a Cast device"))
@@ -822,6 +1074,9 @@ const cast = Command.make("cast").pipe(
 const MainLayer = Layer.mergeAll(
   Ffmpeg.layer.pipe(Layer.provide(NodeServices.layer)),
   State.Store.layer.pipe(Layer.provide(NodeServices.layer)),
+  // DLNA is request-response over HTTP: fetching a device's description and
+  // posting SOAP at it both need a client, where Cast needs only a socket.
+  FetchHttpClient.layer,
   NodeServices.layer
 )
 

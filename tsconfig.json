@@ -24,7 +24,8 @@
       "@castcli/media": ["./packages/media/src/index.ts"],
       "@castcli/quality": ["./packages/quality/src/index.ts"],
       "@castcli/platform": ["./packages/platform/src/index.ts"],
-      "@castcli/emulator": ["./packages/emulator/src/index.ts"]
+      "@castcli/emulator": ["./packages/emulator/src/index.ts"],
+      "@castcli/dlna": ["./packages/dlna/src/index.ts"]
     },
 
     // Type safety

@@ -9,8 +9,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "lint": "oxlint",
-    "codegen": "tsx scripts/generate-protocol.ts && tsx scripts/extract-receiver-vocabulary.ts",
-    "codegen:check": "tsx scripts/generate-protocol.ts --check && tsx scripts/extract-receiver-vocabulary.ts --check",
+    "codegen": "tsx scripts/generate-protocol.ts && tsx scripts/extract-receiver-vocabulary.ts && tsx scripts/generate-upnp-actions.ts",
+    "codegen:check": "tsx scripts/generate-protocol.ts --check && tsx scripts/extract-receiver-vocabulary.ts --check && tsx scripts/generate-upnp-actions.ts --check",
     "depcruise": "depcruise \"packages/**/*.ts\" \"apps/**/*.ts\" --config .dependency-cruiser.cjs --output-type err",
     "graph": "depcruise \"packages/**/*.ts\" \"apps/**/*.ts\" --config .dependency-cruiser.cjs --output-type dot > docs/dependency-graph.dot",
     "check": "npm run typecheck && npm run lint && npm run depcruise && npm run codegen:check && npm run test && npm run test:e2e",
@@ -20,7 +20,8 @@
   },
   "dependencies": {
     "@effect/platform-node": "^4.0.0-rc.109",
-    "effect": "^4.0.0-rc.109"
+    "effect": "^4.0.0-rc.109",
+    "fast-xml-parser": "^5.10.1"
   },
   "devDependencies": {
     "@effect/language-service": "^0.87.2",
@@ -28,11 +29,11 @@
     "@types/node": "^26.2.0",
     "dependency-cruiser": "^18.2.0",
     "effect-oxlint": "^0.3.3",
+    "esbuild": "0.28.2",
     "oxlint": "^1.78.0",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10",
-    "esbuild": "0.28.2"
+    "vitest": "^4.1.10"
   },
   "workspaces": [
     "packages/*",

@@ -1,0 +1,12 @@
+{
+  "name": "@castcli/dlna",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DLNA/UPnP: SSDP discovery, SOAP control, DIDL-Lite metadata",
+  "type": "module",
+  "dependencies": {
+    "effect": "4.0.0-rc.109",
+    "fast-xml-parser": "*",
+    "@castcli/domain": "*"
+  }
+}
