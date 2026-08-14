@@ -1,0 +1,33 @@
+# The one gate. `npm run check` is what runs locally, so CI running anything
+# else would be a second definition of "passing" to keep in sync.
+#
+# ffmpeg is deliberately absent: every test either exercises pure code or fakes
+# the ffmpeg service, and a suite that needs a media pipeline installed to run
+# is a suite people stop running.
+
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # typecheck, lint, architecture rules, codegen drift, tests
+      - run: npm run check
+
+      # The bundle is what `npm i -g` installs, so a build that has broken is
+      # worth knowing about before someone tries to install it.
+      - run: npm run build:cli

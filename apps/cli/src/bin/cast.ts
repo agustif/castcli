@@ -421,8 +421,14 @@ const play = Command.make(
       })
       // Clear any previous text track first, or the receiver keeps its already
       // rendered cues painted on screen and draws the new ones above them.
+      //
+      // On the *first* load there is no media session yet and so nothing to
+      // clear, which the session now reports rather than silently ignoring.
+      // That is the right default — a control command that vanishes is worse
+      // than one that fails — but here it genuinely means "nothing to do".
       yield* Effect.when(
-        session.mediaCommand(CastSession.MediaCommand.EDIT_TRACKS_INFO({ activeTrackIds: [] })),
+        session.mediaCommand(CastSession.MediaCommand.EDIT_TRACKS_INFO({ activeTrackIds: [] }))
+          .pipe(Effect.catchTag("CastProtocolError", () => Effect.void)),
         Effect.succeed(Option.isSome(subtitleIndex))
       )
       yield* session.load(media, Option.isNone(subtitleIndex) ? [] : [SUBTITLE_TRACK_ID])

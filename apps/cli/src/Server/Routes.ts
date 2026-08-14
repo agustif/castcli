@@ -39,15 +39,29 @@ const OffsetQuery = Schema.Struct({
   o: Schema.optional(Schema.FiniteFromString.pipe(Schema.decodeTo(Seconds)))
 })
 
-const queryOffset = (
-  request: HttpServerRequest.HttpServerRequest
-): Option.Option<Brands.Seconds> =>
+/**
+ * Takes the URL rather than the request: the decision this makes is entirely a
+ * function of the query string, and threading a whole server request through it
+ * put the one piece of parsing that has already been wrong once out of reach of
+ * a test.
+ */
+export const offsetFromUrl = (url: string): Option.Option<Brands.Seconds> =>
   Option.flatMap(
     Schema.decodeUnknownOption(OffsetQuery)(
-      Object.fromEntries(new URL(request.originalUrl, "http://localhost").searchParams)
+      Object.fromEntries(
+        // An empty `?o=` is no parameter at all. Without this it decodes to
+        // zero, because `Number("")` is zero — which is exactly the
+        // absent-versus-start confusion this parsing exists to avoid.
+        globalThis.Array.from(new URL(url, "http://localhost").searchParams)
+          .filter(([, value]) => value.length > 0)
+      )
     ),
     (query) => Option.fromNullishOr(query.o)
   )
+
+const queryOffset = (
+  request: HttpServerRequest.HttpServerRequest
+): Option.Option<Brands.Seconds> => offsetFromUrl(request.originalUrl)
 
 // The requirement type is inferred: v4 tracks each handler's error and service
 // requirements in the Layer's context, so pinning it by hand fights the router.

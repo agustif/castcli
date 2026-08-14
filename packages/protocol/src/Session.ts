@@ -98,15 +98,24 @@ export interface Session {
   readonly load: (
     media: MediaNs.MediaInformation,
     activeTrackIds: ReadonlyArray<TrackId>
-  ) => Effect.Effect<void>
-  readonly mediaCommand: (command: MediaCommand) => Effect.Effect<void>
+  ) => Effect.Effect<void, CastProtocolError>
+  readonly mediaCommand: (command: MediaCommand) => Effect.Effect<void, CastProtocolError>
   readonly setVolume: (level: VolumeLevel) => Effect.Effect<void>
   readonly stopReceiver: Effect.Effect<void>
   readonly statuses: Stream.Stream<PlayerStatus>
 }
 
-export const make = Effect.fn("CastSession.make")(function*(host: string, port: number) {
-  const socket = yield* CastSocket.connect(host, port)
+/**
+ * Build a session over a socket that already exists.
+ *
+ * Split out from `make` so the protocol can be exercised without a TV: every
+ * interesting behaviour here — virtual connections, the request-id sequence,
+ * how a receiver status becomes a transport id — is a function of the bytes
+ * exchanged, and pinning it to a real TLS connection made it untestable.
+ */
+export const makeOver = Effect.fn("CastSession.makeOver")(function*(
+  socket: CastSocket.CastSocket
+) {
   const requestId = yield* Ref.make(1)
   // Option rather than null: "we have not been told yet" is a real state that
   // every read has to consider, and a sentinel makes it easy to forget.
@@ -287,13 +296,20 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
     yield* openConnection(transport)
   })
 
-  const withTransport = <A>(f: (transport: TransportId) => Effect.Effect<A>) =>
+  const withTransport = <A, E>(
+    f: (transport: TransportId) => Effect.Effect<A, E>
+  ): Effect.Effect<void, E | CastProtocolError> =>
     Effect.flatMap(
       Ref.get(transportId),
       Option.match({
-        // Before the receiver app is up there is nothing to address.
-        onNone: () => Effect.void,
-        onSome: (transport: TransportId) => Effect.asVoid(f(transport))
+        // Before the receiver app is up there is nothing to address. This used
+        // to return void, which meant a command sent too early vanished and the
+        // caller reported success — `cast pause` printing "paused" at a device
+        // that never heard it.
+        onNone: (): Effect.Effect<void, E | CastProtocolError> =>
+          Effect.fail(new CastProtocolError({ message: "not attached to a receiver session" })),
+        onSome: (transport: TransportId): Effect.Effect<void, E | CastProtocolError> =>
+          Effect.asVoid(f(transport))
       })
     )
 
@@ -367,9 +383,14 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
         Effect.gen(function*() {
           const media = yield* Ref.get(mediaSessionId)
           const id = yield* nextRequestId
-          // Before the first MEDIA_STATUS there is no session to command.
+          // Before the first MEDIA_STATUS there is no media session, so there
+          // is nothing to command — a failure rather than silence, because the
+          // caller would otherwise announce having done it.
           yield* Option.match(media, {
-            onNone: () => Effect.void,
+            onNone: () =>
+              Effect.fail(
+                new CastProtocolError({ message: "nothing is playing on that device" })
+              ),
             onSome: (mediaSession) =>
               // The union discriminates on `_tag`; the wire calls it `type`.
               send(transport, Ns.Media, {
@@ -411,3 +432,7 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
   return session
 })
 
+/** Connect to a device and build a session over that connection. */
+export const make = Effect.fn("CastSession.make")(function*(host: string, port: number) {
+  return yield* makeOver(yield* CastSocket.connect(host, port))
+})

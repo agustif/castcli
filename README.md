@@ -3,12 +3,12 @@
 Stream a local video file to a Google Cast device from the command line.
 
 ```sh
-cast play movie.mkv --device "Living Room" --audio 3 --subs 5
+cast play movie.mkv
 ```
 
-It discovers the TV, serves the file, transcodes only what the receiver cannot
-play, adapts quality to the link while it runs, and carries subtitles the
-receiver will actually render.
+No other flags: it finds the TV, picks the audio and subtitle tracks, resumes where
+you stopped, transcodes only what the receiver cannot play, and adapts quality
+to the link while it runs.
 
 Written because VLC could not do it, for a reason worth recording.
 
@@ -56,44 +56,47 @@ Requires Node 22+ and ffmpeg on `PATH`.
 
 ```sh
 npm install
-npm run check   # typecheck, lint, architecture, codegen drift, tests
+npm run check       # typecheck, lint, architecture, codegen drift, tests
+npm run build:cli   # a single-file binary at dist/cast.cjs
+npm i -g .          # ...or install it as `cast`
 ```
 
 This is an npm workspace. `npm run cast -- <args>` runs the CLI from source;
-there is no build step in the loop, because package names resolve to each
-package's barrel through tsconfig paths. It is not yet installable as a global
-binary — see [Known gaps](#known-gaps).
+there is no build step in the development loop, because package names resolve to
+each package's barrel through tsconfig paths. The bundle exists only so the tool
+can be installed and run from anywhere.
 
 ## Usage
 
 ```sh
+# Everything is optional
+cast play movie.mkv
+
 # What's on the network?
 cast scan
 
-# What's in the file? (audio and subtitle stream indices)
+# What's in the file, and what would be chosen?
 cast streams movie.mkv
 
-# Play it
-cast play movie.mkv --device "Living Room" --audio 3 --subs 5
-
-# Skip discovery when mDNS is unreliable
-cast play movie.mkv --ip 192.168.1.24 --seek 12:30
+# Override any of it
+cast play movie.mkv --device "Living Room" --audio 3 --subs 5 --seek 12:30
 ```
 
-| Flag | Meaning |
-|---|---|
-| `--device <substring>` | Pick a device by name |
-| `--ip <address>` | Device address, skipping discovery |
-| `--audio <index>` | Audio stream index (see `cast streams`) |
-| `--subs <index>` | Subtitle stream index, served as a WebVTT sidecar |
-| `--seek <time>` | Start position: `90`, `1:30` or `1:02:03` |
+| Flag | Meaning | Default |
+|---|---|---|
+| `--device <substring>` | Pick a device by name | the last one used, else the first found |
+| `--ip <address>` | Device address, skipping discovery | — |
+| `--audio <index>` | Audio stream index | first match for `CAST_AUDIO_LANGUAGES` |
+| `--subs <index>` | Subtitle stream index, served as a WebVTT sidecar | preferred language, most cues |
+| `--seek <time>` | Start position: `90`, `1:30` or `1:02:03` | where you stopped |
 
 ### Control
 
 ```sh
-cast status --ip 192.168.1.24     # what is it playing?
-cast toggle                       # pause if playing, resume if paused
+cast status                    # what is it playing?
+cast toggle                    # pause if playing, resume if paused
 cast pause / cast resume
+cast seek --back 5:00          # also --forward and --to
 cast volume --level 20
 cast stop
 ```
@@ -101,14 +104,24 @@ cast stop
 These attach to the running session rather than launching a new one, so pausing
 does not restart the film.
 
+`seek` needs a word of explanation. The receiver reports and accepts time
+*within the current stream*, which begins wherever the last `LOAD` started — so
+a position in the film is `offset + reported`, and `play` publishes that offset
+for `seek` to read. A target *before* the stream begins cannot be reached by
+seeking at all; it needs a fresh `LOAD`, so `seek` asks the playing process to
+do it. That is the ordinary case when rewinding past a resume point, not an
+edge case.
+
 ### Environment
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CAST_PORT` | 8021 | Local HTTP port the receiver pulls from |
+| `CAST_PORT` | 8021 | Preferred local HTTP port; a free one is used if taken |
 | `CAST_DEVICE_PORT` | 8009 | Cast control port |
 | `CAST_ADVERTISE_HOST` | auto | Override the advertised LAN address |
 | `CAST_AUDIO_BITRATE` | 128k | AAC bitrate |
+| `CAST_AUDIO_LANGUAGES` | eng,und | Audio preference, best first |
+| `CAST_SUBTITLE_LANGUAGES` | eng | Subtitle preference, best first |
 | `CAST_DISCOVERY_TIMEOUT_MS` | 4000 | Per-sweep mDNS timeout |
 | `CAST_DEVICE_IP` | — | Pin the device, skipping discovery |
 
@@ -194,19 +207,23 @@ subtitles:
   leaves its already-rendered cues painted on screen and draws the new ones
   above them.
 
-**Track metadata cannot be trusted.** In the file this tool was built for,
-`cast streams` reports two indistinguishable Spanish subtitle tracks:
+**Track metadata cannot be trusted, so it is not.** In the file this tool was
+built for, ffprobe reports two indistinguishable Spanish subtitle tracks. Stream
+4 is 24 cues of forced signage; stream 5 is 1670 lines of dialogue. The
+container flags **4** as `default` and neither as `forced`, so the obvious
+heuristic picks the signage.
+
+The only signal that separates them is how many cues each holds, which means
+reading the tracks — so that is what happens. `play` extracts the candidates in
+the best matching language and keeps the one with the most cues; `streams` shows
+the counts and marks what `play` would choose:
 
 ```
-  [4] subtitle subrip spa
-  [5] subtitle subrip spa
+$ cast streams movie.mkv
+     [4] subtitle subrip spa 24 cues [default]
+  -> [5] subtitle subrip spa 1670 cues
+     [6] subtitle subrip eng 1988 cues
 ```
-
-Stream 4 is 24 cues of forced signage. Stream 5 is 1670 lines of dialogue. The
-container flags stream 4 as `default` and neither as `forced`, so *the obvious
-heuristic picks the wrong one* — and picking by hand means guessing. Only the
-cue count separates them, and nothing in the listing shows it. See
-[Direction](docs/direction.md); this is the tool's sharpest remaining flaw.
 
 ## Layout
 
@@ -236,8 +253,8 @@ such an import resolve.
 | `npm run lint` | 25 project rules |
 | `npm run depcruise` | no cycles, Node builtins stay in `platform`/`protocol`, packages never import the app |
 | `npm run codegen:check` | the generated wire descriptors still match the vendored `.proto` |
-| `npm test` | 54 tests |
-| `npm run check` | all of the above |
+| `npm test` | 82 tests |
+| `npm run check` | all of the above — and the only thing CI runs |
 
 The lint rules encode one idea: never hand-roll what Effect provides. `no-if`,
 `no-try-catch`, `no-throw`, `no-await`, `no-timers`, `no-date-now`,
@@ -273,29 +290,27 @@ removing the `as` casts exposed an `Ipv4` brand that accepted
 
 Ordered by how much they cost someone trying to watch something.
 
-- **Track selection is manual, and the listing cannot decide it.** See
-  [Subtitles](#subtitles). `--audio` and `--subs` take raw indices and the help
-  text says "see `cast streams`" — the tool hands its hardest judgement to the
-  person using it.
-- **There is no `cast seek`.** `SEEK` is implemented in the protocol package and
-  unreachable from the CLI, so rewinding means stopping and replaying with
-  `--seek`, which restarts the session.
-- **Not installable.** `bin` points at a `.ts` file and there is no build step,
-  so `npm i -g` will not work. It runs from the workspace only.
-- **Every command rediscovers.** Without `--ip`, each invocation runs a fresh
-  4-second mDNS sweep; nothing is remembered between commands.
 - **Quality switches are visible.** Changing rung restarts ffmpeg and reissues
-  `LOAD`, which the viewer sees as a brief rebuffer.
-- **The I/O modules are untested.** 54 tests cover the pure layers — brands,
-  framing, the WebVTT codec, the quality controller. `Session`, `CastSocket`,
-  `Mdns`, `Ffmpeg` and the HTTP routes have none, and the hang described above
-  lived in exactly that gap.
-- **No CI.** `npm run check` passes locally and nothing enforces that.
+  `LOAD`, which the viewer sees as a brief rebuffer. This is the one remaining
+  gap that a viewer can actually see, and fixing it properly means HLS — which
+  would *delete* most of the quality controller rather than add to it. The
+  argument is in [`docs/direction.md`](docs/direction.md).
+- **`cast streams` reads every subtitle track.** Counting cues means extracting
+  them, so listing a file with several subtitle tracks takes ~20 seconds. `play`
+  only reads the candidates in one language, so it is much cheaper.
+- **Seeking backwards past the stream start restarts the stream.** It cannot be
+  a receiver-side seek; the stream does not contain that part of the film. The
+  player is asked to reload instead, which the viewer sees as a rebuffer.
+- **The two processes talk through a file.** `cast seek` reaches the running
+  `cast play` by writing a request into the state file, which the player polls
+  once a second. Unglamorous, and a socket would be a great deal of machinery
+  for one integer.
 - **Effect has no TLS/TCP client socket.** `effect/unstable/socket` is
   WebSocket-only, so `packages/protocol/src/CastSocket.ts` wraps `node:tls` —
   but exposes it as a real `Socket.Socket`.
 - **Effect has no UDP.** mDNS therefore uses `node:dgram` in
-  `packages/platform/src/Mdns.ts`.
+  `packages/platform/src/Mdns.ts`, and its packet parsing is the one piece of
+  I/O still without tests.
 - **dependency-cruiser cannot see type-only imports here.** It does not yet
   support TypeScript 7, so it runs without the TS transpiler and `import type`
   edges are invisible to it. Value imports are checked. Found by deliberately

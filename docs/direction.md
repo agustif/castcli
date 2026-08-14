@@ -4,6 +4,10 @@ What this should become, argued from the job rather than from the code that
 exists. Written after the tool worked well enough to watch a film end to end,
 which is the right moment to ask whether it is the right tool.
 
+**Status:** everything argued for below in Tiers 1 and 2 is implemented. The
+analysis is kept in its original tense — it is the reasoning, not a changelog —
+and [What is left](#what-is-left) at the end says where things actually stand.
+
 ## The job
 
 Not "cast a file to a device". The job is:
@@ -16,8 +20,8 @@ stutter, and — if I already watched an hour of it — starting where I stopped
 
 ## Measured against that job
 
-The tool as it stands answers a narrower question than the one asked. Watching
-one film took three commands and a wrong guess:
+The tool answered a narrower question than the one asked. Watching one film took
+three commands and a wrong guess:
 
 ```sh
 cast scan                                  # which device?
@@ -51,10 +55,10 @@ Yes, lean on distillation — with one clarification that changes what gets buil
 target is:
 
 ```sh
-cast movie.mkv
+cast play movie.mkv
 ```
 
-with no flags, doing the right thing. Every existing flag survives as an
+with no other flags, doing the right thing. Every existing flag survives as an
 override. Four decisions move from the person to the tool:
 
 | Decision | Rule | Cost |
@@ -136,23 +140,39 @@ Scope discipline, recorded so it does not have to be re-argued:
 
 ## Ordered plan
 
-**Tier 1 — serves the job directly.** Small, and each removes a decision or a
-restart.
+**Tier 1 — serves the job directly.** Done.
 
-1. Zero-flag defaults: device, audio, subtitles by the rules above.
-2. `cast seek` — `SEEK` is implemented in the protocol package and unreachable
-   from the CLI, so rewinding currently restarts the session.
-3. Remember position per file, and resume by default.
-4. `cast streams` shows cue counts and dispositions.
+1. ~~Zero-flag defaults: device, audio, subtitles by the rules above.~~
+2. ~~`cast seek`.~~ Also handles a target before the stream begins, by asking
+   the playing process to reload — the ordinary case when rewinding past a
+   resume point.
+3. ~~Remember position per file, and resume by default.~~
+4. ~~`cast streams` shows cue counts and dispositions~~, and marks what `play`
+   would choose.
 
-**Tier 2 — durability.** The recent silent-hang bug lived in the untested I/O
-layer; that is not a coincidence.
+**Tier 2 — durability.** Done. Splitting `Session.makeOver` from the socket was
+what made this possible, and it immediately found a real bug: a media command
+issued before the receiver reported a media session was silently discarded while
+the caller printed "paused".
 
-5. Tests for `Session`, `CastSocket`, `Mdns` and the routes, against a fake
-   receiver rather than a real TV.
-6. CI running `npm run check`.
-7. An installable binary — `bin` currently points at a `.ts` file.
+5. ~~Tests for `Session`, `CastSocket` and the routes, against a fake receiver
+   rather than a real TV.~~ `Mdns` packet parsing is still untested.
+6. ~~CI running `npm run check`.~~
+7. ~~An installable binary.~~ A single bundled file, because the workspace
+   packages do not resolve outside the workspace.
 
-**Tier 3 — architecture.** Only on the trigger named above.
+**Tier 3 — architecture.** Still gated on the trigger named above.
 
 8. HLS variant playlists, deleting most of the quality actuation.
+
+## What is left
+
+Everything above the line is done, which makes the remaining list short and
+worth stating plainly:
+
+- **HLS**, on the trigger — the only remaining thing a viewer can see.
+- **mDNS packet parsing has no tests.** It is the last piece of I/O without
+  them, and the parsing is fiddly enough to deserve some.
+- **`cast streams` costs ~20 seconds** on a file with several subtitle tracks,
+  because counting cues means extracting them. `play` is cheaper — it only reads
+  one language — but the listing could cache what it learns.

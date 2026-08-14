@@ -54,12 +54,14 @@ inbound. The advertised URL has to be routable **from the TV**.
 | `media` | `Ffmpeg/Args` | ffmpeg invocations as typed values |
 | `media` | `Ffmpeg/Service` | probe, extract cues, transcode — all scoped |
 | `media` | `Vtt/Codec` | WebVTT as a `Schema` codec, plus `cutFrom` |
+| `media` | `Tracks/Select` | Which audio and subtitle track to play, and why |
 | `quality` | `Ladder` | Building the rung ladder |
 | `quality` | `Signals` | State, thresholds, and `phaseOf` — *what situation are we in* |
 | `quality` | `Controller` | *What to do about it* — one exhaustive match |
 | `platform` | `Mdns`, `HttpServer` | The generic Node bridges |
 | `cli` | `Server/Routes` | The two endpoints the device pulls |
 | `cli` | `Cli/*` | Schema-validated flags, time codes, control commands |
+| `cli` | `State` | What is remembered between invocations, and never load bearing |
 
 ## Decisions worth explaining
 
@@ -83,6 +85,26 @@ The controller reads `Clock` and loops on a `Schedule`, never `Date.now()` or
 `setInterval`. Thresholds are `Duration` values, so the unit is in the type. The
 whole controller can therefore be driven by `TestClock` — which matters, because
 its interesting behaviour happens over minutes.
+
+### Track selection is an effect, not a lookup
+
+Choosing a subtitle track needs information the container does not carry
+honestly: in the release this was built against, the 24-cue forced-signage track
+is flagged `default` and the 1670-line dialogue track is flagged nothing. Only
+the cue count separates them, and obtaining it means extracting the track — so
+`chooseAudio` is a pure function while `chooseSubtitle` is an effect that reads
+candidates in one language and keeps the richest.
+
+`bestSubtitle` is the pure ranking underneath both, so `cast streams` can mark
+the track `cast play` would pick rather than reimplementing the guess.
+
+### The two processes share a file, not a socket
+
+`cast seek` runs in a different process from `cast play`, and needs two things
+from it: where the running stream starts, and — when the target is before that
+point — someone to issue a fresh `LOAD`. Both go through the state file, which
+the player polls once a second. A socket would be better engineering and much
+more machinery for one integer.
 
 ### Errors carry causes
 
@@ -143,6 +165,10 @@ defects, and `no-node-http` found `node:http` leaking into the CLI.
   `node:tls` through `Duplex.toWeb()` into `Socket.fromTransformStream` — the
   handshake is the only Node-specific part, and everything downstream consumes a
   real `Socket.Socket`.
+- **A free port.** `platform/HttpServer.freePort` binds to zero and lets go,
+  because the configured port is a preference: the receiver is told which URL to
+  pull, so any port works, and something else on the machine holding 8021 should
+  not stop a film.
 - **UDP.** No datagram module at all, so mDNS uses `node:dgram`. The datagram
   callback cannot run an Effect, so it hands packets to a `Queue` and a forked
   fiber folds them into a `Ref` — the same shape `CastSocket` uses.
