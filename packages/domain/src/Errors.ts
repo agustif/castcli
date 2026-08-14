@@ -72,6 +72,21 @@ export class NoVideoStreamError extends Schema.TaggedError<NoVideoStreamError>()
 }
 
 /**
+ * The local media server could not take its port. Almost always a previous
+ * `cast play` still holding it — which otherwise surfaced as a bare
+ * `ServeError`, leaving the person with nothing to act on.
+ */
+export class ServerBindError extends Schema.TaggedError<ServerBindError>()(
+  "ServerBindError",
+  { port: Schema.Number, cause: Schema.Defect() }
+) {
+  override get message(): string {
+    return `could not listen on port ${this.port} — another cast is probably ` +
+      "still running (stop it, or set CAST_PORT to a free port)"
+  }
+}
+
+/**
  * The device did not answer on the control port. It is off, asleep, or on
  * another network — an ordinary situation, and the one a person is most likely
  * to hit, so it says what to check rather than showing a socket trace.

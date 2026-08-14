@@ -29,10 +29,11 @@ import * as os from "node:os"
 import * as path from "node:path"
 
 import { AppConfig } from "../Config.ts"
-import { canStreamCopy, Ffmpeg, Vtt } from "@castcli/media"
+import { canStreamCopy, Ffmpeg, Tracks, Vtt } from "@castcli/media"
 import {
   describeRung,
   FilePath,
+  type MediaStream,
   Height,
   Ipv4,
   Port,
@@ -46,7 +47,8 @@ import {
   DeviceNotFoundError,
   EmptyLadderError,
   NoLocalAddressError,
-  NoVideoStreamError
+  NoVideoStreamError,
+  ServerBindError
 } from "@castcli/domain"
 import { CastDevice } from "@castcli/domain"
 import { Mdns } from "@castcli/platform"
@@ -161,6 +163,40 @@ const resolveDevice = (
     onNone: () => discoverDevice(name, timeout)
   })
 
+/**
+ * Say which subtitle track was chosen and, when there was a contest, what it
+ * beat. The runner-up line is the point: it is how someone notices that the
+ * track their container flags as `default` holds 24 cues of signage, without
+ * having to extract anything themselves.
+ */
+const reportSubtitleChoice = (choice: Option.Option<Tracks.SubtitleChoice>) =>
+  Option.match(choice, {
+    onNone: () => Console.log("subtitles no matching track"),
+    onSome: ({ considered, cues, stream }) =>
+      Effect.andThen(
+        Console.log(
+          `subtitles stream ${stream.index} (${stream.language}), ${cues.length} cues`
+        ),
+        Effect.forEach(
+          considered.filter((candidate) => candidate.stream.index !== stream.index),
+          (runnerUp) =>
+            Console.log(
+              `          not stream ${runnerUp.stream.index} — ${runnerUp.cueCount} cues` +
+                (runnerUp.stream.isDefault ? ", despite being flagged default" : "")
+            ),
+          { discard: true }
+        )
+      )
+  })
+
+/** The audio track in the summary block, or why there is none. */
+const describeAudio = (chosen: Option.Option<MediaStream>): string =>
+  Option.match(chosen, {
+    onNone: () => "none",
+    onSome: (stream) =>
+      `stream ${stream.index} (${stream.language}) ${stream.codec_name ?? "unknown"}`
+  })
+
 const play = Command.make(
   "play",
   {
@@ -181,7 +217,7 @@ const play = Command.make(
 
     // A file with no video stream is not something this tool can cast, and
     // `--streams` is a pure inspection that should never open a socket.
-    const video = yield* Option.match(Option.fromNullishOr(info.video), {
+    const video = yield* Option.match(info.video, {
       onNone: () =>
         Effect.andThen(
           Console.error("no video stream in this file"),
@@ -190,35 +226,53 @@ const play = Command.make(
       onSome: (found) => Effect.succeed(found)
     })
 
-    // Fall back to the first audio track when none was named. Both the flag
-    // and the fallback are Options, so "no audio at all" stays representable.
-    const audioIndex = Option.orElse(audio, () =>
-      Option.flatMap(
-        Array.head(info.audioStreams),
-        (stream) => StreamIndex.makeOption(stream.index)
-      ))
-    const subtitleIndex = subs
+    // Chosen rather than demanded. An explicit flag always wins; otherwise the
+    // language preferences decide, and for subtitles the cue count breaks ties
+    // that the container's own flags get wrong. See packages/media/Tracks.
+    const chosenAudio = Option.orElse(
+      Option.flatMap(audio, (index) =>
+        Array.findFirst(info.audioStreams, (stream) => stream.index === index)),
+      () => Tracks.chooseAudio(info.audioStreams, config.audioLanguages)
+    )
+    const audioIndex = Option.flatMap(
+      chosenAudio,
+      (stream) => StreamIndex.makeOption(stream.index)
+    )
+
+    const chosenSubtitle = yield* Option.match(subs, {
+      // An explicit --subs skips the survey: the person has already decided,
+      // and extracting the alternatives would cost seconds to learn nothing.
+      onSome: (index) =>
+        Effect.map(
+          ffmpeg.extractCues(absolute, index),
+          (cues) =>
+            Option.map(
+              Array.findFirst(info.subtitleStreams, (stream) => stream.index === index),
+              (stream): Tracks.SubtitleChoice => ({ stream, cues, considered: [] })
+            )
+        ),
+      onNone: () =>
+        Tracks.chooseSubtitle(absolute, info.subtitleStreams, config.subtitleLanguages)
+    })
+
+    yield* reportSubtitleChoice(chosenSubtitle)
+
+    const subtitleIndex = Option.flatMap(
+      chosenSubtitle,
+      (choice) => StreamIndex.makeOption(choice.stream.index)
+    )
     // RFC 5646 tag. Mandatory when the subtype is SUBTITLES — a track without
     // one is ignored by the receiver without any error.
     const subtitleLanguage = Option.getOrElse(
-      Option.flatMap(subtitleIndex, (index) =>
-        Option.map(
-          Array.findFirst(info.subtitleStreams, (stream) => stream.index === index),
-          (stream) => stream.language
-        )),
+      Option.map(chosenSubtitle, (choice) => choice.stream.language),
       () => "und"
     )
-
     // Extracted once up front rather than per request: a Cast receiver handed a
     // slowly-arriving text track stacks cues on screen instead of replacing
     // them, and re-running ffmpeg per seek costs seconds each time.
-    const cues = yield* Option.match(subtitleIndex, {
-      onNone: () => Effect.succeed<Vtt.Cues>([]),
-      onSome: (index) =>
-        Effect.tap(
-          ffmpeg.extractCues(absolute, index),
-          (loaded) => Console.log(`loaded ${loaded.length} subtitle cues`)
-        )
+    const cues = Option.match(chosenSubtitle, {
+      onNone: () => [],
+      onSome: (choice): Vtt.Cues => choice.cues
     })
 
     const ladder = Ladder.build({
@@ -286,7 +340,12 @@ const play = Command.make(
     // accepting. Forking it raced the LOAD below — the receiver was handed a
     // URL for a server that had not started listening yet, and simply did
     // nothing.
-    yield* Layer.build(server)
+    yield* Layer.build(server).pipe(
+      Effect.catchTag(
+        "ServeError",
+        (cause) => Effect.fail(new ServerBindError({ port: config.port, cause }))
+      )
+    )
     yield* Effect.forkScoped(controller.run)
 
     const sendLoad = Effect.fn("cast.sendLoad")(function*(session: CastSession.Session) {
@@ -328,6 +387,7 @@ const play = Command.make(
     yield* Console.log(
       `\n  file     ${path.basename(absolute)}` +
         `\n  video    ${video.codec_name} ${video.width}x${video.height}` +
+        `\n  audio    ${describeAudio(chosenAudio)}` +
         `\n  quality  adaptive — ${ladder.map(describeRung).join(" | ")}` +
         `\n  serving  ${baseUrl}/stream` +
         `\n  device   ${target.name} (${target.ip}:${target.port})\n`
@@ -336,9 +396,14 @@ const play = Command.make(
     // One attempt at a session: connect, load, and pump status until the socket
     // drops. Returning normally would end the film, so a closed stream is a
     // typed failure and the retry below rebuilds everything.
+    // Whether a session has ever been established, which is what separates
+    // "the TV is off" from "the TV dropped the connection".
+    const everConnected = yield* Ref.make(false)
+
     const runSession = Effect.gen(function*() {
       const session = yield* CastSession.make(target.ip, target.port)
       yield* session.launch
+      yield* Ref.set(everConnected, true)
       yield* sendLoad(session)
 
       // A rejected LOAD is otherwise indistinguishable from a slow start.
@@ -382,36 +447,104 @@ const play = Command.make(
       Effect.tapError(() =>
         Effect.gen(function*() {
           const at = yield* Ref.get(position)
-          yield* Console.log(`\n  connection lost — reconnecting at ${TimeCode.format(at)}…`)
+          // Only announce a reconnection that is actually going to be
+          // attempted: saying "reconnecting" and then giving up reads as a
+          // second, unexplained failure.
+          yield* Effect.when(
+            Console.log(`\n  connection lost — reconnecting at ${TimeCode.format(at)}…`),
+            Ref.get(everConnected)
+          )
           yield* Ref.update(state, (current) => ({ ...current, offsetSeconds: at }))
           yield* controller.noteRestart
         })
       ),
-      // Backoff, capped: a device that has gone to sleep should be retried
-      // patiently, not hammered.
-      // Steady, bounded retries: a device that has gone to sleep should be
-      // retried patiently rather than hammered.
-      Effect.retry(
-        Schedule.spaced(Duration.seconds(3)).pipe(Schedule.upTo({ times: 30 }))
-      )
+      // Steady, bounded retries: a device that has gone to sleep mid-film
+      // should be waited for patiently rather than hammered.
+      //
+      // But a device that never answered at all is a different situation, and
+      // retrying it for ninety seconds buries the one useful line — that it is
+      // off — under thirty repetitions of "connection lost". So reconnection is
+      // for sessions that existed: once one has, an unreachable device is worth
+      // waiting for; before that, it is worth reporting.
+      Effect.retry({
+        schedule: Schedule.spaced(Duration.seconds(3)).pipe(Schedule.upTo({ times: 30 })),
+        while: (error) =>
+          Effect.map(
+            Ref.get(everConnected),
+            (connected) => connected || error._tag === "ConnectionLostError"
+          )
+      })
     )
   })
 ).pipe(Command.withDescription("Stream a file to a Cast device"))
 
 // ---------------------------------------------------------------- streams
 
+/** `default`/`forced`, and only when set — an empty listing is easier to read. */
+const describeDisposition = (stream: MediaStream): string =>
+  [
+    ...(stream.isDefault ? ["default"] : []),
+    ...(stream.isForced ? ["forced"] : [])
+  ].join(" ")
+
 const streams = Command.make(
   "streams",
   { file: Argument.string("file").pipe(Argument.withDescription("Path to the media file")) },
   Effect.fn(function*({ file }) {
+    const config = yield* AppConfig
     const ffmpeg = yield* Ffmpeg
-    const info = yield* ffmpeg.probe(FilePath.make(path.resolve(file)))
+    const absolute = FilePath.make(path.resolve(file))
+    const info = yield* ffmpeg.probe(absolute)
+
+    // Cue counts are the reason this command exists in its current form: two
+    // subtitle tracks of the same language are otherwise indistinguishable, and
+    // the container's own flags point at the wrong one. Counting means reading
+    // each track, so it happens concurrently and only for subtitles.
+    const cueCounts = yield* Effect.forEach(
+      info.subtitleStreams,
+      (stream) =>
+        Effect.map(
+          ffmpeg.extractCues(absolute, StreamIndex.make(stream.index)),
+          (cues) => [stream.index, cues.length] as const
+        ),
+      { concurrency: 4 }
+    )
+    const cuesByIndex = new Map(cueCounts)
+
+    // Marked with the same functions `play` uses, so the listing answers "what
+    // will it do" rather than merely "what is in the file".
+    const wouldPlay = new Set(
+      [
+        ...Option.match(Tracks.chooseAudio(info.audioStreams, config.audioLanguages), {
+          onNone: () => [],
+          onSome: (stream) => [stream.index]
+        }),
+        ...Option.match(
+          Tracks.bestSubtitle(info.subtitleStreams, config.subtitleLanguages, cuesByIndex),
+          { onNone: () => [], onSome: (stream) => [stream.index] }
+        )
+      ]
+    )
+
     yield* Effect.forEach(info.streams, (stream) =>
       Console.log(
-        `  [${stream.index}] ${stream.codec_type.padEnd(8)} ${stream.codec_name ?? "?"} ` +
+        `  ${wouldPlay.has(stream.index) ? "->" : "  "} ` +
+          `[${stream.index}] ${stream.codec_type.padEnd(8)} ${stream.codec_name ?? "?"} ` +
           `${stream.language}${stream.channels === undefined ? "" : ` ${stream.channels}ch`}` +
-          `${stream.tags?.title === undefined ? "" : ` "${stream.tags.title}"`}`
+          `${
+            Option.match(Option.fromNullishOr(cuesByIndex.get(stream.index)), {
+              onNone: () => "",
+              onSome: (count) => ` ${count} cues`
+            })
+          }` +
+          `${describeDisposition(stream) === "" ? "" : ` [${describeDisposition(stream)}]`}` +
+          `${Option.match(stream.title, { onNone: () => "", onSome: (title) => ` "${title}"` })}`
       ), { discard: true })
+
+    yield* Effect.when(
+      Console.log("\n  -> is what `cast play` would choose with your current language preferences"),
+      Effect.succeed(wouldPlay.size > 0)
+    )
   })
 ).pipe(
   Command.withDescription("List the audio, video and subtitle tracks in a file"),
@@ -442,6 +575,12 @@ cast.pipe(
   // message is the useful part and the stack trace is noise — "the TV is off"
   // does not need thirty frames of Effect internals. The failure still
   // propagates, so the exit code stays non-zero.
-  Effect.tapError((error) => Console.error(`error: ${error.message}`)),
+  //
+  // Falling back to the tag matters: an Effect built-in error can carry an
+  // empty message, and `error:` followed by nothing tells a person less than no
+  // output at all would.
+  Effect.tapError((error) =>
+    Console.error(`error: ${error.message.length > 0 ? error.message : error._tag}`)
+  ),
   NodeRuntime.runMain({ disableErrorReporting: true })
 )

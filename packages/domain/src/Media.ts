@@ -5,8 +5,22 @@
 // validating once at the boundary keeps the rest of the code working with real
 // types instead of `any`.
 
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { Bitrate } from "./Brands.ts"
+
+/**
+ * ffprobe reports dispositions as 0/1 integers. Only the two that bear on
+ * choosing a track are modelled; the rest are noise for this tool.
+ *
+ * Worth knowing before trusting them: in the release this tool was built for,
+ * the 24-cue forced-signage track is flagged `default` and *not* flagged
+ * `forced`, while the 1670-line dialogue track carries neither flag. These are
+ * a hint, not an answer — see `Tracks/Select.ts`.
+ */
+const Disposition = Schema.Struct({
+  default: Schema.optional(Schema.Number),
+  forced: Schema.optional(Schema.Number)
+})
 
 export class MediaStream extends Schema.Class<MediaStream>("MediaStream")({
   index: Schema.Number,
@@ -19,6 +33,7 @@ export class MediaStream extends Schema.Class<MediaStream>("MediaStream")({
   pix_fmt: Schema.optional(Schema.String),
   /** ffprobe writes this as a numeric string, or omits it entirely. */
   bit_rate: Schema.optional(Schema.FiniteFromString.pipe(Schema.decodeTo(Bitrate))),
+  disposition: Schema.optional(Disposition),
   tags: Schema.optional(
     Schema.Struct({
       language: Schema.optional(Schema.String),
@@ -33,6 +48,18 @@ export class MediaStream extends Schema.Class<MediaStream>("MediaStream")({
    */
   get language(): string {
     return this.tags?.language ?? "und"
+  }
+
+  /** The title a container may carry, e.g. "Forced" or "SDH". */
+  get title(): Option.Option<string> {
+    return Option.fromNullishOr(this.tags?.title)
+  }
+
+  get isDefault(): boolean {
+    return this.disposition?.default === 1
+  }
+  get isForced(): boolean {
+    return this.disposition?.forced === 1
   }
 
   get isVideo(): boolean {
@@ -55,11 +82,9 @@ export class MediaInfo extends Schema.Class<MediaInfo>("MediaInfo")({
   streams: Schema.Array(MediaStream),
   format: MediaFormat
 }) {
-  get durationSeconds(): number {
-    return Number(this.format.duration) || 0
-  }
-  get video(): MediaStream | undefined {
-    return this.streams.find((stream) => stream.isVideo)
+  /** Absent for containers that do not report one, rather than a zero. */
+  get video(): Option.Option<MediaStream> {
+    return Option.fromNullishOr(this.streams.find((stream) => stream.isVideo))
   }
   get audioStreams(): ReadonlyArray<MediaStream> {
     return this.streams.filter((stream) => stream.isAudio)
