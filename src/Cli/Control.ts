@@ -31,7 +31,7 @@ const target = Effect.fn("Control.target")(function*(ip: Option.Option<Brands.Ip
         new CastDevice({
           name: address,
           ip: address,
-          port: Brands.port(config.devicePort)
+          port: config.devicePort
         })
       ),
     onNone: () =>

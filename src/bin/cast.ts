@@ -7,7 +7,7 @@
 // (http://fe80::...%en0:8010/...) which is unroutable from the TV, so every
 // load fails. Here the advertised address is an explicit LAN IPv4.
 
-import { Array, Console, Duration, Effect, Layer, Option, Queue, Ref, Schedule, Stream } from "effect"
+import { Console, Duration, Effect, Layer, Option, Queue, Ref, Schedule, Stream } from "effect"
 import { Argument, Command } from "effect/unstable/cli"
 import * as Flags from "../Cli/Flags.ts"
 import * as Control from "../Cli/Control.ts"
@@ -125,7 +125,7 @@ const discoverDevice = Effect.fn("cast.discoverDevice")(function*(
 const resolveDevice = (
   ip: Option.Option<string>,
   name: Option.Option<string>,
-  devicePort: number,
+  devicePort: Brands.Port,
   timeout: Duration.Duration
 ) =>
   Option.match(ip, {
@@ -134,7 +134,7 @@ const resolveDevice = (
         new CastDevice({
           name: address,
           ip: Brands.ipv4(address),
-          port: Brands.port(devicePort)
+          port: devicePort
         })
       ),
     onNone: () => discoverDevice(name, timeout)
@@ -168,8 +168,10 @@ const play = Command.make(
       onSome: (found) => Effect.succeed(found)
     })
 
-    const audioIndex = Option.getOrNull(
-      Option.orElse(audio, () => Option.map(Array.head(info.audioStreams), (s) => s.index))
+    const firstAudio = info.audioStreams[0]?.index
+    const audioIndex = Option.getOrElse(
+      audio,
+      () => firstAudio === undefined ? null : Brands.streamIndex(firstAudio)
     )
     const subtitleIndex = Option.getOrUndefined(subs) ?? null
     const subtitleLanguage = info.subtitleStreams.find((s) => s.index === subtitleIndex)?.language ??

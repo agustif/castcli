@@ -6,10 +6,9 @@
 // types instead of `any`.
 
 import { Schema } from "effect"
-import * as Brands from "./Brands.ts"
 
 export class MediaStream extends Schema.Class<MediaStream>("MediaStream")({
-  index: Brands.StreamIndex,
+  index: Schema.Number,
   codec_type: Schema.String,
   codec_name: Schema.optional(Schema.String),
   profile: Schema.optional(Schema.String),

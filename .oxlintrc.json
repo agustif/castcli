@@ -43,8 +43,7 @@
   },
   "ignorePatterns": [
     "dist/**",
-    "node_modules/**",
-    "*.mjs"
+    "node_modules/**"
   ],
   "overrides": [
     {

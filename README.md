@@ -89,10 +89,10 @@ ERROR
 |---|---|---|
 | `CAST_PORT` | 8021 | Local HTTP port the receiver pulls from |
 | `CAST_DEVICE_PORT` | 8009 | Cast control port |
-| `CAST_DEVICE_IP` | — | Pin the device, skipping discovery |
 | `CAST_ADVERTISE_HOST` | auto | Override the advertised LAN address |
 | `CAST_AUDIO_BITRATE` | 128k | AAC bitrate |
 | `CAST_DISCOVERY_TIMEOUT_MS` | 4000 | Per-sweep mDNS timeout |
+| `CAST_DEVICE_IP` | — | Pin the device, skipping discovery |
 
 ## Adaptive quality
 
@@ -170,8 +170,21 @@ src/
   Quality/      Ladder, Signals (state → phase), Controller (phase → action)
   Server/       Routes the receiver pulls from
   Platform/     the only Node-specific code
-  Cli/          schema-validated flags
+  Cli/          schema-validated flags, time codes, control commands
 ```
+
+## Control
+
+```sh
+cast status --ip 192.168.1.24     # what is it playing?
+cast toggle                       # pause if playing, resume if paused
+cast pause / cast resume
+cast volume --level 20
+cast stop
+```
+
+These attach to the running session rather than launching a new one, so
+pausing does not restart the film.
 
 ## Known gaps
 
