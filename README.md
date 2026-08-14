@@ -188,7 +188,7 @@ such an import resolve.
 | `npm run lint` | 24 project rules — see below |
 | `npm run depcruise` | no cycles, Node builtins stay in `platform`/`protocol`, packages never import the app |
 | `npm run codegen:check` | the generated wire descriptors still match the vendored `.proto` |
-| `npm test` | 35 tests |
+| `npm test` | 50 tests |
 | `npm run check` | all of the above |
 
 The lint rules encode one idea: never hand-roll what Effect provides. `no-if`,
@@ -196,6 +196,25 @@ The lint rules encode one idea: never hand-roll what Effect provides. `no-if`,
 `no-process-env`, `no-console`, `no-json-parse`, `no-schema-sync`,
 `no-as-cast`, `no-non-null`, `no-any` and more. `packages/platform/**`,
 `scripts/**` and tests carry narrow, documented exemptions.
+
+## Validation
+
+Every value is decoded at the boundary it arrives on, and carries a brand
+afterwards so it cannot be confused with a different number or string:
+
+| | Rejects |
+|---|---|
+| `Ipv4` | `256.0.0.1`, `999.999.999.999`, leading zeros, `fe80::…%en0` |
+| `Port` | `0`, `70000`, `8009.5` |
+| `VolumeLevel` | `20` — a percentage, which used to be clamped to full volume |
+| `AudioBitrate` | `128`, `128kb` — this string reaches ffmpeg verbatim |
+| `Seconds` / `Bitrate` / `Height` | negatives and non-positive rates |
+| `StreamIndex` / `MediaSessionId` | fractions |
+| `TransportId` / `SessionId` / `FilePath` | empty strings |
+
+Absence is `Option`, never `null` or a magic zero — the source bitrate a
+container omits, an audio track that does not exist, a subtitle index that was
+not asked for, a probe that is not running.
 
 Two of these caught real bugs rather than style: `no-schema-sync` found
 `Schema.decodeSync` in the WebVTT codec turning parse failures into defects,
