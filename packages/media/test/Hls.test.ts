@@ -51,7 +51,7 @@ describe("segment arithmetic", () => {
 
 describe("variantsFor", () => {
   it("offers the encoded rungs", () => {
-    assert.deepStrictEqual(variantsFor(LADDER).map((rung) => rung.height), [360, 720])
+    assert.deepStrictEqual(variantsFor(LADDER).map((variant) => variant.height), [360, 720])
   })
 
   it("refuses a stream copy, which cannot be cut into segments", () => {
@@ -59,7 +59,10 @@ describe("variantsFor", () => {
     // its neighbour and drifts from what the playlist declares — measured at
     // 5s/10s/15s for segments announced as 6s/12s/18s.
     const copy = Rung.Copy({ height: Height.make(1080), bitrate: Bitrate.make(8_000_000) })
-    assert.deepStrictEqual(variantsFor([...LADDER, copy]).map((rung) => rung.height), [360, 720])
+    assert.deepStrictEqual(
+      variantsFor([...LADDER, copy]).map((variant) => variant.height),
+      [360, 720]
+    )
   })
 
   it("is empty for a source below every encoded rung", () => {

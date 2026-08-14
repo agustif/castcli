@@ -9,8 +9,8 @@
 // So the only Node-specific part is the handshake below; everything downstream
 // consumes a real `Socket.Socket` and Effect's own combinators.
 
-import { Cause, Effect, Exit, Queue, Ref, Stream } from "effect"
-import { DeviceUnreachableError } from "@castcli/domain"
+import { Cause, Duration, Effect, Exit, Queue, Ref, Stream } from "effect"
+import { ConnectionLostError, DeviceUnreachableError } from "@castcli/domain"
 import { Socket } from "effect/unstable/socket"
 import { Duplex } from "node:stream"
 import * as tls from "node:tls"
@@ -18,7 +18,7 @@ import { type CastMessage, encodeFrame, takeFrames } from "./Frame.ts"
 
 export interface CastSocket {
   readonly send: (message: CastMessage) => Effect.Effect<void, Socket.SocketError>
-  readonly messages: Stream.Stream<CastMessage, Socket.SocketError>
+  readonly messages: Stream.Stream<CastMessage, Socket.SocketError | ConnectionLostError>
 }
 
 /**
@@ -27,6 +27,14 @@ export interface CastSocket {
  * failure. TCP's own timeout is minutes.
  */
 const CONNECT_TIMEOUT_MS = 5_000
+
+/**
+ * How long silence is allowed to last before the connection counts as dead.
+ *
+ * A Cast receiver sends a heartbeat every five seconds, so three missed ones is
+ * unambiguous while leaving room for a network that is merely slow.
+ */
+const SILENCE_LIMIT = Duration.seconds(15)
 
 /**
  * Acquire a TLS connection and hand it over as a web transform stream. Cast
@@ -91,7 +99,10 @@ export const connect = Effect.fn("CastSocket.connect")(function*(
   // *failure* is a different thing and ends the queue with the cause, so that a
   // device which is off or unreachable surfaces as an error rather than as a
   // stream that politely produced nothing.
-  const queue = yield* Queue.unbounded<CastMessage, Socket.SocketError | Cause.Done>()
+  const queue = yield* Queue.unbounded<
+    CastMessage,
+    Socket.SocketError | ConnectionLostError | Cause.Done
+  >()
   const pending = yield* Ref.make<Buffer>(Buffer.alloc(0))
 
   yield* Effect.forkScoped(
@@ -115,6 +126,23 @@ export const connect = Effect.fn("CastSocket.connect")(function*(
 
   return {
     send: (message: CastMessage) => write(encodeFrame(message)),
-    messages: Stream.fromQueue(queue)
+    // A device that goes away mid-film does not close the connection politely
+    // — it stops existing, and on some paths nothing at either end notices.
+    // Silence is the signal, which is what the heartbeat is for: a receiver
+    // pings every few seconds, so a much longer gap means the far end is gone.
+    //
+    // Expressed on the stream rather than as a watchdog fiber holding a
+    // timestamp: the condition *is* "this stream stopped producing", and
+    // `timeoutOrElse` checks it on every pull for free.
+    //
+    // Without it the player sat with a dead socket indefinitely — measured at
+    // over two minutes after the device had exited, with no error and no
+    // attempt to reconnect.
+    messages: Stream.fromQueue(queue).pipe(
+      Stream.timeoutOrElse({
+        duration: SILENCE_LIMIT,
+        orElse: () => Stream.fail(new ConnectionLostError())
+      })
+    )
   } satisfies CastSocket
 })

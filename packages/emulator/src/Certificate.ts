@@ -9,7 +9,7 @@
 // bad habit even when the key protects nothing, and it would be the first thing
 // a secret scanner complains about.
 
-import { Context, Effect, Layer } from "effect"
+import { Clock, Context, Effect, Layer, Option } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { FileSystem } from "effect/FileSystem"
 import { Path } from "effect/Path"
@@ -30,11 +30,27 @@ const generate: Effect.Effect<
   const fs = yield* FileSystem
   const path = yield* Path
 
-  const directory = yield* fs.makeTempDirectory()
-  const keyPath = path.join(directory, "key.pem")
-  const certPath = path.join(directory, "cert.pem")
+  // Cached rather than minted per run: generating an RSA key takes a
+  // noticeable fraction of a second, and a throwaway certificate for a device
+  // that nobody verifies has no reason to be different each time. A day of
+  // validity means a stale one regenerates on its own.
+  const directory = path.join("node_modules", ".cache", "castcli")
+  const keyPath = path.join(directory, "emulator-key.pem")
+  const certPath = path.join(directory, "emulator-cert.pem")
+  yield* fs.makeDirectory(directory, { recursive: true })
 
-  yield* spawner.string(
+  const now = yield* Clock.currentTimeMillis
+  const fresh = yield* Effect.orElseSucceed(
+    Effect.map(fs.stat(certPath), (info) =>
+      Option.match(info.mtime, {
+        onNone: () => false,
+        onSome: (at) => now - at.getTime() < 12 * 60 * 60 * 1000
+      })),
+    () => false
+  )
+
+  yield* Effect.when(
+    spawner.string(
     ChildProcess.make("openssl", [
       "req",
       "-x509",
@@ -50,6 +66,8 @@ const generate: Effect.Effect<
       "-subj",
       "/CN=cast-emulator"
     ])
+    ),
+    Effect.succeed(!fresh)
   )
 
   const key = yield* fs.readFileString(keyPath)

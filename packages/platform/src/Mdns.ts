@@ -38,7 +38,11 @@ const encodeName = (name: string): Buffer =>
     Buffer.from([0])
   ])
 
-const buildQuery = (service: string): Buffer => {
+/**
+ * The query a sender sends. Exported so the advertising side can be tested
+ * against a real one rather than against a hand-built approximation.
+ */
+export const queryFor = (service: string): Buffer => {
   const header = Buffer.alloc(12)
   header.writeUInt16BE(0, 0) // id
   header.writeUInt16BE(0, 2) // flags: standard query
@@ -307,7 +311,7 @@ const discover = Effect.fn("Mdns.discover")(function*(
     socket.bind(0, () => resume(Effect.void))
   })
 
-  const query = buildQuery(service)
+  const query = queryFor(service)
   yield* Effect.forkScoped(
     Effect.repeat(
       Effect.sync(() => socket.send(query, MDNS_PORT, MDNS_ADDRESS, () => {})),

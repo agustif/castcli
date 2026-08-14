@@ -658,7 +658,16 @@ const play = Command.make(
       // for sessions that existed: once one has, an unreachable device is worth
       // waiting for; before that, it is worth reporting.
       Effect.retry({
-        schedule: Schedule.spaced(Duration.seconds(3)).pipe(Schedule.upTo({ times: 30 })),
+        // Exponential with jitter rather than a fixed three seconds thirty
+        // times: a device that is rebooting is back in seconds, one that has
+        // been switched off is not coming back at all, and hammering a sleeping
+        // television at a fixed rate serves neither. Jitter matters because
+        // several senders reconnecting in lockstep is how a receiver gets
+        // knocked over again just as it recovers.
+        schedule: Schedule.exponential(Duration.seconds(1), 2).pipe(
+          Schedule.jittered,
+          Schedule.upTo({ duration: Duration.minutes(2) })
+        ),
         while: (error) =>
           Effect.map(
             Ref.get(everConnected),

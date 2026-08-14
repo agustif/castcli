@@ -32,79 +32,88 @@ const hasBinary = (name: string) =>
   )
 
 /**
- * Thirty seconds of test pattern with a subtitle track, which is five HLS
- * segments and change — long enough that a playlist has several entries and
- * short enough to encode in a couple of seconds.
+ * A test film: picture, sound and a subtitle track.
  *
- * The subtitles matter: they are served as a side-loaded WebVTT track rather
+ * Cached under `node_modules/.cache` and reused, because generating it is real
+ * ffmpeg work and three tests in this file want the same thing — it was most of
+ * what the file spent its time on. The name carries a version so a change to
+ * what is generated does not quietly reuse the old one.
+ *
+ * Fifteen seconds is three HLS segments: enough for a playlist with several
+ * entries and a variant switch to be possible, and no longer than that.
+ *
+ * The subtitles matter — they are served as a side-loaded WebVTT track rather
  * than inside the presentation, and whether a receiver fetches that when handed
- * an HLS master playlist is exactly the kind of thing only a device can answer.
+ * an HLS master playlist is the kind of thing only a device can answer.
  */
-const makeSample = (into: string) =>
-  Effect.gen(function*() {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-    const fs = yield* FileSystem
-    const path = yield* Path
-    const file = path.join(into, "sample.mkv")
-    const subtitles = path.join(into, "sample.srt")
+const SAMPLE_VERSION = 2
 
-    yield* fs.writeFileString(
-      subtitles,
-      "1\n00:00:01,000 --> 00:00:04,000\nfirst line\n\n" +
-        "2\n00:00:08,000 --> 00:00:12,000\nsecond line\n\n" +
-        "3\n00:00:20,000 --> 00:00:24,000\nthird line\n"
-    )
-    yield* spawner.string(
-      ChildProcess.make("ffmpeg", [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-f",
-        "lavfi",
-        "-i",
-        "testsrc2=size=640x360:rate=25:duration=30",
-        "-f",
-        "lavfi",
-        "-i",
-        "sine=frequency=440:duration=30",
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-g",
-        "50",
-        "-c:a",
-        "aac",
-        "-shortest",
-        file
-      ])
-    )
-    // Muxed in a second pass: -shortest and a subtitle input do not combine.
-    const withSubtitles = path.join(into, "sample-subbed.mkv")
-    yield* spawner.string(
-      ChildProcess.make("ffmpeg", [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        file,
-        "-i",
+const makeSample = Effect.fn("test.makeSample")(function*() {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const fs = yield* FileSystem
+  const path = yield* Path
+
+  const directory = path.join("node_modules", ".cache", "castcli")
+  const file = path.join(directory, `sample-v${SAMPLE_VERSION}.mkv`)
+  yield* fs.makeDirectory(directory, { recursive: true })
+
+  const exists = yield* Effect.orElseSucceed(fs.exists(file), () => false)
+
+  return yield* Effect.when(
+    Effect.gen(function*() {
+      const subtitles = path.join(directory, `sample-v${SAMPLE_VERSION}.srt`)
+      yield* fs.writeFileString(
         subtitles,
-        "-map",
-        "0",
-        "-map",
-        "1",
-        "-c",
-        "copy",
-        "-metadata:s:s:0",
-        "language=eng",
-        withSubtitles
-      ])
-    )
-    return withSubtitles
-  })
+        "1\n00:00:01,000 --> 00:00:04,000\nfirst line\n\n" +
+          "2\n00:00:06,000 --> 00:00:09,000\nsecond line\n\n" +
+          "3\n00:00:11,000 --> 00:00:14,000\nthird line\n"
+      )
+
+      // One pass rather than two: `-shortest` is what forced a second mux, and
+      // giving each input an explicit duration removes the need for it.
+      yield* spawner.string(
+        ChildProcess.make("ffmpeg", [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-y",
+          "-f",
+          "lavfi",
+          "-i",
+          "testsrc2=size=640x360:rate=25:duration=15",
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=frequency=440:duration=15",
+          "-i",
+          subtitles,
+          "-map",
+          "0:v",
+          "-map",
+          "1:a",
+          "-map",
+          "2:s",
+          "-c:v",
+          "libx264",
+          "-preset",
+          "ultrafast",
+          "-pix_fmt",
+          "yuv420p",
+          "-g",
+          "50",
+          "-c:a",
+          "aac",
+          "-c:s",
+          "copy",
+          "-metadata:s:s:0",
+          "language=eng",
+          file
+        ])
+      )
+    }),
+    Effect.succeed(!exists)
+  ).pipe(Effect.as(file))
+})
 
 /**
  * Poll until a condition holds, or give up.
@@ -140,28 +149,30 @@ const play = (
   device: { readonly port: number },
   file: string,
   stateDirectory: string,
-  extra: ReadonlyArray<string>
+  extra: ReadonlyArray<string>,
+  /** Omit `--ip` so the player has to find the device for itself. */
+  byDiscovery = false
 ) =>
   Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
     Effect.forkScoped(
       Effect.scoped(
         Effect.flatMap(
           spawner.spawn(
-            // `node --import tsx`, not `npx tsx`: npx spawns tsx which spawns
-            // node, and killing the top of that tree orphans the bottom of it.
-            // Nine stray `cast play` processes accumulated across test runs
-            // before this was noticed, holding ports and CPU until the suite
-            // starved. One process can actually be killed.
+            // The bundle, not the sources through tsx: it starts in 0.1s where
+            // tsx takes 0.7s, and it is what `npm i -g` installs — so this
+            // tests what people actually run. `npm run test:e2e` builds it.
+            //
+            // One process, too. `npx tsx` spawns tsx which spawns node, and
+            // killing the top of that tree orphans the bottom: nine stray
+            // players accumulated across runs before that was noticed, holding
+            // ports and CPU until the suite starved.
             ChildProcess.make(
               process.execPath,
               [
-                "--import",
-                "tsx",
-                "apps/cli/src/bin/cast.ts",
+                "dist/cast.cjs",
                 "play",
                 file,
-                "--ip",
-                "127.0.0.1",
+                ...(byDiscovery ? [] : ["--ip", "127.0.0.1"]),
                 ...extra
               ],
               {
@@ -200,7 +211,7 @@ describe("cast play, against an emulated device", () => {
           Effect.gen(function*() {
             const fs = yield* FileSystem
             const directory = yield* fs.makeTempDirectoryScoped()
-            const file = yield* makeSample(directory)
+            const file = yield* makeSample()
 
             const device = yield* Device.make({ segments: 2 })
 
@@ -262,7 +273,7 @@ describe("cast play, against an emulated device", () => {
                 spawner.spawn(
                   ChildProcess.make(
                     process.execPath,
-                    ["--import", "tsx", "apps/cli/src/bin/cast.ts", "seek", "--to", "0:12"],
+                    ["dist/cast.cjs", "seek", "--to", "0:12"],
                     {
                       extendEnv: true,
                       env: {
@@ -318,7 +329,7 @@ describe("cast play, against an emulated device", () => {
           Effect.gen(function*() {
             const fs = yield* FileSystem
             const directory = yield* fs.makeTempDirectoryScoped()
-            const file = yield* makeSample(directory)
+            const file = yield* makeSample()
 
             const device = yield* Device.make()
             yield* play(device, file, directory, [])
@@ -347,6 +358,52 @@ describe("cast play, against an emulated device", () => {
               fetched.some((url) => url.includes("/stream")),
               `the device never pulled the stream: ${fetched.join(", ")}`
             )
+          }).pipe(Effect.scoped),
+          Effect.succeed(ffmpeg && openssl)
+        )
+      }).pipe(Effect.provide(TestServices)),
+    { timeout: 300_000 }
+  )
+
+  it.live(
+    "can be found rather than told where it is",
+    () =>
+      Effect.gen(function*() {
+        const ffmpeg = yield* hasBinary("ffmpeg")
+        const openssl = yield* hasBinary("openssl")
+
+        return yield* Effect.when(
+          Effect.gen(function*() {
+            const fs = yield* FileSystem
+            const directory = yield* fs.makeTempDirectoryScoped()
+            const file = yield* makeSample()
+
+            // Discovery is the path a person actually uses — nobody types
+            // --ip unless something has gone wrong — and it was the one part
+            // of this tool an emulated device could not exercise, because the
+            // device had no way to announce itself.
+            const name = "castcli-e2e-device"
+            const device = yield* Device.make({
+              segments: 1,
+              advertise: { friendlyName: name, model: "EmulatedForTests" }
+            })
+
+            yield* play(device, file, directory, ["--device", name, "--hls"], true)
+
+            const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(90))
+            assert.isTrue(
+              Option.isSome(Option.flatten(loaded)),
+              "the player never found the device by name"
+            )
+
+            // Found by name, and then actually reachable at the address and
+            // port the advertisement carried.
+            yield* eventually(
+              device.fetched,
+              (urls) => urls.some((url) => url.includes(".m3u8")),
+              Duration.seconds(90)
+            )
+            assert.isTrue((yield* device.fetched).length > 0)
           }).pipe(Effect.scoped),
           Effect.succeed(ffmpeg && openssl)
         )

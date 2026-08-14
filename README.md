@@ -277,7 +277,8 @@ such an import resolve.
 | `npm run vocabulary:sync` | refetch the media vocabulary from Google (needs the network) |
 | `npm run depcruise` | no cycles, Node builtins stay in `platform`/`protocol`, packages never import the app |
 | `npm run codegen:check` | the generated wire descriptors and media vocabulary are not stale |
-| `npm test` | 106 tests, including end-to-end runs against an emulated device |
+| `npm test` | 112 tests, in about a second |
+| `npm run test:e2e` | 3 tests that run the built binary at an emulated device |
 | `npm run check` | all of the above — and the only thing CI runs |
 
 The lint rules encode one idea: never hand-roll what Effect provides. `no-if`,
@@ -295,15 +296,25 @@ segments. A *device* rather than a service, because it owns its own listener and
 there can be several at once.
 
 ```sh
-npm test    # includes running the real binary at an emulated device
+npm test        # 112 tests, about a second
+npm run test:e2e  # the built binary, run at an emulated device
 ```
 
-The end-to-end test spawns `cast play` and asserts on what the device fetched.
+The end-to-end tests run apart from the rest and one at a time: they spawn
+processes, encode video and bind ports, and run beside the fast suite they
+contended for all three — a suite that took five minutes and failed a test that
+passes in ten seconds alone. They spawn `cast play` and assert on what the
+device fetched.
 It is the only test that exercises the inversion this tool is built around, and
 it found two bugs in the emulator's first hour: a connection scope that closed
 as soon as its handlers were attached, and replies addressed from the wrong
 source id. It skips where ffmpeg or openssl are missing, so CI stays honest
 without needing a media pipeline.
+
+It also advertises over mDNS when asked, so `cast scan` finds it the way it
+finds a real device — which is the only way to exercise discovery, the path
+people actually use. It is off by default: advertising a Cast device on a real
+network is not a private act.
 
 What it cannot tell you is whether a *particular* television accepts the stream.
 That is why HLS is opt-in.

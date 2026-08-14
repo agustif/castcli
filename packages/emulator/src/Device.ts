@@ -18,11 +18,12 @@
 // what we *sent* checks the easy half. Here the emulated device really does
 // request the playlists and segments, and a test can assert on what it got.
 
-import { Data, Effect, Option, Queue, Ref, Schema, Scope, Stream } from "effect"
+import { Data, Duration, Effect, Option, Queue, Ref, Schedule, Schema, Scope, Stream } from "effect"
 import { Brands } from "@castcli/domain"
 import { Frame } from "@castcli/protocol"
 import { HttpClient } from "effect/unstable/http"
 import * as tls from "node:tls"
+import * as Advertise from "./Advertise.ts"
 import * as Certificate from "./Certificate.ts"
 
 const RECEIVER = "receiver-0"
@@ -166,6 +167,20 @@ const decodeIncoming = Schema.decodeUnknownOption(Schema.fromJsonString(Incoming
 export const make = (options: {
   /** How many segments to pull before settling, for HLS content. */
   readonly segments?: number
+  /**
+   * Announce over mDNS so senders can *find* this device rather than being
+   * told where it is.
+   *
+   * Absent by default, and deliberately so: advertising a Cast device on a real
+   * network is not a private act — phones and televisions on the same LAN will
+   * list it and offer to play to something that is not a television.
+   */
+  readonly advertise?: {
+    readonly friendlyName: string
+    readonly model?: string
+    /** Loopback for a test; a LAN address to be discoverable for real. */
+    readonly address?: string
+  }
 } = {}): Effect.Effect<
   Device,
   never,
@@ -412,6 +427,26 @@ export const make = (options: {
             }))
         )
 
+        // A real receiver pings its sender every few seconds; senders treat the
+        // silence when it stops as the connection being gone. An emulated
+        // device that only ever answered would look dead to a sender that
+        // checks — so it does what a real one does.
+        yield* Effect.forkScoped(
+          Effect.repeat(
+            Effect.sync(() =>
+              socket.write(
+                Frame.encodeFrame({
+                  sourceId: RECEIVER,
+                  destinationId: "sender-0",
+                  namespace: Namespace.heartbeat,
+                  payload: Frame.Payload.Text({ value: JSON.stringify({ type: "PING" }) })
+                })
+              )
+            ),
+            Schedule.spaced(Duration.seconds(5))
+          )
+        )
+
         // Hold the scope open for as long as the sender is connected. Without
         // this the generator finishes the moment the handlers are attached, the
         // scope closes, and the reader above is interrupted before a single
@@ -449,6 +484,21 @@ export const make = (options: {
     const address = server.address()
     const port = Brands.Port.make(
       address !== null && typeof address === "object" ? address.port : 8009
+    )
+
+    // Started after the listener, so a sender that discovers the device and
+    // connects immediately finds something accepting connections.
+    yield* Effect.forEach(
+      options.advertise === undefined ? [] : [options.advertise],
+      (wanted) =>
+        Advertise.serve({
+          service: "_googlecast._tcp.local",
+          friendlyName: wanted.friendlyName,
+          model: wanted.model ?? "Emulated Cast Device",
+          port,
+          address: wanted.address ?? "127.0.0.1"
+        }),
+      { discard: true }
     )
 
     return {

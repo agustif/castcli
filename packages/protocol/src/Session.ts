@@ -17,8 +17,10 @@ import {
   Stream,
   Struct
 } from "effect"
+import { Cause, Deferred } from "effect"
 import {
   CastProtocolError,
+  ConnectionLostError,
   LoadFailedError,
   MediaSessionId,
   type Seconds,
@@ -105,7 +107,7 @@ export interface Session {
   readonly mediaCommand: (command: MediaCommand) => Effect.Effect<void, CastProtocolError>
   readonly setVolume: (level: VolumeLevel) => Effect.Effect<void>
   readonly stopReceiver: Effect.Effect<void>
-  readonly statuses: Stream.Stream<PlayerStatus>
+  readonly statuses: Stream.Stream<PlayerStatus, ConnectionLostError>
 }
 
 /**
@@ -257,9 +259,27 @@ export const makeOver = Effect.fn("CastSession.makeOver")(function*(
         )
     })
 
-  const pump = socket.messages.pipe(Stream.mapEffect(route), Stream.runDrain)
+  // The pump's failure is the session's failure.
+  //
+  // Forking it and forgetting the result is how a dead connection stayed
+  // invisible: the socket's watchdog fired, the fiber died with it, and the
+  // status stream simply never produced again — indistinguishable from a film
+  // playing quietly. The failure is put where a caller is already looking,
+  // which is the status stream.
+  const lost = yield* Deferred.make<never, ConnectionLostError>()
 
-  yield* Effect.forkScoped(pump)
+  yield* Effect.forkScoped(
+    socket.messages.pipe(
+      Stream.mapEffect(route),
+      Stream.runDrain,
+      Effect.catchCause((cause) =>
+        Effect.andThen(
+          Effect.logDebug(`cast connection ended: ${cause}`),
+          Deferred.failCause(lost, Cause.map(cause, () => new ConnectionLostError()))
+        )
+      )
+    )
+  )
 
   // Heartbeat. Effect.repeat on a Schedule rather than setInterval, so it is
   // interruptible with the scope and testable with TestClock.
@@ -430,7 +450,13 @@ export const makeOver = Effect.fn("CastSession.makeOver")(function*(
       })
     }),
 
-    statuses: Stream.fromPubSub(statuses),
+    // Merged with the connection's own end, so a caller reading statuses finds
+    // out that the device has gone rather than waiting for one that never
+    // comes.
+    statuses: Stream.merge(
+      Stream.fromPubSub(statuses),
+      Stream.fromEffect(Deferred.await(lost))
+    ),
     loadFailures: Stream.fromPubSub(loadFailures)
   }
 

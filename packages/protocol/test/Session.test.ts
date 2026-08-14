@@ -13,6 +13,7 @@ import type { CastMessage } from "../src/Frame.ts"
 import { Payload } from "../src/Frame.ts"
 import * as Ns from "../src/Namespace.ts"
 import { makeOver, MediaCommand } from "../src/Session.ts"
+import { ConnectionLostError } from "@castcli/domain"
 
 /**
  * What the fake receiver was told, in order. The payload is decoded rather than
@@ -236,5 +237,23 @@ describe("Session", () => {
 
       const media = (yield* fake.sent).filter((message) => message.namespace === Ns.Media)
       assert.deepStrictEqual(media.map((message) => message.payload["type"]), ["GET_STATUS"])
+    }).pipe(Effect.scoped))
+
+  it.effect("reports a lost connection through the statuses stream", () =>
+    Effect.gen(function*() {
+      // A device that goes away does not say goodbye. The socket notices the
+      // silence and fails; the session has to pass that on, because the caller
+      // is watching statuses and nothing else. Forking the pump and forgetting
+      // its result is how a dead connection stayed invisible — the fiber died
+      // and the stream simply never produced again, which looks exactly like a
+      // film playing quietly.
+      const session = yield* makeOver({
+        send: () => Effect.void,
+        messages: Stream.fail(new ConnectionLostError())
+      })
+
+      const exit = yield* Effect.exit(Stream.runHead(session.statuses))
+
+      assert.isTrue(exit._tag === "Failure", "a dead connection produced no failure")
     }).pipe(Effect.scoped))
 })
