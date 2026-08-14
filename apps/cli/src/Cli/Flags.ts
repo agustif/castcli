@@ -12,7 +12,7 @@
 // same parsing rules instead of restating them.
 
 import { Argument, Flag } from "effect/unstable/cli"
-import { Ipv4, Seconds, StreamIndex } from "@castcli/domain"
+import { Ipv4, StreamIndex } from "@castcli/domain"
 import { TimeCode } from "./TimeCode.ts"
 
 /** The media file. `mustExist` turns a typo into a parse error, not a probe failure. */
@@ -47,8 +47,13 @@ export const subtitleStream = Flag.integer("subs").pipe(
   Flag.optional
 )
 
+/**
+ * Optional rather than defaulting to zero: "not given" and "start from the
+ * beginning" are different requests. Without the distinction there is no way to
+ * express resuming, because every invocation would look like `--seek 0`.
+ */
 export const seek = Flag.string("seek").pipe(
   Flag.withSchema(TimeCode),
-  Flag.withDescription("Start position: seconds, mm:ss or h:mm:ss"),
-  Flag.withDefault(Seconds.make(0))
+  Flag.withDescription("Start position: seconds, mm:ss or h:mm:ss (default: resume)"),
+  Flag.optional
 )

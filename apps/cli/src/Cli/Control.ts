@@ -13,6 +13,8 @@ import { Brands, Port } from "@castcli/domain"
 import { CastDevice, VolumeLevel } from "@castcli/domain"
 import { DeviceNotFoundError } from "@castcli/domain"
 import * as TimeCode from "./TimeCode.ts"
+import * as State from "../State.ts"
+import { SeekTargetError } from "@castcli/domain"
 
 /** Volume as people say it. */
 const Percentage = Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 100 })))
@@ -25,43 +27,60 @@ const deviceIp = Flag.string("ip").pipe(
   Flag.optional
 )
 
-/** Resolve a device the same way `play` does, so the flags behave identically. */
-const target = Effect.fn("Control.target")(function*(ip: Option.Option<Brands.Ipv4>) {
+const deviceAt = (address: Brands.Ipv4) =>
+  Effect.map(AppConfig, (config) =>
+    new CastDevice({ name: address, ip: address, port: Port.make(config.devicePort) }))
+
+/** The device the last `cast play` used, if this machine has ever run one. */
+const remembered = Effect.map(State.rememberedDevice, (address) => address)
+
+const discovered = Effect.gen(function*() {
   const config = yield* AppConfig
-  return yield* Option.match(ip, {
-    onSome: (address) =>
-      Effect.succeed(
-        new CastDevice({
-          name: address,
-          ip: address,
-          port: Port.make(config.devicePort)
-        })
-      ),
-    onNone: () =>
-      Effect.flatMap(
-        Mdns.discoverWithRetry(CAST_SERVICE, config.discoveryTimeout),
-        (devices) =>
-          Option.match(Option.fromNullishOr(devices[0]), {
-            onSome: (device) => Effect.succeed(device),
-            onNone: () =>
-              Effect.fail(
-                new DeviceNotFoundError({ query: "(first available)", found: [] })
-              )
-          })
-      )
+  const devices = yield* Mdns.discoverWithRetry(CAST_SERVICE, config.discoveryTimeout)
+  return yield* Option.match(Option.fromNullishOr(devices[0]), {
+    onSome: (device) => Effect.succeed(device),
+    onNone: () => Effect.fail(new DeviceNotFoundError({ query: "(first available)", found: [] }))
   })
 })
 
 /** Attach, read one status, act on it, and report what the receiver now says. */
-const withSession = <A>(
+const withSession = <A, E, R>(
   ip: Option.Option<Brands.Ipv4>,
   act: (
     session: CastSession.Session,
     status: Option.Option<CastSession.PlayerStatus>
-  ) => Effect.Effect<A>
+  ) => Effect.Effect<A, E, R>
 ) =>
   Effect.gen(function*() {
-    const device = yield* target(ip)
+    // An explicit --ip is obeyed exactly. Otherwise the device from the last
+    // session is tried first, because a four second mDNS sweep before every
+    // pause is most of what those commands cost — and if that address has gone
+    // stale, discovery still runs, so the shortcut can only save time.
+    const shortcut = Option.isSome(ip) ? ip : yield* remembered
+    const attempt = (device: CastDevice) => run(device, act)
+
+    return yield* Option.match(shortcut, {
+      onNone: () => Effect.flatMap(discovered, attempt),
+      onSome: (address) =>
+        Effect.flatMap(deviceAt(address), attempt).pipe(
+          Option.isSome(ip)
+            ? (self) => self
+            : Effect.catchTag(
+              "DeviceUnreachableError",
+              () => Effect.flatMap(discovered, attempt)
+            )
+        )
+    })
+  })
+
+const run = <A, E, R>(
+  device: CastDevice,
+  act: (
+    session: CastSession.Session,
+    status: Option.Option<CastSession.PlayerStatus>
+  ) => Effect.Effect<A, E, R>
+) =>
+  Effect.gen(function*() {
     const session = yield* CastSession.make(device.ip, device.port)
     yield* session.join
 
@@ -167,4 +186,96 @@ const stop = Command.make(
   })
 ).pipe(Command.withDescription("Stop playback and close the receiver session"))
 
-export const all = [status, pause, resume, toggle, volume, stop]
+/**
+ * Seek within the running stream.
+ *
+ * Three flags rather than one signed argument: `cast seek -5:00` is parsed as a
+ * flag by any argument parser, and quoting your way around that is worse than
+ * saying what you mean.
+ *
+ * The arithmetic is the interesting part. The receiver reports and accepts time
+ * *within the current stream*, which begins wherever the last LOAD started — so
+ * a position in the film is `offset + reported`. `play` publishes that offset,
+ * and without it an absolute seek would silently land in the wrong place.
+ */
+const seek = Command.make(
+  "seek",
+  {
+    ip: deviceIp,
+    to: Flag.string("to").pipe(
+      Flag.withSchema(TimeCode.TimeCode),
+      Flag.withDescription("Absolute position: seconds, mm:ss or h:mm:ss"),
+      Flag.optional
+    ),
+    forward: Flag.string("forward").pipe(
+      Flag.withSchema(TimeCode.TimeCode),
+      Flag.withDescription("Skip forward by this much"),
+      Flag.optional
+    ),
+    back: Flag.string("back").pipe(
+      Flag.withSchema(TimeCode.TimeCode),
+      Flag.withDescription("Rewind by this much"),
+      Flag.optional
+    )
+  },
+  Effect.fn(function*({ back, forward, ip, to }) {
+    const active = yield* State.activeStream
+    const offset = Option.match(active, {
+      onNone: () => Brands.Seconds.make(0),
+      onSome: (stream) => stream.offsetSeconds
+    })
+
+    yield* withSession(ip, (session, current) =>
+      Effect.gen(function*() {
+        const within = Option.match(current, {
+          onNone: () => 0,
+          onSome: (playing) => playing.currentTimeSeconds
+        })
+        const now = offset + within
+
+        // Exactly one of the three, resolved to a position in the film.
+        const wanted = yield* Option.match(
+          Option.orElse(
+            Option.map(to, (at) => Number(at)),
+            () =>
+              Option.orElse(
+                Option.map(forward, (by) => now + by),
+                () => Option.map(back, (by) => now - by)
+              )
+          ),
+          {
+            onNone: () =>
+              Effect.fail(
+                new SeekTargetError({ message: "say where to seek: --to, --forward or --back" })
+              ),
+            onSome: (at) => Effect.succeed(Math.max(0, at))
+          }
+        )
+
+        const at = Brands.Seconds.make(wanted)
+
+        // The stream only exists from its offset onwards, so anything earlier
+        // cannot be reached by seeking — it needs a fresh LOAD, and only the
+        // process serving the file can issue one. Asking it is far better than
+        // refusing: rewinding past the point a film was resumed from is the
+        // ordinary case, not an edge one.
+        yield* Effect.when(
+          Effect.andThen(
+            State.requestSeek(at),
+            Console.log(`rewinding to ${TimeCode.format(at)} (the stream restarts there)`)
+          ),
+          Effect.succeed(wanted < offset)
+        )
+
+        yield* Effect.when(
+          Effect.andThen(
+            session.mediaCommand(Session.MediaCommand.SEEK({ currentTime: wanted - offset })),
+            Console.log(`seeking to ${TimeCode.format(at)}`)
+          ),
+          Effect.succeed(wanted >= offset)
+        )
+      }))
+  })
+).pipe(Command.withDescription("Seek within what is playing"))
+
+export const all = [status, pause, resume, toggle, seek, volume, stop]

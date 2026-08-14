@@ -58,6 +58,7 @@ import { Session as CastSession } from "@castcli/protocol"
 import { Media } from "@castcli/protocol"
 import { HttpServer as HttpServerPlatform } from "@castcli/platform"
 import { routes, type SessionState } from "../Server/Routes.ts"
+import * as State from "../State.ts"
 
 const CAST_SERVICE = "_googlecast._tcp.local"
 
@@ -145,22 +146,31 @@ const discoverDevice = Effect.fn("cast.discoverDevice")(function*(
  * mDNS unicast replies get dropped often enough on a congested network that an
  * explicit `--ip` is worth having: it skips discovery entirely.
  */
+const deviceAt = (address: Ipv4, devicePort: number) =>
+  new CastDevice({ name: address, ip: address, port: Port.make(devicePort) })
+
 const resolveDevice = (
-  ip: Option.Option<string>,
+  ip: Option.Option<Ipv4>,
   name: Option.Option<string>,
   devicePort: number,
   timeout: Duration.Duration
 ) =>
   Option.match(ip, {
-    onSome: (address) =>
-      Effect.succeed(
-        new CastDevice({
-          name: address,
-          ip: Ipv4.make(address),
-          port: Port.make(devicePort)
-        })
-      ),
-    onNone: () => discoverDevice(name, timeout)
+    // An explicit address is obeyed exactly.
+    onSome: (given) => Effect.succeed(deviceAt(given, devicePort)),
+    onNone: () =>
+      // A name has to be matched, so it always goes through discovery.
+      // Otherwise the device from the last session is worth trying first: it
+      // saves a four second sweep, and if it has gone stale — a different
+      // network, a device that moved — discovery still runs, so the shortcut
+      // can only save time.
+      Option.isSome(name)
+        ? discoverDevice(name, timeout)
+        : Effect.flatMap(State.rememberedDevice, (last) =>
+          Option.match(last, {
+            onNone: () => discoverDevice(name, timeout),
+            onSome: (known) => Effect.succeed(deviceAt(known, devicePort))
+          }))
   })
 
 /**
@@ -292,8 +302,24 @@ const play = Command.make(
       onSome: (rung) => Effect.succeed(rung)
     })
 
+    // Resume where this file was left, unless a position was asked for. The
+    // remembered position is the reason `--seek` is rarely needed twice.
+    const resumed = yield* Option.match(seek, {
+      onSome: (at) => Effect.succeed(at),
+      onNone: () =>
+        Effect.flatMap(State.positionOf(absolute), (remembered) =>
+          Option.match(remembered, {
+            onNone: () => Effect.succeed(Seconds.make(0)),
+            onSome: (at) =>
+              Effect.as(
+                Console.log(`resuming  ${TimeCode.format(at)} (pass --seek 0 to start over)`),
+                at
+              )
+          }))
+    })
+
     const state = yield* Ref.make<SessionState>({
-      offsetSeconds: seek,
+      offsetSeconds: resumed,
       rung: startingRung,
       cues
     })
@@ -304,12 +330,12 @@ const play = Command.make(
       config.devicePort,
       config.discoveryTimeout
     )
+    yield* State.rememberDevice(target.ip)
     const advertise = yield* localAddress(config.advertiseHost)
-    const baseUrl = `http://${advertise}:${config.port}`
 
     // Where the viewer actually is, tracked from the receiver's own reports so
     // a reload resumes rather than restarting the film.
-    const position = yield* Ref.make(seek)
+    const position = yield* Ref.make(resumed)
 
     // A rung change has to re-issue LOAD: the receiver is already streaming, so
     // updating the state alone would never reach it. The controller publishes
@@ -324,28 +350,47 @@ const play = Command.make(
     })
 
     // Serve on every interface; only the advertised URL has to be right.
-    const server = HttpRouter.serve(
-      routes({
-        file: absolute,
-        videoIndex: StreamIndex.make(video.index),
-        audioIndex,
-        audioBitrate: config.audioBitrate,
-        state,
-        onBytes: controller.noteBytes
-      })
-    ).pipe(Layer.provide(HttpServerPlatform.layer(config.port)))
+    const serverOn = (port: number) =>
+      HttpRouter.serve(
+        routes({
+          file: absolute,
+          videoIndex: StreamIndex.make(video.index),
+          audioIndex,
+          audioBitrate: config.audioBitrate,
+          state,
+          onBytes: controller.noteBytes
+        })
+      ).pipe(Layer.provide(HttpServerPlatform.layer(port)))
 
     // Built into the enclosing scope rather than launched in a forked fiber:
     // acquisition *is* the bind, so this returns only once the port is
     // accepting. Forking it raced the LOAD below — the receiver was handed a
     // URL for a server that had not started listening yet, and simply did
     // nothing.
-    yield* Layer.build(server).pipe(
-      Effect.catchTag(
-        "ServeError",
-        (cause) => Effect.fail(new ServerBindError({ port: config.port, cause }))
-      )
+    //
+    // The configured port is a preference rather than a requirement: the
+    // receiver is told which URL to pull, so any free port serves just as well.
+    // Falling back to an ephemeral one means a port already taken — by another
+    // cast, or by some unrelated program that happens to like 8021 — stops
+    // being a reason to refuse to play a film.
+    const servingPort = yield* Layer.build(serverOn(config.port)).pipe(
+      Effect.as(config.port),
+      Effect.catchTag("ServeError", () =>
+        Effect.gen(function*() {
+          const fallback = yield* HttpServerPlatform.freePort
+          yield* Console.log(`port ${config.port} is taken; serving on ${fallback} instead`)
+          yield* Layer.build(serverOn(fallback)).pipe(
+            Effect.catchTag(
+              "ServeError",
+              (cause) => Effect.fail(new ServerBindError({ port: config.port, cause }))
+            )
+          )
+          return fallback
+        }))
     )
+
+    const baseUrl = `http://${advertise}:${servingPort}`
+
     yield* Effect.forkScoped(controller.run)
 
     const sendLoad = Effect.fn("cast.sendLoad")(function*(session: CastSession.Session) {
@@ -381,6 +426,12 @@ const play = Command.make(
         Effect.succeed(Option.isSome(subtitleIndex))
       )
       yield* session.load(media, Option.isNone(subtitleIndex) ? [] : [SUBTITLE_TRACK_ID])
+      // The receiver reports time within this stream, which begins at the
+      // offset just loaded. `cast seek` runs in a different process and has no
+      // other way to learn it.
+      yield* State.setActive(
+        Option.some(new State.ActiveStream({ file: absolute, offsetSeconds: current.offsetSeconds }))
+      )
       yield* controller.noteRestart
     })
 
@@ -400,8 +451,15 @@ const play = Command.make(
     // "the TV is off" from "the TV dropped the connection".
     const everConnected = yield* Ref.make(false)
 
-    const runSession = Effect.gen(function*() {
-      const session = yield* CastSession.make(target.ip, target.port)
+    // Seek requests already in the file belong to a previous run; only ones
+    // newer than this are ours to act on.
+    const lastSeekId = yield* Ref.make(
+      Option.match(yield* State.pendingSeek, { onNone: () => 0, onSome: (request) => request.id })
+    )
+
+    const runSession = (castDevice: CastDevice) =>
+      Effect.gen(function*() {
+      const session = yield* CastSession.make(castDevice.ip, castDevice.port)
       yield* session.launch
       yield* Ref.set(everConnected, true)
       yield* sendLoad(session)
@@ -413,6 +471,32 @@ const play = Command.make(
             `\n  the receiver rejected the stream: ${failure.detail}\n` +
               "  try a different --audio stream, or check `cast streams` for the track indices"
           ))
+      )
+
+      // A seek asked for by `cast seek` that lands before this stream begins.
+      // Polling a file is unglamorous, but the two processes share nothing
+      // else, and the alternative — a socket of our own — is a great deal of
+      // machinery for one integer.
+      yield* Effect.forkScoped(
+        Effect.repeat(
+          Effect.gen(function*() {
+            const requested = yield* State.pendingSeek
+            yield* Option.match(requested, {
+              onNone: () => Effect.void,
+              onSome: (request) =>
+                Effect.when(
+                  Effect.gen(function*() {
+                    yield* Ref.set(lastSeekId, request.id)
+                    yield* Ref.set(position, request.toSeconds)
+                    yield* Console.log(`\n  seeking to ${TimeCode.format(request.toSeconds)}…`)
+                    yield* Queue.offer(reloads, (yield* Ref.get(state)).rung)
+                  }),
+                  Effect.map(Ref.get(lastSeekId), (seen) => request.id > seen)
+                )
+            })
+          }),
+          Schedule.spaced(Duration.seconds(1))
+        )
       )
 
       yield* Effect.forkScoped(
@@ -443,7 +527,17 @@ const play = Command.make(
       return yield* Effect.fail(new ConnectionLostError())
     })
 
-    yield* runSession.pipe(
+    // Saved on a timer rather than per status report: the receiver sends one a
+    // second, and a bookmark does not need that resolution.
+    yield* Effect.forkScoped(
+      Effect.repeat(
+        Effect.flatMap(Ref.get(position), (at) => State.rememberPosition(absolute, at)),
+        Schedule.spaced(Duration.seconds(15))
+      )
+    )
+
+    const attempt = (castDevice: CastDevice) =>
+      runSession(castDevice).pipe(
       Effect.tapError(() =>
         Effect.gen(function*() {
           const at = yield* Ref.get(position)
@@ -473,7 +567,37 @@ const play = Command.make(
             Ref.get(everConnected),
             (connected) => connected || error._tag === "ConnectionLostError"
           )
-      })
+      }),
+      // After the retries, not inside them: however this ends — the film
+      // finishing, the device going away, a Ctrl-C — the last known position is
+      // worth keeping, and the active stream is not, because nothing is playing
+      // any more. Inside the retry this would clear the active stream during
+      // every transient reconnect.
+      Effect.ensuring(
+        Effect.gen(function*() {
+          yield* State.rememberPosition(absolute, yield* Ref.get(position))
+          yield* State.setActive(Option.none())
+        })
+      )
+      )
+
+    yield* attempt(target).pipe(
+      // The remembered address is a shortcut, so it must not become a new way
+      // to fail: a device that took a different lease is found by discovery,
+      // not reported as switched off.
+      Option.isSome(ip)
+        ? (self) => self
+        : Effect.catchTag(
+          "DeviceUnreachableError",
+          () =>
+            Effect.flatMap(
+              Effect.tap(
+                discoverDevice(device, config.discoveryTimeout),
+                (found) => State.rememberDevice(found.ip)
+              ),
+              attempt
+            )
+        )
     )
   })
 ).pipe(Command.withDescription("Stream a file to a Cast device"))
@@ -564,6 +688,7 @@ const cast = Command.make("cast").pipe(
 // platform layer rather than merged beside it.
 const MainLayer = Layer.mergeAll(
   Ffmpeg.layer.pipe(Layer.provide(NodeServices.layer)),
+  State.Store.layer.pipe(Layer.provide(NodeServices.layer)),
   NodeServices.layer
 )
 

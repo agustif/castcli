@@ -72,6 +72,15 @@ export class NoVideoStreamError extends Schema.TaggedError<NoVideoStreamError>()
 }
 
 /**
+ * A seek that cannot be performed: no target given, or a target earlier than
+ * the running stream begins.
+ */
+export class SeekTargetError extends Schema.TaggedError<SeekTargetError>()(
+  "SeekTargetError",
+  { message: Schema.String }
+) {}
+
+/**
  * The local media server could not take its port. Almost always a previous
  * `cast play` still holding it — which otherwise surfaced as a bare
  * `ServeError`, leaving the person with nothing to act on.
