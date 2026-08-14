@@ -4,12 +4,13 @@
 // better and the controller can reason about direction without comparing
 // heights and bitrates separately.
 
-import { Array, Order } from "effect"
+import { Array, Option, Order } from "effect"
 import { Bitrate, Height, Rung } from "@castcli/domain"
 
 interface LadderOptions {
-  readonly sourceHeight: number
-  readonly sourceBitrate: number | null
+  readonly sourceHeight: Height
+  /** Absent when the container did not report one — common for Matroska. */
+  readonly sourceBitrate: Option.Option<Bitrate>
   /** Whether the source can be passed through without re-encoding. */
   readonly canCopy: boolean
 }
@@ -32,11 +33,11 @@ export const build = (options: LadderOptions): ReadonlyArray<Rung> => {
 
   // Copying is both the best quality and the cheapest CPU, so it belongs at the
   // top of any ladder whose link can carry it.
-  const copy = options.canCopy && options.sourceBitrate !== null
-    ? [Rung.Copy({
-      height: Height.make(options.sourceHeight),
-      bitrate: Bitrate.make(options.sourceBitrate)
-    })]
+  const copy = options.canCopy
+    ? Option.match(options.sourceBitrate, {
+      onNone: () => [],
+      onSome: (bitrate) => [Rung.Copy({ height: options.sourceHeight, bitrate })]
+    })
     : []
 
   // Sorted and deduped by bitrate through Effect's combinators: subtraction as

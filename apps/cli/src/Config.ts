@@ -6,16 +6,17 @@
 // variable rather than silently becoming NaN.
 
 import { Config, Duration, Schema } from "effect"
+import { AudioBitrate, Ipv4, Port } from "@castcli/domain"
 
 const withDefault = <T>(codec: Schema.ConstraintCodec<T, unknown>, path: string, fallback: T) =>
   Config.schema(codec, path).pipe(Config.withDefault(fallback))
 
 export const AppConfig = Config.all({
   /** Port the media server listens on for the receiver to pull from. */
-  port: withDefault(Config.Port, "CAST_PORT", 8021),
+  port: withDefault(Port, "CAST_PORT", Port.make(8021)),
 
   /** Cast devices always listen on 8009; overridable for emulators and tests. */
-  devicePort: withDefault(Config.Port, "CAST_DEVICE_PORT", 8009),
+  devicePort: withDefault(Port, "CAST_DEVICE_PORT", Port.make(8009)),
 
   /** How long each mDNS sweep waits for replies. */
   discoveryTimeout: withDefault(
@@ -27,15 +28,19 @@ export const AppConfig = Config.all({
     Duration.seconds(4)
   ),
 
-  /** AAC is the one audio codec every Cast receiver accepts. */
-  audioBitrate: withDefault(Schema.String, "CAST_AUDIO_BITRATE", "128k"),
+  /**
+   * AAC is the one audio codec every Cast receiver accepts. Validated rather
+   * than passed through: this string goes straight to ffmpeg, and a typo there
+   * fails mid-transcode rather than at startup with the variable named.
+   */
+  audioBitrate: withDefault(AudioBitrate, "CAST_AUDIO_BITRATE", AudioBitrate.make("128k")),
 
   /**
    * Overrides the advertised LAN address. Normally auto-detected; set it when a
    * machine has several interfaces and picks the wrong one — the failure mode
    * this whole tool exists to avoid.
    */
-  advertiseHost: Config.schema(Schema.String, "CAST_ADVERTISE_HOST").pipe(Config.option)
+  advertiseHost: Config.schema(Ipv4, "CAST_ADVERTISE_HOST").pipe(Config.option)
 })
 
-export type AppConfig = typeof AppConfig extends Config.Config<infer A> ? A : never
+export type AppConfig = Config.Success<typeof AppConfig>

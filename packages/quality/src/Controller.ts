@@ -52,13 +52,16 @@ export const make = Effect.fn("Quality.make")(function*(options: {
     lastSwitchAt: now,
     burstUntil: now + Duration.toMillis(Signals.BURST),
     burstPeak: 0,
-    probingSince: 0,
+    probingSince: Option.none(),
     buckets: [],
     stalls: [],
     penalties: new Map()
   })
 
-  const switchTo = Effect.fn("Quality.switchTo")(function*(index: number, reason: string) {
+  const switchTo = Effect.fn("Quality.switchTo")(function*(
+    index: number,
+    reason: Signals.SwitchReason
+  ) {
     const current = yield* Ref.get(state)
     // Off either end of the ladder there is nothing to switch to, which is an
     // ordinary outcome rather than an error.
@@ -69,7 +72,8 @@ export const make = Effect.fn("Quality.make")(function*(options: {
           Effect.gen(function*() {
             yield* Ref.set(state, { ...current, index, rung })
             yield* Effect.logInfo(
-              `quality: ${describeRung(current.rung)} -> ${describeRung(rung)} (${reason})`
+              `quality: ${describeRung(current.rung)} -> ${describeRung(rung)} ` +
+                `(${Signals.describeReason(reason)})`
             )
             // The caller restarts the stream, which calls noteRestart().
             yield* onSwitch(rung)
@@ -97,9 +101,9 @@ export const make = Effect.fn("Quality.make")(function*(options: {
     // The first measurement sizes the ladder. After that a burst reading may
     // only pull quality *down*, and never while a probe is in flight.
     const mayAct = !current.initialised ||
-      (target < current.index && current.probingSince === 0)
+      (target < current.index && Option.isNone(current.probingSince))
     yield* Effect.when(
-      switchTo(target, `measured ~${(capacity / 1e6).toFixed(1)} Mbps`),
+      switchTo(target, Signals.SwitchReason.Measured({ capacityBps: capacity })),
       Effect.succeed(mayAct)
     )
   })
@@ -109,7 +113,7 @@ export const make = Effect.fn("Quality.make")(function*(options: {
     const rung = current.rung
     yield* Ref.set(state, {
       ...current,
-      probingSince: 0,
+      probingSince: Option.none(),
       // It played without stalling, so the link demonstrably carries this much.
       capacity: Math.max(current.capacity, rung.bitrate / Signals.SAFETY)
     })
@@ -124,7 +128,7 @@ export const make = Effect.fn("Quality.make")(function*(options: {
     yield* Ref.set(state, {
       ...current,
       penalties,
-      probingSince: 0,
+      probingSince: Option.none(),
       // A stall is evidence too: this rung clearly does not fit.
       capacity: Math.min(
         current.capacity === 0 ? Number.POSITIVE_INFINITY : current.capacity,
@@ -135,7 +139,7 @@ export const make = Effect.fn("Quality.make")(function*(options: {
     // rather than grinding down one rung at a time.
     yield* switchTo(
       Math.max(0, current.index - (clustered >= 2 ? 2 : 1)),
-      clustered >= 2 ? "repeated stalls" : "receiver was buffering"
+      clustered >= 2 ? Signals.SwitchReason.RepeatedStalls() : Signals.SwitchReason.Buffering()
     )
   })
 
@@ -144,8 +148,8 @@ export const make = Effect.fn("Quality.make")(function*(options: {
     const next = current.index + 1
     yield* Effect.when(
       Effect.andThen(
-        Ref.set(state, { ...current, probingSince: at }),
-        switchTo(next, "stable, probing higher")
+        Ref.set(state, { ...current, probingSince: Option.some(at) }),
+        switchTo(next, Signals.SwitchReason.Probing())
       ),
       Effect.succeed(Option.isSome(Array.get(ladder, next)) && !Signals.isPenalised(current, next, at))
     )

@@ -12,7 +12,7 @@
 // ordering rule is expressed once, in `build`, instead of being implied by the
 // order of `push` calls.
 
-import { Data, Match, Schema } from "effect"
+import { Data, Match, Option, Schema } from "effect"
 import type { Bitrate, Seconds, StreamIndex } from "@castcli/domain"
 import { Rung } from "@castcli/domain"
 
@@ -106,7 +106,7 @@ export interface TranscodeOptions {
   readonly file: string
   readonly offsetSeconds: Seconds
   readonly videoIndex: StreamIndex
-  readonly audioIndex: StreamIndex | null
+  readonly audioIndex: Option.Option<StreamIndex>
   readonly rung: Rung
   readonly audioBitrate: string
 }
@@ -150,7 +150,10 @@ export const transcode = (options: TranscodeOptions): ReadonlyArray<string> =>
     Arg.SeekInput({ at: options.offsetSeconds }),
     Arg.Input({ path: options.file }),
     Arg.Map({ stream: options.videoIndex }),
-    ...(options.audioIndex === null ? [] : [Arg.Map({ stream: options.audioIndex })]),
+    ...Option.match(options.audioIndex, {
+      onNone: () => [],
+      onSome: (stream) => [Arg.Map({ stream })]
+    }),
     ...videoFor(options.rung),
     Arg.Audio({ codec: "aac" }),
     Arg.AudioChannels({ count: 2 }),

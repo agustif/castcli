@@ -4,15 +4,18 @@
 // pausing does not restart the film. That is the whole reason `join` exists
 // separately from `launch`.
 
-import { Console, Duration, Effect, Match, Option, Stream } from "effect"
+import { Console, Duration, Effect, Match, Option, Schema, Stream } from "effect"
 import { Command, Flag } from "effect/unstable/cli"
 import { AppConfig } from "../Config.ts"
 import { Namespace, Session as CastSession } from "@castcli/protocol"
 import { Mdns } from "@castcli/platform"
 import { Brands, Port } from "@castcli/domain"
-import { CastDevice } from "@castcli/domain"
+import { CastDevice, VolumeLevel } from "@castcli/domain"
 import { DeviceNotFoundError } from "@castcli/domain"
 import * as TimeCode from "./TimeCode.ts"
+
+/** Volume as people say it. */
+const Percentage = Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 100 })))
 
 const CAST_SERVICE = "_googlecast._tcp.local"
 
@@ -142,12 +145,15 @@ const volume = Command.make(
   "volume",
   {
     ip: deviceIp,
+    // Percentage on the command line, because that is how people say it;
+    // decoded to the receiver's 0..1 scale before it leaves this module.
     level: Flag.integer("level").pipe(
+      Flag.withSchema(Percentage),
       Flag.withDescription("Volume percentage, 0-100")
     )
   },
   Effect.fn(function*({ ip, level }) {
-    yield* withSession(ip, (session) => session.setVolume(level / 100))
+    yield* withSession(ip, (session) => session.setVolume(VolumeLevel.make(level / 100)))
     yield* Console.log(`volume set to ${level}%`)
   })
 ).pipe(Command.withDescription("Set the device volume"))

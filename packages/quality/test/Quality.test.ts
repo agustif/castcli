@@ -8,7 +8,7 @@
 // every probe before it had played, so the stream oscillated forever.
 
 import { assert, describe, it } from "@effect/vitest"
-import { Duration, Effect, Fiber, Ref } from "effect"
+import { Duration, Effect, Fiber, Option, Ref } from "effect"
 import { TestClock } from "effect/testing"
 import { Bitrate, Height, Rung } from "@castcli/domain"
 import * as Ladder from "../src/Ladder.ts"
@@ -28,7 +28,7 @@ const baseState = (overrides: Partial<Signals.State> = {}): Signals.State => ({
   lastSwitchAt: 0,
   burstUntil: 0,
   burstPeak: 0,
-  probingSince: 0,
+  probingSince: Option.none(),
   buckets: [],
   stalls: [],
   penalties: new Map(),
@@ -37,21 +37,29 @@ const baseState = (overrides: Partial<Signals.State> = {}): Signals.State => ({
 
 describe("Ladder", () => {
   it("never offers a rung above the source resolution", () => {
-    const ladder = Ladder.build({ sourceHeight: 480, sourceBitrate: null, canCopy: false })
+    const ladder = Ladder.build({
+      sourceHeight: Height.make(480),
+      sourceBitrate: Option.none(),
+      canCopy: false
+    })
     assert.isTrue(ladder.every((r) => r.height <= 480))
   })
 
   it("puts stream-copy at the top when the source can be copied", () => {
     const ladder = Ladder.build({
-      sourceHeight: 1080,
-      sourceBitrate: 20_000_000,
+      sourceHeight: Height.make(1080),
+      sourceBitrate: Option.some(Bitrate.make(20_000_000)),
       canCopy: true
     })
     assert.strictEqual(ladder.at(-1)?._tag, "Copy")
   })
 
   it("is strictly increasing in bitrate, so 'one rung up' is always better", () => {
-    const ladder = Ladder.build({ sourceHeight: 1080, sourceBitrate: 4_000_000, canCopy: true })
+    const ladder = Ladder.build({
+      sourceHeight: Height.make(1080),
+      sourceBitrate: Option.some(Bitrate.make(4_000_000)),
+      canCopy: true
+    })
     const bitrates = ladder.map((r) => r.bitrate)
     assert.deepStrictEqual(bitrates, [...bitrates].toSorted((a, b) => a - b))
     assert.strictEqual(new Set(bitrates).size, bitrates.length, "no duplicates")
@@ -77,7 +85,7 @@ describe("Signals.phaseOf", () => {
 
   it("accepts a probe that has played without stalling", () => {
     const at = Duration.toMillis(Signals.PROBE_HOLD) + 10_000
-    const phase = Signals.phaseOf(baseState({ probingSince: 1, lastSwitchAt: 1 }), at)
+    const phase = Signals.phaseOf(baseState({ probingSince: Option.some(1), lastSwitchAt: 1 }), at)
     assert.strictEqual(phase._tag, "ProbeAccepted")
   })
 

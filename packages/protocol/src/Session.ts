@@ -6,7 +6,16 @@
 // it will accept anything, and the receiver drops you if heartbeats stop.
 
 import { Effect, Match, Option, PubSub, Ref, Schedule, Schema, Stream } from "effect"
-import { CastProtocolError, LoadFailedError } from "@castcli/domain"
+import {
+  CastProtocolError,
+  LoadFailedError,
+  MediaSessionId,
+  SessionId,
+  type TrackId,
+  TransportId,
+  VolumeLevel
+} from "@castcli/domain"
+import * as MediaNs from "./Media.ts"
 import * as Ns from "./Namespace.ts"
 import * as Messages from "./Messages.ts"
 import * as CastSocket from "./CastSocket.ts"
@@ -39,12 +48,15 @@ export interface Session {
   readonly loadFailures: Stream.Stream<LoadFailedError>
   /** Attach to a running session rather than starting a new one. */
   readonly join: Effect.Effect<void, CastProtocolError>
-  readonly load: (media: unknown, activeTrackIds: ReadonlyArray<number>) => Effect.Effect<void>
+  readonly load: (
+    media: MediaNs.MediaInformation,
+    activeTrackIds: ReadonlyArray<TrackId>
+  ) => Effect.Effect<void>
   readonly mediaCommand: (
     type: Ns.MediaCommand,
     extra?: Record<string, unknown>
   ) => Effect.Effect<void>
-  readonly setVolume: (level: number) => Effect.Effect<void>
+  readonly setVolume: (level: VolumeLevel) => Effect.Effect<void>
   readonly stopReceiver: Effect.Effect<void>
   readonly statuses: Stream.Stream<PlayerStatus>
 }
@@ -52,9 +64,11 @@ export interface Session {
 export const make = Effect.fn("CastSession.make")(function*(host: string, port: number) {
   const socket = yield* CastSocket.connect(host, port)
   const requestId = yield* Ref.make(1)
-  const transportId = yield* Ref.make<string | null>(null)
-  const sessionId = yield* Ref.make<string | null>(null)
-  const mediaSessionId = yield* Ref.make<number | null>(null)
+  // Option rather than null: "we have not been told yet" is a real state that
+  // every read has to consider, and a sentinel makes it easy to forget.
+  const transportId = yield* Ref.make(Option.none<TransportId>())
+  const sessionId = yield* Ref.make(Option.none<SessionId>())
+  const mediaSessionId = yield* Ref.make(Option.none<MediaSessionId>())
   const connected = yield* Ref.make<ReadonlySet<string>>(new Set())
 
   const nextRequestId = Ref.getAndUpdate(requestId, (n) => n + 1)
@@ -109,14 +123,24 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
           const app = status.status?.applications?.find(
             (candidate) => candidate.appId === Ns.DEFAULT_MEDIA_RECEIVER
           )
-          yield* Option.match(Option.fromNullishOr(app?.transportId), {
-            onNone: () => Effect.void,
-            onSome: (value) => Ref.set(transportId, value)
-          })
-          yield* Option.match(Option.fromNullishOr(app?.sessionId), {
-            onNone: () => Effect.void,
-            onSome: (value) => Ref.set(sessionId, value)
-          })
+          // Both ids are decoded, not merely copied: an empty string here
+          // would be accepted by the wire schema and then addressed to.
+          yield* Ref.update(transportId, (current) =>
+            Option.orElse(
+              Option.flatMap(
+                Option.fromNullishOr(app?.transportId),
+                (value) => TransportId.makeOption(value)
+              ),
+              () => current
+            ))
+          yield* Ref.update(sessionId, (current) =>
+            Option.orElse(
+              Option.flatMap(
+                Option.fromNullishOr(app?.sessionId),
+                (value) => SessionId.makeOption(value)
+              ),
+              () => current
+            ))
         })
     })
 
@@ -129,10 +153,14 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
             onNone: () => Effect.void,
             onSome: (status) =>
               Effect.gen(function*() {
-                yield* Option.match(Option.fromNullishOr(status.mediaSessionId), {
-                  onNone: () => Effect.void,
-                  onSome: (id) => Ref.set(mediaSessionId, id)
-                })
+                yield* Ref.update(mediaSessionId, (current) =>
+                  Option.orElse(
+                    Option.flatMap(
+                      Option.fromNullishOr(status.mediaSessionId),
+                      (id) => MediaSessionId.makeOption(id)
+                    ),
+                    () => current
+                  ))
                 yield* PubSub.publish(statuses, {
                   playerState: status.playerState ?? "IDLE",
                   currentTimeSeconds: status.currentTime ?? 0
@@ -197,11 +225,10 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
     // via retry keeps the timeout and the backoff in the Effect, rather than in
     // an ad-hoc promise race.
     const transport = yield* Ref.get(transportId).pipe(
-      Effect.flatMap((value) =>
-        value === null
-          ? Effect.fail(new CastProtocolError({ message: "receiver app not up yet" }))
-          : Effect.succeed(value)
-      ),
+      Effect.flatMap(Option.match({
+        onNone: () => Effect.fail(new CastProtocolError({ message: "receiver app not up yet" })),
+        onSome: (value: TransportId) => Effect.succeed(value)
+      })),
       Effect.retry(Schedule.spaced("250 millis")),
       Effect.timeoutOrElse({
         duration: "15 seconds",
@@ -216,9 +243,15 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
     yield* openConnection(transport)
   })
 
-  const withTransport = <A>(f: (transport: string) => Effect.Effect<A>) =>
-    Effect.flatMap(Ref.get(transportId), (transport) =>
-      transport === null ? Effect.void : Effect.asVoid(f(transport)))
+  const withTransport = <A>(f: (transport: TransportId) => Effect.Effect<A>) =>
+    Effect.flatMap(
+      Ref.get(transportId),
+      Option.match({
+        // Before the receiver app is up there is nothing to address.
+        onNone: () => Effect.void,
+        onSome: (transport: TransportId) => Effect.asVoid(f(transport))
+      })
+    )
 
   /**
    * Attach to a session that is already running, without relaunching it — what
@@ -228,11 +261,11 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
     const id = yield* nextRequestId
     yield* send(RECEIVER, Ns.Receiver, { type: "GET_STATUS", requestId: id })
     const transport = yield* Ref.get(transportId).pipe(
-      Effect.flatMap((value) =>
-        value === null
-          ? Effect.fail(new CastProtocolError({ message: "no session is running on that device" }))
-          : Effect.succeed(value)
-      ),
+      Effect.flatMap(Option.match({
+        onNone: () =>
+          Effect.fail(new CastProtocolError({ message: "no session is running on that device" })),
+        onSome: (value: TransportId) => Effect.succeed(value)
+      })),
       Effect.retry(Schedule.spaced("250 millis")),
       Effect.timeoutOrElse({
         duration: "8 seconds",
@@ -259,7 +292,7 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
           yield* send(transport, Ns.Media, {
             type: "LOAD",
             requestId: id,
-            sessionId: currentSession,
+            sessionId: Option.getOrUndefined(currentSession),
             media,
             autoplay: true,
             currentTime: 0,
@@ -273,10 +306,16 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
           const media = yield* Ref.get(mediaSessionId)
           const id = yield* nextRequestId
           // Before the first MEDIA_STATUS there is no session to command.
-          yield* Effect.when(
-            send(transport, Ns.Media, { type, requestId: id, mediaSessionId: media, ...extra }),
-            Effect.succeed(media !== null)
-          )
+          yield* Option.match(media, {
+            onNone: () => Effect.void,
+            onSome: (mediaSession) =>
+              send(transport, Ns.Media, {
+                type,
+                requestId: id,
+                mediaSessionId: mediaSession,
+                ...extra
+              })
+          })
         })),
 
     setVolume: (level) =>
@@ -285,17 +324,21 @@ export const make = Effect.fn("CastSession.make")(function*(host: string, port: 
         yield* send(RECEIVER, Ns.Receiver, {
           type: "SET_VOLUME",
           requestId: id,
-          volume: { level: Math.max(0, Math.min(1, level)) }
+          // No clamp: the brand already rejects anything outside 0..1, so a bad
+        // value fails where it was written rather than being silently altered.
+        volume: { level }
         })
       }),
 
     stopReceiver: Effect.gen(function*() {
-      const current = yield* Ref.get(sessionId)
+      const running = yield* Ref.get(sessionId)
       const id = yield* nextRequestId
-      yield* Effect.when(
-        send(RECEIVER, Ns.Receiver, { type: "STOP", requestId: id, sessionId: current }),
-        Effect.succeed(current !== null)
-      )
+      yield* Option.match(running, {
+        // Nothing has been launched, so there is nothing to stop.
+        onNone: () => Effect.void,
+        onSome: (launched) =>
+          send(RECEIVER, Ns.Receiver, { type: "STOP", requestId: id, sessionId: launched })
+      })
     }),
 
     statuses: Stream.fromPubSub(statuses),

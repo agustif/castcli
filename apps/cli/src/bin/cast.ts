@@ -30,7 +30,16 @@ import * as path from "node:path"
 
 import { AppConfig } from "../Config.ts"
 import { canStreamCopy, Ffmpeg } from "@castcli/media"
-import { Ipv4, Port, type Rung, Seconds, StreamIndex, TrackId, describeRung } from "@castcli/domain"
+import {
+  describeRung,
+  Height,
+  Ipv4,
+  Port,
+  type Rung,
+  Seconds,
+  StreamIndex,
+  TrackId
+} from "@castcli/domain"
 import {
   ConnectionLostError,
   DeviceNotFoundError,
@@ -179,11 +188,13 @@ const play = Command.make(
       onSome: (found) => Effect.succeed(found)
     })
 
-    const firstAudio = info.audioStreams[0]?.index
-    const audioIndex = Option.getOrElse(
-      audio,
-      () => firstAudio === undefined ? null : StreamIndex.make(firstAudio)
-    )
+    // Fall back to the first audio track when none was named. Both the flag
+    // and the fallback are Options, so "no audio at all" stays representable.
+    const audioIndex = Option.orElse(audio, () =>
+      Option.flatMap(
+        Array.head(info.audioStreams),
+        (stream) => StreamIndex.makeOption(stream.index)
+      ))
     const subtitleIndex = Option.getOrUndefined(subs) ?? null
     const subtitleLanguage = info.subtitleStreams.find((s) => s.index === subtitleIndex)?.language ??
       "und"
@@ -199,8 +210,13 @@ const play = Command.make(
       )
 
     const ladder = Ladder.build({
-      sourceHeight: video.height ?? 1080,
-      sourceBitrate: Number(video.bit_rate) || null,
+      // ffprobe omits either field for some containers; the schema already
+      // decoded them, so absence is the only thing left to handle.
+      sourceHeight: Option.getOrElse(
+        Option.flatMap(Option.fromNullishOr(video.height), (h) => Height.makeOption(h)),
+        () => Height.make(1080)
+      ),
+      sourceBitrate: Option.fromNullishOr(video.bit_rate),
       canCopy: canStreamCopy(video)
     })
     const startIndex = Ladder.startingIndex(ladder)

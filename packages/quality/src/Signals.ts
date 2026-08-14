@@ -5,7 +5,7 @@
 // half is one exhaustive match with no conditional statements — and adding a
 // new situation is a compile error until it is handled.
 
-import { Data, Duration } from "effect"
+import { Data, Duration, Match, Option } from "effect"
 import type { Rung } from "@castcli/domain"
 
 // Durations rather than bare millisecond numbers: the unit is part of the type,
@@ -59,12 +59,34 @@ export interface State {
   readonly lastSwitchAt: number
   readonly burstUntil: number
   readonly burstPeak: number
-  /** When a deliberate probe upward began; 0 when not probing. */
-  readonly probingSince: number
+  /** When a deliberate probe upward began. Absent when not probing. */
+  readonly probingSince: Option.Option<number>
   readonly buckets: ReadonlyArray<Bucket>
   readonly stalls: ReadonlyArray<number>
   readonly penalties: ReadonlyMap<number, Penalty>
 }
+
+/**
+ * Why a switch happened. A closed set rather than a free-form string, so the
+ * log line and the reasoning stay in step — one of these carries a measurement
+ * that has to be formatted, which a bare string invited doing inconsistently.
+ */
+export type SwitchReason = Data.TaggedEnum<{
+  readonly Measured: { readonly capacityBps: number }
+  readonly Buffering: {}
+  readonly RepeatedStalls: {}
+  readonly Probing: {}
+}>
+
+export const SwitchReason = Data.taggedEnum<SwitchReason>()
+
+export const describeReason: (reason: SwitchReason) => string = Match.type<SwitchReason>().pipe(
+  Match.tag("Measured", ({ capacityBps }) => `measured ~${(capacityBps / 1e6).toFixed(1)} Mbps`),
+  Match.tag("Buffering", () => "receiver was buffering"),
+  Match.tag("RepeatedStalls", () => "repeated stalls"),
+  Match.tag("Probing", () => "stable, probing higher"),
+  Match.exhaustive
+)
 
 /** What the controller should be doing right now. */
 export type Phase = Data.TaggedEnum<{
@@ -139,7 +161,10 @@ export const phaseOf = (state: State, at: number): Phase =>
         ? state.burstPeak
         : state.capacity * 0.4 + state.burstPeak * 0.6
     })
-    : state.probingSince > 0 && at - state.probingSince > ms(PROBE_HOLD)
+    : Option.match(state.probingSince, {
+      onNone: () => false,
+      onSome: (since) => at - since > ms(PROBE_HOLD)
+    })
     ? Phase.ProbeAccepted()
     : at - state.lastSwitchAt < ms(SETTLE)
     ? Phase.Settling()

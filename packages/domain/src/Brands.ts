@@ -66,6 +66,49 @@ export const Port = Schema.Int.pipe(
 )
 export type Port = typeof Port.Type
 
+/**
+ * Identifiers the receiver hands us. They are opaque strings, but they are not
+ * interchangeable: sending a media command to a session id, or connecting to a
+ * media session id, both produce silence rather than an error.
+ */
+export const SessionId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("SessionId")
+)
+export type SessionId = typeof SessionId.Type
+
+/** The destination a media command must be addressed to. */
+export const TransportId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("TransportId")
+)
+export type TransportId = typeof TransportId.Type
+
+/** Identifies the loaded media, and must accompany every media command. */
+export const MediaSessionId = Schema.Int.pipe(Schema.brand("MediaSessionId"))
+export type MediaSessionId = typeof MediaSessionId.Type
+
+/**
+ * An audio bitrate in ffmpeg's spelling: a number with a unit suffix. Kept as a
+ * pattern rather than a number because it is passed through to ffmpeg verbatim.
+ */
+export const AudioBitrate = Schema.String.pipe(
+  Schema.check(Schema.isPattern(/^\d+k$/)),
+  Schema.brand("AudioBitrate")
+)
+export type AudioBitrate = typeof AudioBitrate.Type
+
+/**
+ * Receiver volume, 0 to 1. Branded because the previous signature took any
+ * number and silently clamped it, so `setVolume(20)` — a plausible way to mean
+ * twenty percent — quietly became full volume.
+ */
+export const VolumeLevel = Schema.Number.pipe(
+  Schema.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+  Schema.brand("VolumeLevel")
+)
+export type VolumeLevel = typeof VolumeLevel.Type
+
 /** Identifier for a text track offered to the receiver. */
 export const TrackId = Schema.Int.pipe(Schema.brand("TrackId"))
 export type TrackId = typeof TrackId.Type
