@@ -11,7 +11,13 @@
 // pipeline installed is a suite people stop running.
 
 import { assert, describe, it } from "@effect/vitest"
-import { eventually, hasBinary, makeSample, noStrayPlayers, play } from "./support/Fixture.ts"
+import {
+  eventually,
+  makeSample,
+  noStrayPlayers,
+  play,
+  requireBinaries
+} from "./support/Fixture.ts"
 import { Duration, Effect, Layer, Option } from "effect"
 import { FileSystem } from "effect/FileSystem"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -36,8 +42,7 @@ describe("cast play, against an emulated device", () => {
     () =>
       Effect.gen(function*() {
         yield* noStrayPlayers
-        const ffmpeg = yield* hasBinary("ffmpeg")
-        const openssl = yield* hasBinary("openssl")
+        const ready = yield* requireBinaries("ffmpeg", "openssl")
 
         return yield* Effect.when(
           Effect.gen(function*() {
@@ -144,7 +149,7 @@ describe("cast play, against an emulated device", () => {
             assert.isDefined(subtitleUrl, "the device never fetched the subtitle track")
             assert.include(subtitleUrl ?? "", "o=0")
           }).pipe(Effect.scoped),
-          Effect.succeed(ffmpeg && openssl)
+          Effect.succeed(ready)
         )
       }).pipe(Effect.provide(TestServices)),
     { timeout: 300_000 }
@@ -155,8 +160,7 @@ describe("cast play, against an emulated device", () => {
     () =>
       Effect.gen(function*() {
         yield* noStrayPlayers
-        const ffmpeg = yield* hasBinary("ffmpeg")
-        const openssl = yield* hasBinary("openssl")
+        const ready = yield* requireBinaries("ffmpeg", "openssl")
 
         return yield* Effect.when(
           Effect.gen(function*() {
@@ -192,7 +196,7 @@ describe("cast play, against an emulated device", () => {
               `the device never pulled the stream: ${fetched.join(", ")}`
             )
           }).pipe(Effect.scoped),
-          Effect.succeed(ffmpeg && openssl)
+          Effect.succeed(ready)
         )
       }).pipe(Effect.provide(TestServices)),
     { timeout: 300_000 }
@@ -203,8 +207,7 @@ describe("cast play, against an emulated device", () => {
     () =>
       Effect.gen(function*() {
         yield* noStrayPlayers
-        const ffmpeg = yield* hasBinary("ffmpeg")
-        const openssl = yield* hasBinary("openssl")
+        const ready = yield* requireBinaries("ffmpeg", "openssl")
 
         return yield* Effect.when(
           Effect.gen(function*() {
@@ -239,7 +242,7 @@ describe("cast play, against an emulated device", () => {
             )
             assert.isTrue((yield* device.fetched).length > 0)
           }).pipe(Effect.scoped),
-          Effect.succeed(ffmpeg && openssl)
+          Effect.succeed(ready)
         )
       }).pipe(Effect.provide(TestServices)),
     { timeout: 300_000 }

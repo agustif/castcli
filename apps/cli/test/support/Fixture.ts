@@ -6,7 +6,7 @@
 // (0.1s to start against 0.7s), and the player is killed with the scope because
 // it never exits on its own.
 
-import { Duration, Effect, Schedule } from "effect"
+import { Config, Console, Duration, Effect, Option, Schedule } from "effect"
 import { FileSystem } from "effect/FileSystem"
 import { Path } from "effect/Path"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -46,7 +46,7 @@ export const noStrayPlayers = Effect.gen(function*() {
   )
 })
 
-export const hasBinary = (name: string) =>
+const hasBinary = (name: string) =>
   Effect.map(
     Effect.exit(
       Effect.flatMap(
@@ -56,6 +56,50 @@ export const hasBinary = (name: string) =>
     ),
     (exit) => exit._tag === "Success"
   )
+
+/**
+ * Insist on the tools these tests need, rather than quietly doing nothing.
+ *
+ * This used to return a boolean that each test wrapped its whole body in, so a
+ * machine without ffmpeg reported *four passing tests in eighty-five
+ * milliseconds* — no assertions run, nothing skipped, and `npm run check`
+ * green. CI installs ffmpeg today, so it ran; the day that `apt-get` step
+ * failed, the only test of the inversion this tool is built around would have
+ * become a silent no-op and nothing would have said so.
+ *
+ * Failing is the right default because the tools are cheap and the alternative
+ * is a suite that lies. Someone who genuinely cannot install them can set
+ * `CASTCLI_E2E_SKIP=1`, which is deliberately awkward and impossible to do by
+ * accident in CI.
+ */
+export const requireBinaries = (...names: ReadonlyArray<string>) =>
+  Effect.gen(function*() {
+    const skip = yield* Config.string("CASTCLI_E2E_SKIP").pipe(Config.option)
+
+    const missing = yield* Effect.filter(names, (name) =>
+      Effect.map(hasBinary(name), (present) => !present))
+
+    yield* Effect.when(
+      Console.log(
+        `skipping: ${missing.join(" and ")} not installed, and CASTCLI_E2E_SKIP is set`
+      ),
+      Effect.succeed(missing.length > 0 && Option.isSome(skip))
+    )
+
+    yield* Effect.when(
+      Effect.die(
+        new Error(
+          `these end-to-end tests need ${missing.join(" and ")}, which ` +
+            `${missing.length === 1 ? "is" : "are"} not on PATH. Install ` +
+            "them, or set CASTCLI_E2E_SKIP=1 to accept a suite that does not " +
+            "test what it claims to."
+        )
+      ),
+      Effect.succeed(missing.length > 0 && Option.isNone(skip))
+    )
+
+    return missing.length === 0
+  })
 
 /**
  * A test film: picture, sound and a subtitle track.

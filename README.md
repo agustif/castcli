@@ -290,11 +290,11 @@ such an import resolve.
 | Command | What it protects |
 |---|---|
 | `npm run typecheck` | strict TypeScript, `exactOptionalPropertyTypes` on |
-| `npm run lint` | 25 project rules |
+| `npm run lint` | 25 project rules, warnings included — `--deny-warnings` |
 | `npm run vocabulary:sync` | refetch the media vocabulary from Google (needs the network) |
 | `npm run depcruise` | no cycles, Node builtins stay in `platform`/`protocol`, packages never import the app |
 | `npm run codegen:check` | generated wire descriptors, media vocabulary and UPnP actions are not stale |
-| `npm test` | 196 tests, in about a second |
+| `npm test` | 213 tests, in about a second |
 | `npm run test:e2e` | 4 tests that run the built binary at emulated devices, Cast and DLNA |
 | `npm run check` | all of the above — and the only thing CI runs |
 
@@ -403,10 +403,13 @@ removing the `as` casts exposed an `Ipv4` brand that accepted
   but exposes it as a real `Socket.Socket`.
 - **Effect has no UDP.** mDNS therefore uses `node:dgram` in
   `packages/platform/src/Mdns.ts`.
-- **dependency-cruiser cannot see type-only imports here.** It does not yet
-  support TypeScript 7, so it runs without the TS transpiler and `import type`
-  edges are invisible to it. Value imports are checked. Found by deliberately
-  breaking rules and watching two of them fail to fire.
+- **Two known holes in the guardrails, both recorded rather than papered over.**
+  `Rule.banMember` matches a bare identifier, so `console.log` is reported and
+  `globalThis.console.log` is not — a one-word prefix defeats several rules.
+  Nothing in the codebase does it. And a dependency on a devDependency from
+  runtime code is not caught: third-party modules are deliberately not followed,
+  so no module in the graph carries an `npm-dev` type and the rule that matched
+  on one was removed rather than left advertising a protection it did not give.
 
 ## Documentation
 

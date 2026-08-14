@@ -15,7 +15,13 @@ import { FileSystem } from "effect/FileSystem"
 import { FetchHttpClient } from "effect/unstable/http"
 import { NodeServices } from "@effect/platform-node"
 import { DlnaDevice } from "@castcli/emulator"
-import { eventually, hasBinary, makeSample, noStrayPlayers, play } from "./support/Fixture.ts"
+import {
+  eventually,
+  makeSample,
+  noStrayPlayers,
+  play,
+  requireBinaries
+} from "./support/Fixture.ts"
 
 const TestServices = Layer.mergeAll(FetchHttpClient.layer, NodeServices.layer)
 
@@ -27,7 +33,7 @@ describe("cast play, against an emulated DLNA renderer", () => {
     () =>
       Effect.gen(function*() {
         yield* noStrayPlayers
-        const ffmpeg = yield* hasBinary("ffmpeg")
+        const ready = yield* requireBinaries("ffmpeg")
 
         return yield* Effect.when(
           Effect.gen(function*() {
@@ -81,7 +87,7 @@ describe("cast play, against an emulated DLNA renderer", () => {
           }).pipe(Effect.scoped),
           // openssl is not needed here: DLNA is plain HTTP, and only the Cast
           // device has a TLS listener to present a certificate for.
-          Effect.succeed(ffmpeg)
+          Effect.succeed(ready)
         )
       }).pipe(Effect.provide(TestServices)),
     { timeout: 300_000 }

@@ -15,5 +15,8 @@
     "@castcli/media": "*",
     "@castcli/quality": "*",
     "@castcli/platform": "*"
+  },
+  "exports": {
+    ".": "./src/bin/cast.ts"
   }
 }

@@ -49,16 +49,16 @@ module.exports = {
       comment: "A library that reaches into its application is not a library.",
       from: { path: "^packages/" },
       to: { path: "^apps/" }
-    },
-    {
-      name: "no-dev-dep-in-src",
-      severity: "error",
-      comment: "Runtime code must not depend on a devDependency.",
-      from: { path: "^(packages|apps)/[^/]+/src", pathNot: "\\.test\\.ts$" },
-      to: { dependencyTypes: ["npm-dev"] }
     }
   ],
   options: {
+    // Third-party code is not followed, which also means it is not classified:
+    // no module in this graph ever carries an `npm` or `npm-dev` dependency
+    // type. A rule matching on those — there was one here, forbidding a
+    // devDependency in runtime code — therefore could not fire, and was removed
+    // rather than left advertising a protection it did not provide. Restoring
+    // it would mean putting node_modules back in the graph and declaring
+    // dependencies per workspace, which costs more than the rule is worth.
     doNotFollow: { path: "node_modules" },
     exclude: { path: "node_modules" },
     enhancedResolveOptions: { exportsFields: ["exports"], conditionNames: ["import", "types"] },

@@ -8,5 +8,8 @@
     "effect": "4.0.0-rc.109",
     "@castcli/domain": "*",
     "@castcli/protocol": "*"
+  },
+  "exports": {
+    ".": "./src/index.ts"
   }
 }

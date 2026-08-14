@@ -28,6 +28,12 @@ const noTimers = Rule.banCallOf(["setInterval", "setTimeout"], {
     "Use Effect.repeat with a Schedule, or Effect.sleep, instead of raw timers — they are interruptible and testable with TestClock."
 })
 
+// A known hole, recorded rather than papered over: `Rule.banMember` matches a
+// bare identifier, so `console.log` is reported and `globalThis.console.log` is
+// not. A one-word prefix defeats these rules. Nothing in this codebase does it,
+// and an attempt to close it with a `MemberExpression` visitor did not fire —
+// so it is written down here instead of left as a rule that does not work,
+// which would be the same failure these rules exist to prevent.
 const noJsonParse = Rule.banMember("JSON", ["parse"], {
   message: "Decode with Schema so the parsed shape is validated and typed."
 })
