@@ -62,6 +62,13 @@ inbound. The advertised URL has to be routable **from the TV**.
 | `quality` | `Controller` | *What to do about it* — one exhaustive match |
 | `platform` | `Mdns`, `HttpServer` | The generic Node bridges |
 | `emulator` | `Device`, `Certificate` | A Cast device to test against |
+
+There is a second implementation of the same idea, in plain TypeScript, as
+`@emulators/cast` on the `devices-and-google-cast` branch of a fork of
+vercel-labs/emulate. The duplication is deliberate: this one is Effect-native
+and wired into this suite, that one belongs to a toolchain with no Effect in it
+and serves a different audience. The protocol both speak is the part that must
+not drift, and it is pinned by tests on both sides.
 | `cli` | `Server/Routes` | The two endpoints the device pulls |
 | `cli` | `Cli/*` | Schema-validated flags, time codes, control commands |
 | `cli` | `State` | What is remembered between invocations, and never load bearing |
