@@ -5,6 +5,7 @@
 // same declaration validates inbound frames.
 
 import { Schema } from "effect"
+import * as GeneratedVocabulary from "./GeneratedVocabulary.ts"
 
 /**
  * One TLS socket multiplexes several "virtual connections", each addressed by a
@@ -59,12 +60,15 @@ export type MediaCommand = typeof MediaCommand.Type
 /**
  * Player states the receiver reports. `BUFFERING` is the one that matters most:
  * it is the only unambiguous evidence that the current bitrate does not fit.
+ *
+ * Generated from the framework a device runs, plus one addition. `LOADING` is
+ * not in the media player's own table — it belongs to the *application* state,
+ * where it is spelled in lowercase — but receivers have been seen to report it
+ * on the media channel, and a decoder that rejects it would drop the status
+ * message rather than the unexpected word.
  */
 export const PlayerState = Schema.Literals([
-  "IDLE",
-  "BUFFERING",
-  "PLAYING",
-  "PAUSED",
+  ...GeneratedVocabulary.PlayerState.literals,
   "LOADING"
 ])
 export type PlayerState = typeof PlayerState.Type

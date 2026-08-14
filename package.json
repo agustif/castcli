@@ -9,12 +9,13 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "lint": "oxlint",
-    "codegen": "tsx scripts/generate-protocol.ts",
-    "codegen:check": "tsx scripts/generate-protocol.ts --check",
+    "codegen": "tsx scripts/generate-protocol.ts && tsx scripts/extract-receiver-vocabulary.ts",
+    "codegen:check": "tsx scripts/generate-protocol.ts --check && tsx scripts/extract-receiver-vocabulary.ts --check",
     "depcruise": "depcruise \"packages/**/*.ts\" \"apps/**/*.ts\" --config .dependency-cruiser.cjs --output-type err",
     "graph": "depcruise \"packages/**/*.ts\" \"apps/**/*.ts\" --config .dependency-cruiser.cjs --output-type dot > docs/dependency-graph.dot",
     "check": "npm run typecheck && npm run lint && npm run depcruise && npm run codegen:check && npm run test",
-    "build:cli": "esbuild apps/cli/src/bin/cast.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist/cast.cjs && chmod +x dist/cast.cjs"
+    "build:cli": "esbuild apps/cli/src/bin/cast.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist/cast.cjs && chmod +x dist/cast.cjs",
+    "vocabulary:sync": "tsx scripts/extract-receiver-vocabulary.ts --sync"
   },
   "dependencies": {
     "@effect/platform-node": "^4.0.0-rc.109",

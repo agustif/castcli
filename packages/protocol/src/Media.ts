@@ -19,26 +19,29 @@
 //      accepted here; we only ever send `BUFFERED`.
 
 import { Schema } from "effect"
+import * as GeneratedVocabulary from "./GeneratedVocabulary.ts"
 
-export const TrackType = Schema.Literals(["TEXT", "AUDIO", "VIDEO"])
+export const TrackType = GeneratedVocabulary.TrackType
 export type TrackType = typeof TrackType.Type
 
-export const TextTrackType = Schema.Literals([
-  "SUBTITLES",
-  "CAPTIONS",
-  "DESCRIPTIONS",
-  "CHAPTERS",
-  "METADATA"
-])
+export const TextTrackType = GeneratedVocabulary.TextTrackType
 export type TextTrackType = typeof TextTrackType.Type
 
-export const StreamType = Schema.Literals(["BUFFERED", "LIVE", "OTHER", "NONE"])
+/**
+ * Generated, plus `OTHER`. The receiver ships `NONE` as the third value while
+ * the sender SDK documents `OTHER`; we only ever send `BUFFERED`, and accepting
+ * both costs nothing where rejecting one would drop a valid message.
+ */
+export const StreamType = Schema.Literals([
+  ...GeneratedVocabulary.StreamType.literals,
+  "OTHER"
+])
 export type StreamType = typeof StreamType.Type
 
-export const PlayerState = Schema.Literals(["IDLE", "PLAYING", "PAUSED", "BUFFERING"])
+export const PlayerState = GeneratedVocabulary.PlayerState
 export type PlayerState = typeof PlayerState.Type
 
-export const IdleReason = Schema.Literals(["CANCELLED", "INTERRUPTED", "FINISHED", "ERROR"])
+export const IdleReason = GeneratedVocabulary.IdleReason
 export type IdleReason = typeof IdleReason.Type
 
 /** Numeric on the wire, unlike every other enum here. */
@@ -51,7 +54,7 @@ export const MetadataType = {
   AUDIOBOOK_CHAPTER: 5
 } as const
 
-export const HlsSegmentFormat = Schema.Literals(["ts_aac", "ts_he_aac", "e_ac3", "fmp4"])
+export const HlsSegmentFormat = GeneratedVocabulary.HlsSegmentFormat
 export type HlsSegmentFormat = typeof HlsSegmentFormat.Type
 
 /**

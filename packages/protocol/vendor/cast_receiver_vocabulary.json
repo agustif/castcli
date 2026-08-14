@@ -1,0 +1,118 @@
+{
+  "source": "https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js",
+  "sha256": "46a78cb0f18957427a737ccc1015dfd1a587c7558ec66df0ff477f5579ef8ea0",
+  "extractedFrom": "cast_receiver_framework.js, the framework a Cast device runs",
+  "vocabularies": {
+    "PlayerState": {
+      "description": "Player states the receiver reports.",
+      "values": [
+        "BUFFERING",
+        "IDLE",
+        "PAUSED",
+        "PLAYING"
+      ]
+    },
+    "ApplicationState": {
+      "description": "What the receiver application itself is doing. Lowercase on the wire.",
+      "values": [
+        "buffering",
+        "idle",
+        "launching",
+        "loading",
+        "paused",
+        "playing"
+      ]
+    },
+    "StreamType": {
+      "description": "How the receiver should treat the stream's timeline.",
+      "values": [
+        "BUFFERED",
+        "LIVE",
+        "NONE"
+      ]
+    },
+    "HlsSegmentFormat": {
+      "description": "Audio encoding of an HLS segment. Lowercase on the wire.",
+      "values": [
+        "aac",
+        "ac3",
+        "e_ac3",
+        "fmp4",
+        "mp3",
+        "ts",
+        "ts_aac",
+        "ts_he_aac"
+      ]
+    },
+    "HlsVideoSegmentFormat": {
+      "description": "Container of an HLS video segment.",
+      "values": [
+        "fmp4",
+        "mpeg2_ts"
+      ]
+    },
+    "TrackType": {
+      "description": "What kind of media a track carries.",
+      "values": [
+        "AUDIO",
+        "TEXT",
+        "VIDEO"
+      ]
+    },
+    "TextTrackType": {
+      "description": "What a text track is for. SUBTITLES needs a language.",
+      "values": [
+        "CAPTIONS",
+        "CHAPTERS",
+        "DESCRIPTIONS",
+        "METADATA",
+        "SUBTITLES"
+      ]
+    },
+    "CaptionMimeType": {
+      "description": "Content types the receiver accepts for a text track.",
+      "values": [
+        "application/mp4",
+        "application/ttml+xml",
+        "text/cea608",
+        "text/vtt"
+      ]
+    },
+    "IdleReason": {
+      "description": "Why the receiver went idle — how a finished film is told from a failure.",
+      "values": [
+        "CANCELLED",
+        "ERROR",
+        "FINISHED",
+        "INTERRUPTED"
+      ]
+    },
+    "ErrorType": {
+      "description": "How a rejected request is described.",
+      "values": [
+        "ERROR",
+        "INVALID_PLAYER_STATE",
+        "INVALID_REQUEST",
+        "LOAD_CANCELLED",
+        "LOAD_FAILED"
+      ]
+    },
+    "RepeatMode": {
+      "description": "Queue repeat behaviour.",
+      "values": [
+        "REPEAT_ALL",
+        "REPEAT_ALL_AND_SHUFFLE",
+        "REPEAT_OFF",
+        "REPEAT_SINGLE"
+      ]
+    },
+    "HdrType": {
+      "description": "Dynamic range of the video a device reports being able to show.",
+      "values": [
+        "dv",
+        "hdr",
+        "sdr"
+      ]
+    }
+  }
+}
