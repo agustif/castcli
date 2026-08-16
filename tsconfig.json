@@ -25,7 +25,9 @@
       "@castcli/quality": ["./packages/quality/src/index.ts"],
       "@castcli/platform": ["./packages/platform/src/index.ts"],
       "@castcli/emulator": ["./packages/emulator/src/index.ts"],
-      "@castcli/dlna": ["./packages/dlna/src/index.ts"]
+      "@castcli/dlna": ["./packages/dlna/src/index.ts"],
+      "@castcli/source": ["./packages/source/src/index.ts"],
+      "@castcli/airplay": ["./packages/airplay/src/index.ts"]
     },
 
     // Type safety

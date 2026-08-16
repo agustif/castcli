@@ -28,7 +28,9 @@ export default defineConfig({
       "@castcli/quality": pkg("quality"),
       "@castcli/platform": pkg("platform"),
       "@castcli/emulator": pkg("emulator"),
-      "@castcli/dlna": pkg("dlna")
+      "@castcli/dlna": pkg("dlna"),
+      "@castcli/source": pkg("source"),
+      "@castcli/airplay": pkg("airplay")
     }
   }
 })
