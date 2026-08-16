@@ -1,0 +1,9 @@
+{
+  "name": "@castcli/source",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Read values out of first sources — RFCs, C headers — as Schema codecs",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "effect": "4.0.0-rc.109" }
+}

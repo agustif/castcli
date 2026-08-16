@@ -1,0 +1,15 @@
+{
+  "name": "@castcli/airplay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AirPlay: HomeKit pairing, and the sender protocol built on it",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.109",
+    "@castcli/domain": "*",
+    "@castcli/source": "*"
+  }
+}
