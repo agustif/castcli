@@ -1,0 +1,5 @@
+# Repo policy for Obvious agents.
+# Detected from GitHub repo settings (agustif/castcli): default branch `main`;
+# merge commit, rebase and squash are all allowed — squash is the policy here.
+defaultBranch: main
+mergeMethod: squash
