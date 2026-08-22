@@ -18,19 +18,22 @@ export const finish = (
     const m4Items = yield* Schema.decodeUnknownEffect(Items)(m4Bytes)
     const stateBytes = yield* required(m4Items, TlvType.State, "kTLVType_State")
     const state = stateBytes[0]
+    if (state === undefined) {
+      return yield* Effect.fail(new Refused({ error: 1 }))
+    }
 
     if (state !== 4) {
       const errorBytes = find(m4Items, TlvType.Error)
       if (Option.isSome(errorBytes)) {
-        const error = Option.getOrThrow(errorBytes)[0]
-        return yield* Effect.fail(new Refused({ error }))
+        const error = Option.getOrThrow(errorBytes)[0] ?? 1
+        return yield* Effect.fail(new Refused({ error: error as 1 | 2 | 3 | 4 | 5 | 6 | 7 }))
       }
     }
 
     const errorBytes = find(m4Items, TlvType.Error)
     if (Option.isSome(errorBytes)) {
-      const error = Option.getOrThrow(errorBytes)[0]
-      return yield* Effect.fail(new Refused({ error }))
+      const error = Option.getOrThrow(errorBytes)[0] ?? 1
+      return yield* Effect.fail(new Refused({ error: error as 1 | 2 | 3 | 4 | 5 | 6 | 7 }))
     }
 
     return sharedSecret

@@ -67,22 +67,20 @@ export const m3 = (
   controllerIdentifier: Uint8Array,
   controllerLongTermKey: Redacted.Redacted<Uint8Array>,
   accessoryPublicKey: Uint8Array
-): Effect.Effect<{ request: Uint8Array; proved: Proved }, PlatformError | PeerUnknown | SignatureRejected | Refused, SuiteNS.Suite> =>
+): Effect.Effect<{ request: Uint8Array; proved: Proved }, PeerUnknown | Refused | SignatureRejected, SuiteNS.Suite> =>
   Effect.gen(function*() {
     const suite = yield* SuiteNS.Suite
     const m2Items = yield* Schema.decodeUnknownEffect(Items)(m2Bytes)
 
     const stateBytes = yield* required(m2Items, TlvType.State, "kTLVType_State")
     const state = stateBytes[0]
-    if (state !== 2) {
+    if (state === undefined || state !== 2) {
       const errorBytes = find(m2Items, TlvType.Error)
       if (Option.isSome(errorBytes)) {
-        const error = Option.getOrThrow(errorBytes)[0]
-        return yield* Effect.fail(new Refused({ error: error as PairingError }))
+        const error = (Option.getOrThrow(errorBytes)[0] ?? 1) as 1 | 2 | 3 | 4 | 5 | 6 | 7
+        return yield* Effect.fail(new Refused({ error }))
       }
-      return yield* Effect.fail(
-        new Refused({ error: PairingError.Unknown })
-      )
+      return yield* Effect.fail(new Refused({ error: 1 }))
     }
 
     const accessoryEphemeralPublic = yield* exactly(
