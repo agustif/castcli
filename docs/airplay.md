@@ -105,6 +105,11 @@ not implemented. This may or may not be required for current Apple TVs — the
 community evidence is split. If needed, it is a bounded addition on top of
 pairing.
 
+**Volume control is not implemented.** The AirPlay protocol supports volume via
+`POST /setproperty`, but the current implementation does not include it. The CLI
+`volume` command silently does nothing for AirPlay devices (it logs success but
+does not change the volume).
+
 ## What would complete it
 
 - **An Apple TV to test against.** If legacy `/play` still works there, the path
