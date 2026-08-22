@@ -40,10 +40,12 @@ export const make = (options: {
   readonly name?: string
   readonly advertise?: boolean
   readonly requirePairing?: boolean
+  readonly port?: Brands.Port
 } = {}): Effect.Effect<AirPlayDevice, never, Scope.Scope | HttpClient.HttpClient> =>
   Effect.gen(function*() {
     const name = options.name ?? "Emulated AirPlay"
     const requirePairing = options.requirePairing ?? false
+    const desiredPort = options.port ?? Brands.Port.make(7000)
 
     const loaded = yield* Ref.make(Option.none<{ url: string; position: number }>())
     const fetched = yield* Ref.make<ReadonlyArray<string>>([])
@@ -74,7 +76,7 @@ export const make = (options: {
 
     yield* Effect.acquireRelease(
       Effect.callback<void>((resume) => {
-        server.listen(0, "127.0.0.1", () => resume(Effect.void))
+        server.listen(desiredPort, "127.0.0.1", () => resume(Effect.void))
       }),
       () => Effect.sync(() => { server.closeAllConnections(); server.close() })
     )
