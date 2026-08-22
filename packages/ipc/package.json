@@ -1,0 +1,8 @@
+{
+  "name": "@castcli/ipc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "effect": "4.0.0-rc.109" }
+}
