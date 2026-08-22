@@ -281,8 +281,8 @@ packages/
   quality/      ladder, signals (state → phase), controller (phase → action)
   dlna/         DLNA/UPnP: SSDP, SOAP, DIDL-Lite, and actions generated from
                 the vendored service descriptions
-  airplay/      HomeKit pairing (PairSetup/PairVerify), SRP, TLV8, and crypto
-                primitives; sender protocol deliberately not implemented
+  airplay/      HomeKit pairing (PairSetup/PairVerify), SRP, TLV8, crypto primitives,
+                and sender protocol for session management and media control
   source/       First-source readers: decode from RFCs and C headers as Schema
                 codecs, used by codegen scripts
   platform/     generic Node bridges: UDP for mDNS, http.createServer
