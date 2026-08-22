@@ -841,11 +841,64 @@ const play = Command.make(
     // "the TV is off" from "the TV dropped the connection".
     const everConnected = yield* Ref.make(false)
 
+    // Ref to hold the current session for control commands. Updated on each
+    // connection attempt so control commands reach the active session.
+    const currentSession = yield* Ref.make<Option.Option<CastSession.Session>>(Option.none())
+
+    // The control channel handles seek/pause/resume/stop commands from other
+    // processes. Started once for the entire play command, not per retry.
+    // Only in progressive mode does seek mean "restart ffmpeg at a new offset"
+    // — under HLS the receiver seeks itself.
+    const shutdownControl = yield* ControlChannel.startServer({
+      onSeek: (to) =>
+        Effect.when(
+          Effect.gen(function*() {
+            yield* Ref.set(position, to)
+            yield* Console.log(`\n  seeking to ${TimeCode.format(to)}…`)
+            yield* Queue.offer(reloads, (yield* Ref.get(state)).rung)
+          }),
+          Effect.succeed(!useHls)
+        ),
+      onPause: Effect.flatMap(Ref.get(currentSession), (session) =>
+        Option.match(session, {
+          onNone: () => Effect.void,
+          onSome: (s) => s.mediaCommand(CastSession.MediaCommand.PAUSE()).pipe(
+            Effect.orElseSucceed(() => undefined)
+          )
+        })
+      ),
+      onResume: Effect.flatMap(Ref.get(currentSession), (session) =>
+        Option.match(session, {
+          onNone: () => Effect.void,
+          onSome: (s) => s.mediaCommand(CastSession.MediaCommand.PLAY()).pipe(
+            Effect.orElseSucceed(() => undefined)
+          )
+        })
+      ),
+      onStop: Effect.flatMap(Ref.get(currentSession), (session) =>
+        Option.match(session, {
+          onNone: () => Effect.void,
+          onSome: (s) => s.stopReceiver
+        })
+      ),
+      getStatus: Effect.map(Ref.get(position), (at) =>
+        Option.some({
+          file: absolute,
+          offsetSeconds: at,
+          seekable: useHls
+        })
+      )
+    })
+
+    // Ensure the control server shuts down when play ends
+    yield* Effect.addFinalizer(() => shutdownControl)
+
     const runSession = (castDevice: CastDevice) =>
       Effect.gen(function*() {
         const session = yield* CastSession.make(castDevice.ip, castDevice.port)
         yield* session.launch
         yield* Ref.set(everConnected, true)
+        yield* Ref.set(currentSession, Option.some(session))
         yield* sendLoad(session)
 
         // A rejected LOAD is otherwise indistinguishable from a slow start.
@@ -856,38 +909,6 @@ const play = Command.make(
                 "  try a different --audio stream, or check `cast streams` for the track indices"
             ))
         )
-
-        // The control channel handles seek/pause/resume/stop commands from
-        // other processes. Only in progressive mode does seek mean "restart
-        // ffmpeg at a new offset" — under HLS the receiver seeks itself.
-        const shutdownControl = yield* ControlChannel.startServer({
-          onSeek: (to) =>
-            Effect.when(
-              Effect.gen(function*() {
-                yield* Ref.set(position, to)
-                yield* Console.log(`\n  seeking to ${TimeCode.format(to)}…`)
-                yield* Queue.offer(reloads, (yield* Ref.get(state)).rung)
-              }),
-              Effect.succeed(!useHls)
-            ),
-          onPause: session.mediaCommand(CastSession.MediaCommand.PAUSE()).pipe(
-            Effect.orElseSucceed(() => undefined)
-          ),
-          onResume: session.mediaCommand(CastSession.MediaCommand.PLAY()).pipe(
-            Effect.orElseSucceed(() => undefined)
-          ),
-          onStop: session.stopReceiver,
-          getStatus: Effect.map(Ref.get(position), (at) =>
-            Option.some({
-              file: absolute,
-              offsetSeconds: at,
-              seekable: useHls
-            })
-          )
-        })
-
-        // Ensure the control server shuts down when the session ends
-        yield* Effect.addFinalizer(() => shutdownControl)
 
 
         // Reloading is how the progressive path changes quality. HLS has no use
