@@ -851,6 +851,7 @@ const play = Command.make(
     // — under HLS the receiver seeks itself.
     //
     // Skip control channel in test environment to avoid blocking issues.
+    // eslint-disable-next-line castcli/no-process-env
     const shutdownControl = process.env["SKIP_CONTROL_CHANNEL"]
       ? yield* Effect.succeed(Effect.void)
       : yield* ControlChannel.startServer({
