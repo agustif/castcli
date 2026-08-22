@@ -450,32 +450,103 @@ export const discoverAirPlayWithRetry = Effect.fn("Mdns.discoverAirPlayWithRetry
  * Emulator only: real devices advertise themselves. This is for tests to
  * discover emulated devices without hard-coding addresses.
  */
-export const advertiseAirPlay = (_options: {
+export const advertiseAirPlay = (options: {
   readonly name: string
   readonly port: Port
 }): Effect.Effect<void, never, Scope.Scope> =>
   Effect.gen(function*() {
     const socket = dgram.createSocket({ type: "udp4", reuseAddr: true })
+    const queries = yield* Queue.unbounded<{ packet: Buffer; from: dgram.RemoteInfo }>()
+
+    socket.on("message", (packet: Buffer, from: dgram.RemoteInfo) => {
+      Queue.offerUnsafe(queries, { packet, from })
+    })
+    socket.on("error", () => undefined)
 
     yield* Effect.acquireRelease(
-      Effect.sync(() => socket),
+      Effect.callback<void>((resume) => {
+        socket.bind(MDNS_PORT, () => resume(Effect.void))
+      }),
       () => Effect.sync(() => socket.close())
     )
 
-    // Minimal mDNS response packet advertising AirPlay service
-    // Just enough for the emulated device to be discoverable
-    const buffer = Buffer.alloc(512)
-    buffer.writeUInt16BE(0, 0) // Transaction ID
-    buffer.writeUInt16BE(0x8400, 2) // Flags: Response, Authoritative
-    buffer.writeUInt16BE(0, 4) // Questions
-    buffer.writeUInt16BE(1, 6) // Answers
-    buffer.writeUInt16BE(0, 8) // Authority
-    buffer.writeUInt16BE(0, 10) // Additional
+    yield* Effect.try({
+      try: () => socket.addMembership(MDNS_ADDRESS),
+      catch: (cause) => cause
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logDebug(`could not join the mDNS group; answering unicast only: ${cause}`)
+      )
+    )
+
+    const serviceName = `${options.name}._airplay._tcp.local.`
+    const serviceType = "_airplay._tcp.local."
+    const hostname = `${options.name.replaceAll(" ", "-")}.local.`
+
+    const buildResponse = (): Buffer => {
+      const TTL = 120
+      const CACHE_FLUSH = 0x8000
+      const CLASS_IN = 1
+
+      const record = (name: string, type: number, data: Buffer, ttl = TTL): Buffer => {
+        const header = Buffer.alloc(8)
+        header.writeUInt16BE(type, 0)
+        header.writeUInt16BE(CLASS_IN | CACHE_FLUSH, 2)
+        header.writeUInt32BE(ttl, 4)
+        const length = Buffer.alloc(2)
+        length.writeUInt16BE(data.length, 0)
+        return Buffer.concat([encodeName(name), header, length, data])
+      }
+
+      const srvData = Buffer.alloc(6)
+      srvData.writeUInt16BE(0, 0) // Priority
+      srvData.writeUInt16BE(0, 2) // Weight
+      srvData.writeUInt16BE(Number(options.port), 4) // Port
+
+      const txtPairs = [
+        `fn=${options.name}`,
+        `features=0x5A7FFFF7,0xE`,
+        `model=AppleTV3,2`,
+        `deviceid=AA:BB:CC:DD:EE:FF`,
+        `flags=0x4`
+      ]
+      const txtData = Buffer.concat(
+        txtPairs.map((pair) => {
+          const pairBuf = Buffer.from(pair, "utf8")
+          return Buffer.concat([Buffer.from([pairBuf.length]), pairBuf])
+        })
+      )
+
+      const addressData = Buffer.from([127, 0, 0, 1])
+
+      const records = [
+        record(serviceType, 0x000c, encodeName(serviceName)), // PTR
+        record(serviceName, 0x0021, Buffer.concat([srvData, encodeName(hostname)])), // SRV
+        record(serviceName, 0x0010, txtData), // TXT
+        record(hostname, 0x0001, addressData) // A
+      ]
+
+      const header = Buffer.alloc(12)
+      header.writeUInt16BE(0, 0) // Transaction ID
+      header.writeUInt16BE(0x8400, 2) // Flags: Response, Authoritative
+      header.writeUInt16BE(0, 4) // Questions
+      header.writeUInt16BE(records.length, 6) // Answers
+      header.writeUInt16BE(0, 8) // Authority
+      header.writeUInt16BE(0, 10) // Additional
+
+      return Buffer.concat([header, ...records])
+    }
+
+    const response = buildResponse()
 
     yield* Effect.forkScoped(
-      Effect.repeat(
-        Effect.sync(() => socket.send(buffer, MDNS_PORT, MDNS_ADDRESS, () => {})),
-        Schedule.spaced("5 seconds")
-      )
+      Stream.runForEach(Stream.fromQueue(queries), ({ from, packet }) =>
+        Effect.when(
+          Effect.sync(() => socket.send(response, from.port, from.address, () => {})),
+          Effect.succeed(
+            packet.length >= 12 &&
+            (packet.readUInt16BE(2) & 0x8000) === 0 // It's a query, not a response
+          )
+        ))
     )
   })

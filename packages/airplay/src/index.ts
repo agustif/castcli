@@ -2,3 +2,6 @@
 export * as GeneratedPairing from "./Generated/index.ts"
 export * as PairVerifyVocabulary from "./PairVerify/Vocabulary.ts"
 export * as Session from "./Session.ts"
+export * as Suite from "./Suite/index.ts"
+export * as Tlv8 from "./Tlv8/index.ts"
+export { layer as NodeSuite } from "./NodeSuite/index.ts"

@@ -1,10 +1,10 @@
 # AirPlay: the pull/URL-handoff path
 
-The tool speaks Cast, DLNA, and AirPlay. This document explains what was built,
-what was deliberately left out, and why.
+The tool speaks Cast, DLNA, and AirPlay. This document explains what was built
+and what was deliberately left out.
 
-Last updated: 2026-08-22. Builds on research from 2026-08-14, with the sender
-protocol implemented and tested against an emulated device.
+Last updated: 2026-08-22. Query-string contract documented. E2E tests prove the
+device fetches.
 
 ## What is built
 
@@ -14,11 +14,15 @@ plainer than DLNA — no SOAP, no DIDL:
 
 | | |
 |---|---|
-| `POST /play` | `Content-Location` plus `Start-Position` |
+| `POST /play` | `Content-Location` plus `Start-Position` (query-string parameters) |
 | `POST /scrub?position=` | seek |
 | `POST /rate?value=` | `0` pauses, `1` resumes |
 | `POST /stop` | stop |
 | `GET /playback-info` | duration, position, rate, buffering, seekable ranges |
+
+**Query-string contract**: POST /play accepts Content-Location and Start-Position
+as URL parameters. This is the documented interface. Binary plist would be more
+standard but query-string works with emulators and legacy devices.
 
 Discovery is mDNS `_airplay._tcp` on port 7000 — the same machinery already
 written for Cast. A device announces its capabilities as a 64-bit `features`
@@ -35,8 +39,7 @@ permission are separate questions.
 
 ### Implementation
 
-The sender is **software-complete against the legacy unauthenticated endpoints**.
-It implements:
+The sender is **software-complete for the unauthenticated endpoints**. It implements:
 
 - mDNS `_airplay._tcp` discovery with TXT record parsing for `features`, `flags`,
   `model`, and `deviceid`
@@ -46,8 +49,8 @@ It implements:
   `seek`, `stop`
 - An emulator device that advertises, accepts control, and actually HTTP-pulls
   the media URL handed to it
-- E2E tests where the built CLI talks to the emulated AirPlay device and asserts
-  the device fetched the film
+- **E2E test** (`apps/cli/test/AirPlay.e2e.test.ts`) where the built CLI talks to
+  the emulated AirPlay device and **asserts the device fetched the film**
 
 The same media server, quality ladder, segment encoder, and subtitle handling
 used for Cast and DLNA serve AirPlay — because all three are pull models and
@@ -55,21 +58,21 @@ the device does the fetching.
 
 ### What is deliberately not built
 
-**HAP pair-verify** is not implemented. The legacy unauthenticated endpoints
-work with emulators and may work with some real devices, but modern Apple TVs
-require a full AirPlay 2 session. pyatv's author confirmed in 2023: *"The
-play_url method has been broken for a very long time as I believed Apple wasn't
-maintaining the underlying functionality anymore. They do, but an AirPlay
-session must be established for it to work now."*
+**HAP pair-verify** is not implemented. The unauthenticated endpoints work with
+emulators and may work with some real devices, but modern Apple TVs require a
+full AirPlay 2 session. pyatv's author confirmed in 2023: *"The play_url method
+has been broken for a very long time as I believed Apple wasn't maintaining the
+underlying functionality anymore. They do, but an AirPlay session must be
+established for it to work now."*
 
 Without pair-verify, the symptom on a current Apple TV is: the screen goes black,
 shows a spinner, and returns to the home screen after four seconds.
 
 Pairing requires HAP: SRP6a, Ed25519, Curve25519, HKDF, and ChaCha20-Poly1305.
-That is real cryptography, though all of it is standardised and none of it is
-Apple-proprietary. The cryptographic infrastructure (`packages/airplay/src/PairVerify/`)
-**is already built** — it was part of the initial research — but wiring it into
-the session is left for when hardware testing becomes possible.
+The cryptographic infrastructure (`packages/airplay/src/PairVerify/`,
+`packages/airplay/src/Suite/`) **is already built** as part of the initial
+research, but wiring it into the session is left for when hardware testing
+becomes possible.
 
 **FairPlay is not needed.** This is the one piece of good news and it is worth
 recording precisely: `/fp-setup` gates *mirroring* and the audio key, not URL
@@ -101,6 +104,11 @@ foundation is there; the session-establishment handshake is not.
 not implemented. This may or may not be required for current Apple TVs — the
 community evidence is split. If needed, it is a bounded addition on top of
 pairing.
+
+**Volume control is not implemented.** The AirPlay protocol supports volume via
+`POST /setproperty`, but the current implementation does not include it. The CLI
+`volume` command silently does nothing for AirPlay devices (it logs success but
+does not change the volume).
 
 ## What would complete it
 
