@@ -413,13 +413,6 @@ removing the `as` casts exposed an `Ipv4` brand that accepted
   but exposes it as a real `Socket.Socket`.
 - **Effect has no UDP.** mDNS therefore uses `node:dgram` in
   `packages/platform/src/Mdns.ts`.
-- **Two known holes in the guardrails, both recorded rather than papered over.**
-  `Rule.banMember` matches a bare identifier, so `console.log` is reported and
-  `globalThis.console.log` is not — a one-word prefix defeats several rules.
-  Nothing in the codebase does it. And a dependency on a devDependency from
-  runtime code is not caught: third-party modules are deliberately not followed,
-  so no module in the graph carries an `npm-dev` type and the rule that matched
-  on one was removed rather than left advertising a protection it did not give.
 
 ## Documentation
 

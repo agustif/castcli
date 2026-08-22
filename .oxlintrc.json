@@ -42,7 +42,8 @@
     "castcli/no-or-die": "error",
     "castcli/no-as-cast": "error",
     "castcli/no-non-null": "error",
-    "castcli/no-any": "error"
+    "castcli/no-any": "error",
+    "castcli/no-dev-dependency-in-runtime": "error"
   },
   "ignorePatterns": [
     "dist/**",

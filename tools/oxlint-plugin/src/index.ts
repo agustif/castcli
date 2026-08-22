@@ -10,8 +10,8 @@
 // equivalent (`effect/unstable/socket` is WebSocket-only, and there is no UDP
 // module). Those live behind `src/Platform/` and are documented as such.
 
-import { Diagnostic, Plugin, Rule, RuleContext, Visitor } from "effect-oxlint"
-import { Effect } from "effect"
+import { Diagnostic, Plugin, Rule, RuleContext, Visitor, AST } from "effect-oxlint"
+import { Effect, Option } from "effect"
 
 const noNodeChildProcess = Rule.banImport("node:child_process", {
   message:
@@ -23,19 +23,96 @@ const noNodeHttp = Rule.banImport("node:http", {
     "Use HttpRouter/HttpServerResponse from effect/unstable/http (served by NodeHttpServer) instead of node:http."
 })
 
-const noTimers = Rule.banCallOf(["setInterval", "setTimeout"], {
-  message:
-    "Use Effect.repeat with a Schedule, or Effect.sleep, instead of raw timers — they are interruptible and testable with TestClock."
+const noTimers = Rule.define({
+  name: "no-timers",
+  meta: Rule.meta({
+    type: "problem",
+    description: "Ban setInterval, setTimeout and globalThis-prefixed versions"
+  }),
+  create: function*() {
+    const ctx = yield* RuleContext
+    const bannedTimers = new Set(["setInterval", "setTimeout"])
+    return Visitor.on("CallExpression", (node) => {
+      return Effect.gen(function*() {
+        const callee = node.callee
+        if (callee.type === "Identifier" && bannedTimers.has(callee.name)) {
+          yield* ctx.report(
+            Diagnostic.make({
+              node,
+              message:
+                "Use Effect.repeat with a Schedule, or Effect.sleep, instead of raw timers — they are interruptible and testable with TestClock."
+            })
+          )
+        }
+        if (callee.type === "MemberExpression") {
+          const path = AST.memberPath(callee)
+          const shouldReport = Effect.suspend(() => {
+            if (Option.isNone(path)) return Effect.void
+            const segments = path.value
+            if (
+              segments.length === 2 &&
+              segments[0] === "globalThis" &&
+              segments[1] !== undefined &&
+              bannedTimers.has(segments[1])
+            ) {
+              return ctx.report(
+                Diagnostic.make({
+                  node,
+                  message:
+                    "Use Effect.repeat with a Schedule, or Effect.sleep, instead of raw timers — they are interruptible and testable with TestClock."
+                })
+              )
+            }
+            return Effect.void
+          })
+          yield* shouldReport
+        }
+      })
+    })
+  }
 })
 
-// A known hole, recorded rather than papered over: `Rule.banMember` matches a
-// bare identifier, so `console.log` is reported and `globalThis.console.log` is
-// not. A one-word prefix defeats these rules. Nothing in this codebase does it,
-// and an attempt to close it with a `MemberExpression` visitor did not fire —
-// so it is written down here instead of left as a rule that does not work,
-// which would be the same failure these rules exist to prevent.
-const noJsonParse = Rule.banMember("JSON", ["parse"], {
-  message: "Decode with Schema so the parsed shape is validated and typed."
+const noJsonParse = Rule.define({
+  name: "no-json-parse",
+  meta: Rule.meta({
+    type: "problem",
+    description: "Ban JSON.parse and globalThis.JSON.parse"
+  }),
+  create: function*() {
+    const ctx = yield* RuleContext
+    return Visitor.on("MemberExpression", (node) => {
+      return Effect.gen(function*() {
+        const path = AST.memberPath(node)
+        const shouldReport = Effect.suspend(() => {
+          if (Option.isNone(path)) return Effect.void
+          const segments = path.value
+          if (segments.length === 2 && segments[0] === "JSON" && segments[1] === "parse") {
+            return ctx.report(
+              Diagnostic.make({
+                node,
+                message: "Decode with Schema so the parsed shape is validated and typed."
+              })
+            )
+          }
+          if (
+            segments.length === 3 &&
+            segments[0] === "globalThis" &&
+            segments[1] === "JSON" &&
+            segments[2] === "parse"
+          ) {
+            return ctx.report(
+              Diagnostic.make({
+                node,
+                message: "Decode with Schema so the parsed shape is validated and typed."
+              })
+            )
+          }
+          return Effect.void
+        })
+        yield* shouldReport
+      })
+    })
+  }
 })
 
 const noThrow = Rule.banStatement("ThrowStatement", {
@@ -43,10 +120,6 @@ const noThrow = Rule.banStatement("ThrowStatement", {
     "Fail with a Schema.TaggedError via Effect.fail instead of throwing, so the error appears in the effect's type."
 })
 
-// Control flow belongs in Effect's own combinators, which compose and stay
-// total: `Match` for discriminated dispatch, `Option`/`Effect.when` for
-// conditional execution, and ternaries where a plain expression will do. An
-// `if` statement is a hole where none of that composition applies.
 const noIf = Rule.banStatement("IfStatement", {
   message:
     "Use Match.value / Option.match / Effect.when instead of an if statement, so the branch is an expression and stays exhaustive."
@@ -57,13 +130,92 @@ const noPromise = Rule.banNewExpr("Promise", {
     "Model asynchrony with Effect. Wrap unavoidable callback APIs in Effect.callback at the platform boundary."
 })
 
-const noDateNow = Rule.banMember("Date", ["now"], {
-  message:
-    "Read time through Effect's Clock so behaviour is deterministic under TestClock."
+const noDateNow = Rule.define({
+  name: "no-date-now",
+  meta: Rule.meta({
+    type: "problem",
+    description: "Ban Date.now and globalThis.Date.now"
+  }),
+  create: function*() {
+    const ctx = yield* RuleContext
+    return Visitor.on("MemberExpression", (node) => {
+      return Effect.gen(function*() {
+        const path = AST.memberPath(node)
+        const shouldReport = Effect.suspend(() => {
+          if (Option.isNone(path)) return Effect.void
+          const segments = path.value
+          if (segments.length === 2 && segments[0] === "Date" && segments[1] === "now") {
+            return ctx.report(
+              Diagnostic.make({
+                node,
+                message:
+                  "Read time through Effect's Clock so behaviour is deterministic under TestClock."
+              })
+            )
+          }
+          if (
+            segments.length === 3 &&
+            segments[0] === "globalThis" &&
+            segments[1] === "Date" &&
+            segments[2] === "now"
+          ) {
+            return ctx.report(
+              Diagnostic.make({
+                node,
+                message:
+                  "Read time through Effect's Clock so behaviour is deterministic under TestClock."
+              })
+            )
+          }
+          return Effect.void
+        })
+        yield* shouldReport
+      })
+    })
+  }
 })
 
-const noMathRandom = Rule.banMember("Math", ["random"], {
-  message: "Use Effect's Random service instead of Math.random."
+const noMathRandom = Rule.define({
+  name: "no-math-random",
+  meta: Rule.meta({
+    type: "problem",
+    description: "Ban Math.random and globalThis.Math.random"
+  }),
+  create: function*() {
+    const ctx = yield* RuleContext
+    return Visitor.on("MemberExpression", (node) => {
+      return Effect.gen(function*() {
+        const path = AST.memberPath(node)
+        const shouldReport = Effect.suspend(() => {
+          if (Option.isNone(path)) return Effect.void
+          const segments = path.value
+          if (segments.length === 2 && segments[0] === "Math" && segments[1] === "random") {
+            return ctx.report(
+              Diagnostic.make({
+                node,
+                message: "Use Effect's Random service instead of Math.random."
+              })
+            )
+          }
+          if (
+            segments.length === 3 &&
+            segments[0] === "globalThis" &&
+            segments[1] === "Math" &&
+            segments[2] === "random"
+          ) {
+            return ctx.report(
+              Diagnostic.make({
+                node,
+                message: "Use Effect's Random service instead of Math.random."
+              })
+            )
+          }
+          return Effect.void
+        })
+        yield* shouldReport
+      })
+    })
+  }
 })
 
 // --- guardrails against silently-unsound JS habits ---------------------------
@@ -84,18 +236,146 @@ const noMutatingArray = Rule.banCallOfMember("Array", ["sort", "reverse"], {
   message: "Use toSorted/toReversed: in-place mutation is not safe to share across fibers."
 })
 
-const noProcessExit = Rule.banCallOfMember("process", ["exit"], {
-  message:
-    "Let the runtime finish: exiting the process directly skips scope finalizers, so child processes and sockets leak."
+const noProcessExit = Rule.define({
+  name: "no-process-exit",
+  meta: Rule.meta({
+    type: "problem",
+    description: "Ban process.exit and globalThis.process.exit"
+  }),
+  create: function*() {
+    const ctx = yield* RuleContext
+    return Visitor.on("CallExpression", (node) => {
+      return Effect.gen(function*() {
+        const callee = node.callee
+        if (callee.type !== "MemberExpression") return Effect.void
+        const path = AST.memberPath(callee)
+        const shouldReport = Effect.suspend(() => {
+          if (Option.isNone(path)) return Effect.void
+          const segments = path.value
+          if (segments.length === 2 && segments[0] === "process" && segments[1] === "exit") {
+            return ctx.report(
+              Diagnostic.make({
+                node,
+                message:
+                  "Let the runtime finish: exiting the process directly skips scope finalizers, so child processes and sockets leak."
+              })
+            )
+          }
+          if (
+            segments.length === 3 &&
+            segments[0] === "globalThis" &&
+            segments[1] === "process" &&
+            segments[2] === "exit"
+          ) {
+            return ctx.report(
+              Diagnostic.make({
+                node,
+                message:
+                  "Let the runtime finish: exiting the process directly skips scope finalizers, so child processes and sockets leak."
+              })
+            )
+          }
+          return Effect.void
+        })
+        yield* shouldReport
+      })
+    })
+  }
 })
 
-const noProcessEnv = Rule.banMember("process", ["env"], {
-  message: "Read configuration through effect/Config so it is typed, validated and documented."
+const noProcessEnv = Rule.define({
+  name: "no-process-env",
+  meta: Rule.meta({
+    type: "problem",
+    description: "Ban process.env and globalThis.process.env"
+  }),
+  create: function*() {
+    const ctx = yield* RuleContext
+    return Visitor.on("MemberExpression", (node) => {
+      return Effect.gen(function*() {
+        const path = AST.memberPath(node)
+        const shouldReport = Effect.suspend(() => {
+          if (Option.isNone(path)) return Effect.void
+          const segments = path.value
+          if (segments.length === 2 && segments[0] === "process" && segments[1] === "env") {
+            return ctx.report(
+              Diagnostic.make({
+                node,
+                message: "Read configuration through effect/Config so it is typed, validated and documented."
+              })
+            )
+          }
+          if (
+            segments.length === 3 &&
+            segments[0] === "globalThis" &&
+            segments[1] === "process" &&
+            segments[2] === "env"
+          ) {
+            return ctx.report(
+              Diagnostic.make({
+                node,
+                message: "Read configuration through effect/Config so it is typed, validated and documented."
+              })
+            )
+          }
+          return Effect.void
+        })
+        yield* shouldReport
+      })
+    })
+  }
 })
 
-const noConsole = Rule.banMember("console", ["log", "error", "warn", "info", "debug"], {
-  message:
-    "Use Console for user-facing output and Effect.log* for diagnostics, so output respects the configured logger and log level."
+const noConsole = Rule.define({
+  name: "no-console",
+  meta: Rule.meta({
+    type: "problem",
+    description: "Ban console methods and globalThis.console methods"
+  }),
+  create: function*() {
+    const ctx = yield* RuleContext
+    const bannedMethods = new Set(["log", "error", "warn", "info", "debug"])
+    return Visitor.on("MemberExpression", (node) => {
+      return Effect.gen(function*() {
+        const path = AST.memberPath(node)
+        const shouldReport = Effect.suspend(() => {
+          if (Option.isNone(path)) return Effect.void
+          const segments = path.value
+          if (
+            segments.length === 2 &&
+            segments[0] === "console" &&
+            segments[1] !== undefined &&
+            bannedMethods.has(segments[1])
+          ) {
+            return ctx.report(
+              Diagnostic.make({
+                node,
+                message:
+                  "Use Console for user-facing output and Effect.log* for diagnostics, so output respects the configured logger and log level."
+              })
+            )
+          }
+          if (
+            segments.length === 3 &&
+            segments[0] === "globalThis" &&
+            segments[1] === "console" &&
+            segments[2] !== undefined &&
+            bannedMethods.has(segments[2])
+          ) {
+            return ctx.report(
+              Diagnostic.make({
+                node,
+                message:
+                  "Use Console for user-facing output and Effect.log* for diagnostics, so output respects the configured logger and log level."
+              })
+            )
+          }
+          return Effect.void
+        })
+        yield* shouldReport
+      })
+    })
+  }
 })
 
 const noFetch = Rule.banCallOf(["fetch"], {
@@ -200,6 +480,62 @@ const noWorkspaceImport = Rule.banImport((source) => source.startsWith("@castcli
     "This package is the base of the dependency graph and must not import another workspace package."
 })
 
+// Ban runtime imports of devDependencies. Third-party modules are not followed
+// by dependency-cruiser, so this rule directly checks the import source against
+// the known devDependencies list from the root package.json.
+const noDevDependencyInRuntime = Rule.define({
+  name: "no-dev-dependency-in-runtime",
+  meta: Rule.meta({
+    type: "problem",
+    description: "Ban runtime imports of devDependencies"
+  }),
+  create: function*() {
+    const ctx = yield* RuleContext
+    const filename = yield* Effect.map(RuleContext, (c) => c.filename)
+    const isTestFile =
+      filename.includes("/test/") ||
+      filename.endsWith(".test.ts") ||
+      filename.endsWith(".test.tsx") ||
+      filename.includes("/scripts/") ||
+      filename.includes("/tools/") ||
+      filename.includes("vitest.config.ts") ||
+      filename.includes("vitest.e2e.config.ts")
+
+    if (isTestFile) {
+      return {}
+    }
+
+    const devDeps = new Set([
+      "@effect/language-service",
+      "@effect/vitest",
+      "@types/node",
+      "dependency-cruiser",
+      "effect-oxlint",
+      "esbuild",
+      "oxlint",
+      "tsx",
+      "typescript",
+      "vitest"
+    ])
+
+    return Visitor.on("ImportDeclaration", (node) => {
+      return Effect.gen(function*() {
+        const source = AST.importSource(node)
+        const basePackage = source.startsWith("@") ? source.split("/").slice(0, 2).join("/") : source.split("/")[0]
+
+        if (basePackage !== undefined && devDeps.has(basePackage)) {
+          yield* ctx.report(
+            Diagnostic.make({
+              node,
+              message: `Runtime code must not import devDependency "${basePackage}". Move to dependencies or remove the import.`
+            })
+          )
+        }
+      })
+    })
+  }
+})
+
 export default Plugin.define({
   name: "castcli",
   specifier: "./oxlint-plugin-castcli.ts",
@@ -228,6 +564,7 @@ export default Plugin.define({
     "no-as-cast": noAsCast,
     "no-non-null": noNonNull,
     "no-any": noAnyType,
-    "no-workspace-import": noWorkspaceImport
+    "no-workspace-import": noWorkspaceImport,
+    "no-dev-dependency-in-runtime": noDevDependencyInRuntime
   }
 })
