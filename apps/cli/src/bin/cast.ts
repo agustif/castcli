@@ -69,7 +69,7 @@ import { Media } from "@castcli/protocol"
 import { HttpServer as HttpServerPlatform } from "@castcli/platform"
 import { routes, type SessionState } from "../Server/Routes.ts"
 import * as State from "../State.ts"
-// import * as ControlChannel from "../ControlChannel.ts" // Temporarily disabled for debugging
+import * as ControlChannel from "../ControlChannel.ts"
 
 const CAST_SERVICE = "_googlecast._tcp.local"
 const AIRPLAY_SERVICE = "_airplay._tcp.local"
@@ -845,9 +845,61 @@ const play = Command.make(
     // connection attempt so control commands reach the active session.
     const currentSession = yield* Ref.make<Option.Option<CastSession.Session>>(Option.none())
 
-    // TODO: Debug - temporarily disable control channel
-    // const shutdownControl = yield* ControlChannel.startServer({...})
-    // yield* Effect.addFinalizer(() => shutdownControl)
+    // The control channel handles seek/pause/resume/stop commands from other
+    // processes. Started once for the entire play command, not per retry.
+    // Only in progressive mode does seek mean "restart ffmpeg at a new offset"
+    // — under HLS the receiver seeks itself.
+    //
+    // If the control channel fails to start (e.g., socket already in use),
+    // log a warning but continue - control commands won't work but playback will.
+    const shutdownControl = yield* ControlChannel.startServer({
+      onSeek: (to) =>
+        Effect.when(
+          Effect.gen(function*() {
+            yield* Ref.set(position, to)
+            yield* Console.log(`\n  seeking to ${TimeCode.format(to)}…`)
+            yield* Queue.offer(reloads, (yield* Ref.get(state)).rung)
+          }),
+          Effect.succeed(!useHls)
+        ),
+      onPause: Effect.flatMap(Ref.get(currentSession), (session) =>
+        Option.match(session, {
+          onNone: () => Effect.void,
+          onSome: (s) => s.mediaCommand(CastSession.MediaCommand.PAUSE()).pipe(
+            Effect.orElseSucceed(() => undefined)
+          )
+        })
+      ),
+      onResume: Effect.flatMap(Ref.get(currentSession), (session) =>
+        Option.match(session, {
+          onNone: () => Effect.void,
+          onSome: (s) => s.mediaCommand(CastSession.MediaCommand.PLAY()).pipe(
+            Effect.orElseSucceed(() => undefined)
+          )
+        })
+      ),
+      onStop: Effect.flatMap(Ref.get(currentSession), (session) =>
+        Option.match(session, {
+          onNone: () => Effect.void,
+          onSome: (s) => s.stopReceiver
+        })
+      ),
+      getStatus: Effect.map(Ref.get(position), (at) =>
+        Option.some({
+          file: absolute,
+          offsetSeconds: at,
+          seekable: useHls
+        })
+      )
+    }).pipe(
+      Effect.tapError((error) =>
+        Console.warn(`Control channel failed to start: ${error}. Playback will continue but control commands won't work.`)
+      ),
+      Effect.orElseSucceed(() => Effect.void)
+    )
+
+    // Ensure the control server shuts down when play ends
+    yield* Effect.addFinalizer(() => shutdownControl)
 
     const runSession = (castDevice: CastDevice) =>
       Effect.gen(function*() {
