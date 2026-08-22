@@ -73,17 +73,17 @@ Matroska as a container whatever the source was.
 
 There are two ways to hand it over, and they fail differently:
 
-| | progressive (default) | `--hls` |
+| | HLS (default) | `--progressive` |
 |---|---|---|
-| What is served | one continuous fragmented MP4 | a VOD playlist per quality, every segment addressable |
-| Who picks the quality | we do, by measuring | the receiver does, from its own buffer |
-| Changing quality | restart ffmpeg, reissue `LOAD` — a visible rebuffer | next segment comes from another variant |
-| Seeking | restart ffmpeg at the new offset | the receiver seeks; nothing restarts |
-| Cost when idle | nothing | nothing: segments are encoded only when requested |
+| What is served | a VOD playlist per quality, every segment addressable | one continuous fragmented MP4 |
+| Who picks the quality | the receiver does, from its own buffer | we do, by measuring |
+| Changing quality | next segment comes from another variant | restart ffmpeg, reissue `LOAD` — a visible rebuffer |
+| Seeking | the receiver seeks; nothing restarts | restart ffmpeg at the new offset |
+| Cost when idle | nothing: segments are encoded only when requested | nothing |
 
-HLS is the better design and is not yet the default, for one reason: the
-progressive path has been watched end to end on a real television and HLS has
-only been verified against an emulated one. See [Known gaps](#known-gaps).
+HLS is the default and is verified against emulated devices. The progressive
+path exists for files that cannot be segmented (too small, no duration) or
+for receivers that reject HLS.
 
 ## Install
 
@@ -116,8 +116,11 @@ cast streams movie.mkv
 # Override any of it
 cast play movie.mkv --device "Living Room" --audio 3 --subs 5 --seek 12:30
 
-# Let the receiver choose the quality and do its own seeking
-cast play movie.mkv --hls
+# Let the receiver choose the quality and do its own seeking (HLS is the default)
+cast play movie.mkv
+
+# Force progressive single-stream mode
+cast play movie.mkv --progressive
 ```
 
 | Flag | Meaning | Default |
@@ -143,10 +146,9 @@ cast stop
 These attach to the running session rather than launching a new one, so pausing
 does not restart the film.
 
-`seek` behaves differently depending on what is being served, and the difference
-is not cosmetic. Under HLS every segment of the film is addressable, so the
-receiver seeks by itself and nothing restarts. Progressively there is nothing to
-seek *within* — a live pipe has no byte ranges — so `cast seek` asks the running
+Under HLS every segment of the film is addressable, so the receiver seeks by
+itself and nothing restarts. With `--progressive` there is nothing to seek
+*within* — a live pipe has no byte ranges — so `cast seek` asks the running
 `cast play` to restart ffmpeg at the new offset.
 
 That distinction was found by testing rather than reasoning: built on the Cast
@@ -192,11 +194,11 @@ command that printed nothing, hung, and exited 0.
 
 ## Adaptive quality (the progressive path)
 
-Under `--hls` the receiver chooses, and none of this runs. Progressively,
-quality adapts to the link automatically. The hard part is that **spare
-bandwidth cannot be measured directly**: in steady state the delivery rate
-equals the encoded bitrate, so throughput only ever tells you the current rung
-fits, never whether a higher one would. Three signals get around that:
+When using `--progressive`, quality adapts to the link automatically. The hard
+part is that **spare bandwidth cannot be measured directly**: in steady state
+the delivery rate equals the encoded bitrate, so throughput only ever tells you
+the current rung fits, never whether a higher one would. Three signals get
+around that:
 
 1. **Startup bursts.** ffmpeg encodes faster than realtime until the socket
    backs up, so just after any restart the drain rate is the link's real
@@ -279,8 +281,8 @@ packages/
   quality/      ladder, signals (state → phase), controller (phase → action)
   dlna/         DLNA/UPnP: SSDP, SOAP, DIDL-Lite, and actions generated from
                 the vendored service descriptions
-  airplay/      HomeKit pairing (PairSetup/PairVerify), SRP, TLV8, and crypto
-                primitives; sender protocol deliberately not implemented
+  airplay/      HomeKit pairing (PairSetup/PairVerify), SRP, TLV8, crypto primitives,
+                and sender protocol for session management and media control
   source/       First-source readers: decode from RFCs and C headers as Schema
                 codecs, used by codegen scripts
   platform/     generic Node bridges: UDP for mDNS, http.createServer
@@ -395,19 +397,12 @@ removing the `as` casts exposed an `Ipv4` brand that accepted
 
 ## Known gaps
 
-- **HLS is not the default.** It is the better design — the receiver picks the
-  quality and does its own seeking, so neither costs a restart — and everything
-  about it is verified except the one thing that matters most: no real
-  television has played it. The emulated device walks the playlists and pulls
-  the segments, which catches a malformed playlist but not a receiver that
-  dislikes something about it. One confirmed session on a real device is all
-  that stands between `--hls` and the default.
 - **Progressive quality switches and seeks are visible.** Both restart ffmpeg
-  and reissue `LOAD`. This is what HLS exists to fix.
+  and reissue `LOAD`. This is what HLS exists to fix, and HLS is now the
+  default.
 - **The two processes talk through a file.** `cast seek` reaches the running
   `cast play` by writing a request into the state file, which the player polls
-  once a second. Unglamorous, and a socket would be a great deal of machinery
-  for one integer.
+  once a second. A socket would be better.
 - **Effect has no TLS/TCP client socket.** `effect/unstable/socket` is
   WebSocket-only, so `packages/protocol/src/CastSocket.ts` wraps `node:tls` —
   but exposes it as a real `Socket.Socket`.

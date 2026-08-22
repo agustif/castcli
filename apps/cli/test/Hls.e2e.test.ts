@@ -52,7 +52,7 @@ describe("cast play, against an emulated device", () => {
 
             const device = yield* Device.make({ segments: 2 })
 
-            yield* play(device, file, directory, ["--hls"])
+            yield* play(device, file, directory, [])
 
             // 1. The device was handed an HLS presentation.
             const loaded = yield* eventually(
@@ -169,7 +169,7 @@ describe("cast play, against an emulated device", () => {
             const file = yield* makeSample()
 
             const device = yield* Device.make()
-            yield* play(device, file, directory, [])
+            yield* play(device, file, directory, ["--progressive"])
 
             const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(90))
 
@@ -225,7 +225,7 @@ describe("cast play, against an emulated device", () => {
               advertise: { friendlyName: name, model: "EmulatedForTests" }
             })
 
-            yield* play(device, file, directory, ["--device", name, "--hls"], true)
+            yield* play(device, file, directory, ["--device", name], true)
 
             const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(90))
             assert.isTrue(

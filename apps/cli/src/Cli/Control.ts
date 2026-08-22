@@ -29,6 +29,7 @@ import * as Flags from "./Flags.ts"
 import { resolve, search, Target } from "./Target.ts"
 import * as TimeCode from "./TimeCode.ts"
 import * as State from "../State.ts"
+import * as ControlChannel from "../ControlChannel.ts"
 
 /** Volume as people say it. */
 const Percentage = Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 100 })))
@@ -423,43 +424,56 @@ const seek = Command.make(
     )
   },
   Effect.fn(function*({ back, device, forward, ip, to }) {
-    const active = yield* State.activeStream
-    const offset = Option.match(active, {
+    // Try to get status from the control channel first. This tells us if a
+    // player is running and whether the stream is seekable (HLS vs progressive).
+    const channelStatus = yield* ControlChannel.getStatus.pipe(
+      Effect.option,
+      Effect.map((opt) => Option.flatten(opt))
+    )
+
+    const offset = Option.match(channelStatus, {
       onNone: () => Brands.Seconds.make(0),
-      onSome: (stream) => stream.offsetSeconds
+      onSome: (statusInfo) => statusInfo.offsetSeconds
     })
     const flags = { to, forward, back }
 
     yield* onTarget({ device, ip }, {
-      onCast: (session, current) =>
+      onCast: (session, currentStatus) =>
         Effect.gen(function*() {
-          const within = Option.match(current, {
+          const within = Option.match(currentStatus, {
             onNone: () => 0,
             onSome: (playing) => playing.currentTimeSeconds
           })
           const wanted = yield* wantedFrom(offset + within, flags)
 
-          // Nothing is playing to seek within or to reload. Only checkable on
-          // this side: `play` publishes the active stream from the Cast path.
+          // Nothing is playing to seek within or to reload.
           yield* Effect.when(
             Effect.fail(
               new SeekTargetError({
                 message: "nothing is playing — start it with `cast play --seek`"
               })
             ),
-            Effect.succeed(Option.isNone(active))
+            Effect.succeed(Option.isNone(channelStatus))
           )
 
           const seekable = Option.getOrElse(
-            Option.map(active, (stream) => stream.seekable === true),
+            Option.map(channelStatus, (statusInfo) => statusInfo.seekable),
             () => false
           )
 
+          // HLS: send SEEK to the receiver directly
           yield* Effect.when(
             session.mediaCommand(Session.MediaCommand.SEEK({ currentTime: wanted })),
             Effect.succeed(seekable)
           )
-          yield* Effect.when(State.requestSeek(wanted), Effect.succeed(!seekable))
+
+          // Progressive: ask the running player to restart ffmpeg via the control channel
+          yield* Effect.when(
+            ControlChannel.seek(wanted).pipe(
+              Effect.orElseSucceed(() => undefined)
+            ),
+            Effect.succeed(!seekable)
+          )
 
           yield* Console.log(
             `seeking to ${TimeCode.format(wanted)}${seekable ? "" : " (the stream restarts there)"}`

@@ -69,6 +69,7 @@ import { Media } from "@castcli/protocol"
 import { HttpServer as HttpServerPlatform } from "@castcli/platform"
 import { routes, type SessionState } from "../Server/Routes.ts"
 import * as State from "../State.ts"
+import * as ControlChannel from "../ControlChannel.ts"
 
 const CAST_SERVICE = "_googlecast._tcp.local"
 const AIRPLAY_SERVICE = "_airplay._tcp.local"
@@ -514,9 +515,9 @@ const play = Command.make(
     audio: Flags.audioStream,
     subs: Flags.subtitleStream,
     seek: Flags.seek,
-    hls: Flags.hls
+    progressive: Flags.progressive
   },
-  Effect.fn(function*({ audio, device, file, hls, ip, seek, subs }) {
+  Effect.fn(function*({ audio, device, file, progressive, ip, seek, subs }) {
     const config = yield* AppConfig
     const ffmpeg = yield* Ffmpeg
     // `Argument.file({ mustExist: true })` already proved it is there.
@@ -604,20 +605,19 @@ const play = Command.make(
     const hlsLadder = Hls.variantsFor(ladder)
     // HLS needs two things this file may not have: a duration to compute the
     // playlist from, and at least one variant that can be cut into segments.
-    // Saying so and carrying on beats refusing — the progressive path needs
-    // neither.
-    const useHls = hls && Option.isSome(duration) && hlsLadder.length > 0
+    // When HLS is impossible or explicitly disabled, fall back to progressive.
+    const useHls = !progressive && Option.isSome(duration) && hlsLadder.length > 0
 
     yield* Effect.when(
-      Console.log("this file reports no duration, so HLS is not possible — streaming instead"),
-      Effect.succeed(hls && Option.isNone(duration))
+      Console.log("this file reports no duration, so HLS is not possible — using progressive instead"),
+      Effect.succeed(!progressive && Option.isNone(duration))
     )
     yield* Effect.when(
       Console.log(
         "this file is smaller than every encoded rung, so its only quality is a " +
-          "stream copy, which cannot be segmented — streaming instead"
+          "stream copy, which cannot be segmented — using progressive instead"
       ),
-      Effect.succeed(hls && Option.isSome(duration) && hlsLadder.length === 0)
+      Effect.succeed(!progressive && Option.isSome(duration) && hlsLadder.length === 0)
     )
 
     const startingRung = yield* Option.match(Array.get(ladder, startIndex), {
@@ -740,6 +740,7 @@ const play = Command.make(
     // running the controller as well means two parties deciding: it would
     // measure the segment fetches, decide to switch, and reissue LOAD —
     // restarting the film to overrule a receiver that was managing fine.
+    // The controller and reload queue only run in progressive mode.
     yield* Effect.when(Effect.forkScoped(controller.run), Effect.succeed(!useHls))
 
     const sendLoad = Effect.fn("cast.sendLoad")(function*(session: CastSession.Session) {
@@ -840,83 +841,110 @@ const play = Command.make(
     // "the TV is off" from "the TV dropped the connection".
     const everConnected = yield* Ref.make(false)
 
-    // Seek requests already in the file belong to a previous run; only ones
-    // newer than this are ours to act on.
-    const lastSeekId = yield* Ref.make(
-      Option.match(yield* State.pendingSeek, { onNone: () => 0, onSome: (request) => request.id })
-    )
+    // Ref to hold the current session for control commands. Updated on each
+    // connection attempt so control commands reach the active session.
+    const currentSession = yield* Ref.make<Option.Option<CastSession.Session>>(Option.none())
+
+    // The control channel handles seek/pause/resume/stop commands from other
+    // processes. Started once for the entire play command, not per retry.
+    // Only in progressive mode does seek mean "restart ffmpeg at a new offset"
+    // — under HLS the receiver seeks itself.
+    const shutdownControl = yield* ControlChannel.startServer({
+      onSeek: (to) =>
+        Effect.when(
+          Effect.gen(function*() {
+            yield* Ref.set(position, to)
+            yield* Console.log(`\n  seeking to ${TimeCode.format(to)}…`)
+            yield* Queue.offer(reloads, (yield* Ref.get(state)).rung)
+          }),
+          Effect.succeed(!useHls)
+        ),
+      onPause: Effect.flatMap(Ref.get(currentSession), (session) =>
+        Option.match(session, {
+          onNone: () => Effect.void,
+          onSome: (s) => s.mediaCommand(CastSession.MediaCommand.PAUSE()).pipe(
+            Effect.orElseSucceed(() => undefined)
+          )
+        })
+      ),
+      onResume: Effect.flatMap(Ref.get(currentSession), (session) =>
+        Option.match(session, {
+          onNone: () => Effect.void,
+          onSome: (s) => s.mediaCommand(CastSession.MediaCommand.PLAY()).pipe(
+            Effect.orElseSucceed(() => undefined)
+          )
+        })
+      ),
+      onStop: Effect.flatMap(Ref.get(currentSession), (session) =>
+        Option.match(session, {
+          onNone: () => Effect.void,
+          onSome: (s) => s.stopReceiver
+        })
+      ),
+      getStatus: Effect.map(Ref.get(position), (at) =>
+        Option.some({
+          file: absolute,
+          offsetSeconds: at,
+          seekable: useHls
+        })
+      )
+    })
+
+    // Ensure the control server shuts down when play ends
+    yield* Effect.addFinalizer(() => shutdownControl)
 
     const runSession = (castDevice: CastDevice) =>
       Effect.gen(function*() {
-      const session = yield* CastSession.make(castDevice.ip, castDevice.port)
-      yield* session.launch
-      yield* Ref.set(everConnected, true)
-      yield* sendLoad(session)
+        const session = yield* CastSession.make(castDevice.ip, castDevice.port)
+        yield* session.launch
+        yield* Ref.set(everConnected, true)
+        yield* Ref.set(currentSession, Option.some(session))
+        yield* sendLoad(session)
 
-      // A rejected LOAD is otherwise indistinguishable from a slow start.
-      yield* Effect.forkScoped(
-        Stream.runForEach(session.loadFailures, (failure) =>
-          Console.error(
-            `\n  the receiver rejected the stream: ${failure.detail}\n` +
-              "  try a different --audio stream, or check `cast streams` for the track indices"
-          ))
-      )
-
-      // A seek asked for by `cast seek` that lands before this stream begins.
-      // Polling a file is unglamorous, but the two processes share nothing
-      // else, and the alternative — a socket of our own — is a great deal of
-      // machinery for one integer.
-      yield* Effect.forkScoped(
-        Effect.repeat(
-          Effect.gen(function*() {
-            const requested = yield* State.pendingSeek
-            yield* Option.match(requested, {
-              onNone: () => Effect.void,
-              onSome: (request) =>
-                Effect.when(
-                  Effect.gen(function*() {
-                    yield* Ref.set(lastSeekId, request.id)
-                    yield* Ref.set(position, request.toSeconds)
-                    yield* Console.log(`\n  seeking to ${TimeCode.format(request.toSeconds)}…`)
-                    yield* Queue.offer(reloads, (yield* Ref.get(state)).rung)
-                  }),
-                  Effect.map(Ref.get(lastSeekId), (seen) => request.id > seen)
-                )
-            })
-          }),
-          Schedule.spaced(Duration.seconds(1))
+        // A rejected LOAD is otherwise indistinguishable from a slow start.
+        yield* Effect.forkScoped(
+          Stream.runForEach(session.loadFailures, (failure) =>
+            Console.error(
+              `\n  the receiver rejected the stream: ${failure.detail}\n` +
+                "  try a different --audio stream, or check `cast streams` for the track indices"
+            ))
         )
-      )
 
-      // Reloading is how the progressive path changes quality. HLS has no use
-      // for it — switching is the next segment — and the queue stays empty.
-      yield* Effect.forkScoped(
-        Stream.runForEach(Stream.fromQueue(reloads), (rung) =>
+
+        // Reloading is how the progressive path changes quality. HLS has no use
+        // for it — switching is the next segment — and the queue stays empty.
+        // This fiber is only forked when !useHls, so the queue is only used
+        // in progressive mode.
+        yield* Effect.when(
+          Effect.forkScoped(
+            Stream.runForEach(Stream.fromQueue(reloads), (rung) =>
+              Effect.gen(function*() {
+                const at = yield* Ref.get(position)
+                yield* Ref.update(state, (current) => ({
+                  ...current,
+                  rung,
+                  offsetSeconds: at
+                }))
+                yield* sendLoad(session)
+              }))
+          ),
+          Effect.succeed(!useHls)
+        )
+
+        yield* Stream.runForEach(session.statuses, (status) =>
           Effect.gen(function*() {
-            const at = yield* Ref.get(position)
-            yield* Ref.update(state, (current) => ({
-              ...current,
-              rung,
-              offsetSeconds: at
-            }))
-            yield* sendLoad(session)
+            yield* controller.noteState(status.playerState)
+            // The receiver reports time within the *current* stream, which starts
+            // at the offset we last loaded from.
+            const current = yield* Ref.get(state)
+            yield* Ref.set(
+              position,
+              Seconds.make(current.offsetSeconds + status.currentTimeSeconds)
+            )
           }))
-      )
 
-      yield* Stream.runForEach(session.statuses, (status) =>
-        Effect.gen(function*() {
-          yield* controller.noteState(status.playerState)
-          // The receiver reports time within the *current* stream, which starts
-          // at the offset we last loaded from.
-          const current = yield* Ref.get(state)
-          yield* Ref.set(
-            position,
-            Seconds.make(current.offsetSeconds + status.currentTimeSeconds)
-          )
-        }))
-
-      return yield* Effect.fail(new ConnectionLostError())
-    })
+        return yield* Effect.fail(new ConnectionLostError())
+      })
 
     // Saved on a timer rather than per status report: the receiver sends one a
     // second, and a bookmark does not need that resolution.
