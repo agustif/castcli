@@ -108,20 +108,28 @@ Recorded so it does not have to be re-argued:
 
 ## The third protocol
 
-AirPlay was researched and the cryptographic infrastructure was built: HomeKit
-pairing (PairSetup/PairVerify), SRP6a, Ed25519, X25519, ChaCha20-Poly1305,
-HKDF, and TLV8 encoding all exist in `packages/airplay` and are tested. The
-reasoning for not proceeding to the sender protocol is in
-[`airplay.md`](airplay.md). The short version is that it fails this project's
-own test twice over. There is no first source to generate from — unlike
-Chromium's `.proto` and the UPnP service descriptions, what exists is
-reverse-engineered notes, and the part that matters for a current Apple TV
-exists only in two unmerged implementations. And the one path demonstrably
-working on modern hardware is *mirroring*, which inverts the pull model that
-lets Cast and DLNA share everything above the transport.
+AirPlay was researched, and the full pull/URL-handoff path has been implemented
+and verified against an emulated device. The cryptographic infrastructure for
+HomeKit Accessory Protocol pairing (PairSetup/PairVerify) exists: SRP6a,
+Ed25519, X25519, ChaCha20-Poly1305, HKDF, and TLV8 encoding all sit in
+`packages/airplay` and are tested.
 
-It would also be unfinishable without an Apple TV to test against, which is the
-same constraint that keeps HLS from being the default.
+The sender protocol — mDNS `_airplay._tcp` discovery, HTTP control (`/play`,
+`/rate`, `/scrub`, `/stop`, `/playback-info`), and the emulator that pulls
+media — is complete. Integration into the CLI (`scan`, `play`, `status`,
+`pause`, `resume`, `seek`, `stop`) works the same way it does for Cast and DLNA.
+
+The pairing handshake is **not wired into the session**, because modern Apple
+TVs require it and testing that path requires hardware. The pieces exist;
+connecting them is bounded work once a device can validate the result. The
+reasoning for this is in [`airplay.md`](airplay.md): the legacy unauthenticated
+endpoints work with emulators and may work with some real devices (third-party
+TVs, pre-tvOS 10.2 Apple TVs), but current Apple TVs demand a full AirPlay 2
+session. Which path a given device accepts is settled by trying it.
+
+Mirroring (push-model H.264 encoding) is **deliberately not built**. It inverts
+the pull model that lets Cast, DLNA, and AirPlay share the media server, quality
+ladder, segment encoder, and subtitle handling.
 
 ## What is left
 
@@ -132,7 +140,10 @@ same constraint that keeps HLS from being the default.
   probe-and-hold logic — can be deleted.
 - **One DLNA television.** The whole path is verified against an emulated
   renderer and has never met a real set.
-- **An Apple TV**, if AirPlay is ever wanted, to settle whether the legacy
-  `/play` still works or the play queue is mandatory.
+- **An Apple TV** (or an AirPlay-compatible television), to test whether the
+  implemented sender works with that device. The software is complete for the
+  unauthenticated path; pairing is the only missing piece for modern Apple TVs.
+  Which endpoint a given device expects is an hour's experiment with the
+  hardware.
 
 Everything that can be verified without a device has been.

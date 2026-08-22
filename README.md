@@ -1,7 +1,7 @@
 # cast
 
-Stream a local video file to a television from the command line — Google Cast
-or DLNA, whichever the device speaks.
+Stream a local video file to a television from the command line — Google Cast,
+DLNA, or AirPlay, whichever the device speaks.
 
 ```sh
 cast play movie.mkv
@@ -13,10 +13,13 @@ to the link while it runs.
 
 Written because VLC could not do it, for a reason worth recording.
 
-**Note on AirPlay:** This tool speaks Cast and DLNA. AirPlay was researched and the
-cryptographic infrastructure (HomeKit pairing) was built, but the sender protocol
-was deliberately not implemented. See [`docs/airplay.md`](docs/airplay.md) for the
-reasoning — primarily that it cannot be verified without physical Apple TV hardware.
+**Note on AirPlay:** This tool speaks Cast, DLNA, and AirPlay (pull/URL-handoff
+path). The AirPlay sender is software-complete for the legacy unauthenticated
+endpoints and works with emulated devices. Modern Apple TVs require HAP pairing,
+which is not yet wired into the session — the cryptographic primitives exist,
+but connecting them requires hardware to validate. See [`docs/airplay.md`](docs/airplay.md)
+for details. Third-party AirPlay receivers (Samsung, LG, Sony, Vizio) may work
+without pairing.
 
 ## The bug this exists to work around
 
@@ -53,17 +56,15 @@ points inward. The advertised URL has to be routable **from the TV**. This is
 not a Cast quirk: DLNA's fault code 716 means precisely the same thing, and it
 is the first thing to suspect on either protocol.
 
-That inversion is also why supporting a second protocol cost so little. Cast and
-DLNA agree on almost nothing — one launches an application over a persistent TLS
-connection and speaks protobuf, the other posts SOAP at a URL and keeps no
-connection at all — but both are pull models, so probing the file, choosing the
-tracks, extracting the subtitles and serving the media are the same work either
-way. Only the last step differs.
+That inversion is also why supporting three protocols cost so little. Cast, DLNA,
+and AirPlay agree on almost nothing — Cast launches an application over TLS and
+speaks protobuf, DLNA posts SOAP at a URL, AirPlay speaks HTTP — but all three
+are pull models, so probing the file, choosing the tracks, extracting the
+subtitles and serving the media are the same work. Only the last step differs.
 
-There is deliberately **no adapter interface**. Two implementations of one thing
-is a shape traced around the first; instead a tagged `Target` and an exhaustive
-match make every site that acts on a device handle both, and the compiler says
-so. A third protocol would make the right interface visible.
+There is deliberately **no adapter interface**. A tagged `Target` and an
+exhaustive match make every site that acts on a device handle all three, and the
+compiler says so.
 
 ffmpeg does the conversion. Video is stream-copied whenever the source is
 already H.264 8-bit 4:2:0 at 1080p or below; only the audio is always
