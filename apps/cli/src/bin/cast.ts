@@ -514,9 +514,9 @@ const play = Command.make(
     audio: Flags.audioStream,
     subs: Flags.subtitleStream,
     seek: Flags.seek,
-    hls: Flags.hls
+    progressive: Flags.progressive
   },
-  Effect.fn(function*({ audio, device, file, hls, ip, seek, subs }) {
+  Effect.fn(function*({ audio, device, file, progressive, ip, seek, subs }) {
     const config = yield* AppConfig
     const ffmpeg = yield* Ffmpeg
     // `Argument.file({ mustExist: true })` already proved it is there.
@@ -604,20 +604,19 @@ const play = Command.make(
     const hlsLadder = Hls.variantsFor(ladder)
     // HLS needs two things this file may not have: a duration to compute the
     // playlist from, and at least one variant that can be cut into segments.
-    // Saying so and carrying on beats refusing — the progressive path needs
-    // neither.
-    const useHls = hls && Option.isSome(duration) && hlsLadder.length > 0
+    // Fall back to progressive when HLS is impossible.
+    const useHls = !progressive && Option.isSome(duration) && hlsLadder.length > 0
 
     yield* Effect.when(
-      Console.log("this file reports no duration, so HLS is not possible — streaming instead"),
-      Effect.succeed(hls && Option.isNone(duration))
+      Console.log("this file reports no duration, so HLS is not possible — streaming progressive instead"),
+      Effect.succeed(!progressive && Option.isNone(duration))
     )
     yield* Effect.when(
       Console.log(
         "this file is smaller than every encoded rung, so its only quality is a " +
-          "stream copy, which cannot be segmented — streaming instead"
+          "stream copy, which cannot be segmented — streaming progressive instead"
       ),
-      Effect.succeed(hls && Option.isSome(duration) && hlsLadder.length === 0)
+      Effect.succeed(!progressive && Option.isSome(duration) && hlsLadder.length === 0)
     )
 
     const startingRung = yield* Option.match(Array.get(ladder, startIndex), {
