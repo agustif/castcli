@@ -851,6 +851,7 @@ const play = Command.make(
     // — under HLS the receiver seeks itself.
     //
     // Skip control channel in test environment to avoid blocking issues.
+    // In production, if the control channel fails to start, log a warning and continue.
     // eslint-disable-next-line castcli/no-process-env
     const shutdownControl = process.env["SKIP_CONTROL_CHANNEL"]
       ? yield* Effect.succeed(Effect.void)
@@ -893,7 +894,12 @@ const play = Command.make(
               seekable: useHls
             })
           )
-        })
+        }).pipe(
+          Effect.tapError((error) =>
+            Console.warn(`\nControl channel unavailable: ${error}\nPlayback will continue but pause/seek commands won't work.\n`)
+          ),
+          Effect.orElseSucceed(() => Effect.void)
+        )
 
     // Ensure the control server shuts down when play ends
     yield* Effect.addFinalizer(() => shutdownControl)
