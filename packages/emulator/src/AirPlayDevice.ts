@@ -289,10 +289,8 @@ export const make = (options: {
             response.writeHead(written.status, {
               "content-type": written.contentType ?? "text/plain"
             })
-            Match.value(written.body).pipe(
-              Match.when(Match.string, (str) => response.end(str)),
-              Match.orElse((buf) => response.end(Buffer.from(buf)))
-            )
+            const bodyToSend = typeof written.body === "string" ? written.body : Buffer.from(written.body)
+            response.end(bodyToSend)
           })))
     )
 
