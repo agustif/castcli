@@ -256,10 +256,7 @@ export const play = (
           (handle) =>
             // Killed when the scope closes, whatever the fiber was doing. The
             // player never exits on its own — that is the point of it.
-            Effect.andThen(
-              Effect.addFinalizer(() => Effect.orElseSucceed(handle.kill(), () => undefined)),
-              Effect.andThen(handle.exitCode, Effect.void)
-            )
+            Effect.addFinalizer(() => Effect.orElseSucceed(handle.kill(), () => undefined))
         )
       )
     ))
