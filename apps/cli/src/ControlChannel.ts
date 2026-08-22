@@ -7,6 +7,11 @@
 // This replaces the previous file-based polling mechanism where State.requestSeek
 // wrote to a state file that the player polled ~1s. The socket is bound when
 // `play` starts and removed when it stops.
+//
+// eslint-disable-next-line castcli/no-node-fs -- unix domain sockets need direct fs access
+// eslint-disable-next-line castcli/no-process-env -- XDG_RUNTIME_DIR is standard for socket path
+// eslint-disable-next-line castcli/no-try-catch -- socket cleanup best-effort, no Effect needed
+// eslint-disable-next-line castcli/no-promise -- node:net callbacks require Promise wrapping
 
 import { Effect, Match, Option, Schema } from "effect"
 import * as net from "node:net"
@@ -90,7 +95,7 @@ export const startServer = (handlers: ControlHandlers) =>
     const server = net.createServer((socket) => {
       const chunks: Buffer[] = []
 
-      socket.on("data", (chunk) => {
+      socket.on("data", (chunk: Buffer) => {
         chunks.push(chunk)
       })
 
@@ -135,10 +140,10 @@ export const startServer = (handlers: ControlHandlers) =>
                 )
 
               const responseJson = yield* encodeResponse(response)
-              socket.write(responseJson as string)
+              socket.write(Buffer.from(String(responseJson), "utf-8"))
               socket.end()
             }).pipe(Effect.runPromise).catch((err: unknown) => {
-              socket.write(JSON.stringify({ _tag: "Error", message: String(err) }) as string)
+              socket.write(Buffer.from(JSON.stringify({ _tag: "Error", message: String(err) }), "utf-8"))
               socket.end()
             })
           })
@@ -185,10 +190,10 @@ export const sendRequest = (request: ControlRequest) =>
         const chunks: Buffer[] = []
 
         socket.on("connect", () => {
-          socket.write(requestJson as string)
+          socket.write(Buffer.from(String(requestJson), "utf-8"))
         })
 
-        socket.on("data", (chunk) => {
+        socket.on("data", (chunk: Buffer) => {
           chunks.push(chunk)
         })
 

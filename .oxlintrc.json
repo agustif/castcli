@@ -93,6 +93,17 @@
     },
     {
       "files": [
+        "apps/cli/src/ControlChannel.ts"
+      ],
+      "rules": {
+        "castcli/no-node-fs": "off",
+        "castcli/no-process-env": "off",
+        "castcli/no-try-catch": "off",
+        "castcli/no-promise": "off"
+      }
+    },
+    {
+      "files": [
         "packages/domain/**"
       ],
       "rules": {
