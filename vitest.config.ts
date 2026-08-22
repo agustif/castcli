@@ -7,7 +7,7 @@ export default defineConfig({
   test: {
     // Apps have tests too: the CLI's state store is real I/O with real
     // failure modes, and leaving it out of the pattern hid that.
-    include: ["packages/*/test/**/*.test.ts", "apps/*/test/**/*.test.ts"],
+    include: ["packages/*/test/**/*.test.ts", "apps/*/test/**/*.test.ts", "tools/*/test/**/*.test.ts"],
     // The end-to-end tests live in vitest.e2e.config.ts. They spawn processes
     // and encode video, so running them beside these makes both unreliable.
     exclude: ["**/node_modules/**", "**/*.e2e.test.ts"],

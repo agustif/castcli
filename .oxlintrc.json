@@ -86,6 +86,17 @@
     },
     {
       "files": [
+        "tools/*/test/**"
+      ],
+      "rules": {
+        "castcli/no-node-child-process": "off",
+        "castcli/no-any": "off",
+        "castcli/no-await": "off",
+        "eslint/require-yield": "off"
+      }
+    },
+    {
+      "files": [
         "packages/protocol/src/Generated.ts"
       ],
       "rules": {
