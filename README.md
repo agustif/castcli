@@ -1,7 +1,7 @@
 # cast
 
-Stream a local video file to a television from the command line — Google Cast
-or DLNA, whichever the device speaks.
+Stream a local video file to a television from the command line — Google Cast,
+DLNA, or AirPlay, whichever the device speaks.
 
 ```sh
 cast play movie.mkv
@@ -12,6 +12,14 @@ you stopped, transcodes only what the receiver cannot play, and adapts quality
 to the link while it runs.
 
 Written because VLC could not do it, for a reason worth recording.
+
+**Note on AirPlay:** This tool speaks Cast, DLNA, and AirPlay (pull/URL-handoff
+path). The AirPlay sender is software-complete for the legacy unauthenticated
+endpoints and works with emulated devices. Modern Apple TVs require HAP pairing,
+which is not yet wired into the session — the cryptographic primitives exist,
+but connecting them requires hardware to validate. See [`docs/airplay.md`](docs/airplay.md)
+for details. Third-party AirPlay receivers (Samsung, LG, Sony, Vizio) may work
+without pairing.
 
 ## The bug this exists to work around
 
@@ -48,17 +56,15 @@ points inward. The advertised URL has to be routable **from the TV**. This is
 not a Cast quirk: DLNA's fault code 716 means precisely the same thing, and it
 is the first thing to suspect on either protocol.
 
-That inversion is also why supporting a second protocol cost so little. Cast and
-DLNA agree on almost nothing — one launches an application over a persistent TLS
-connection and speaks protobuf, the other posts SOAP at a URL and keeps no
-connection at all — but both are pull models, so probing the file, choosing the
-tracks, extracting the subtitles and serving the media are the same work either
-way. Only the last step differs.
+That inversion is also why supporting three protocols cost so little. Cast, DLNA,
+and AirPlay agree on almost nothing — Cast launches an application over TLS and
+speaks protobuf, DLNA posts SOAP at a URL, AirPlay speaks HTTP — but all three
+are pull models, so probing the file, choosing the tracks, extracting the
+subtitles and serving the media are the same work. Only the last step differs.
 
-There is deliberately **no adapter interface**. Two implementations of one thing
-is a shape traced around the first; instead a tagged `Target` and an exhaustive
-match make every site that acts on a device handle both, and the compiler says
-so. A third protocol would make the right interface visible.
+There is deliberately **no adapter interface**. A tagged `Target` and an
+exhaustive match make every site that acts on a device handle all three, and the
+compiler says so.
 
 ffmpeg does the conversion. Video is stream-copied whenever the source is
 already H.264 8-bit 4:2:0 at 1080p or below; only the audio is always
@@ -273,6 +279,10 @@ packages/
   quality/      ladder, signals (state → phase), controller (phase → action)
   dlna/         DLNA/UPnP: SSDP, SOAP, DIDL-Lite, and actions generated from
                 the vendored service descriptions
+  airplay/      HomeKit pairing (PairSetup/PairVerify), SRP, TLV8, and crypto
+                primitives; sender protocol deliberately not implemented
+  source/       First-source readers: decode from RFCs and C headers as Schema
+                codecs, used by codegen scripts
   platform/     generic Node bridges: UDP for mDNS, http.createServer
   emulator/     devices, emulated well enough to test against
 apps/
@@ -294,7 +304,7 @@ such an import resolve.
 | `npm run vocabulary:sync` | refetch the media vocabulary from Google (needs the network) |
 | `npm run depcruise` | no cycles, Node builtins stay in `platform`/`protocol`, packages never import the app |
 | `npm run codegen:check` | generated wire descriptors, media vocabulary and UPnP actions are not stale |
-| `npm test` | 213 tests, in about a second |
+| `npm test` | 577 tests, in about a second |
 | `npm run test:e2e` | 4 tests that run the built binary at emulated devices, Cast and DLNA |
 | `npm run check` | all of the above — and the only thing CI runs |
 

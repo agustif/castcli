@@ -21,6 +21,7 @@ import { Command, Flag } from "effect/unstable/cli"
 import { AppConfig } from "../Config.ts"
 import { Namespace, Session, Session as CastSession } from "@castcli/protocol"
 import { Renderer as DlnaRenderer } from "@castcli/dlna"
+import { Session as AirPlaySession } from "@castcli/airplay"
 import { Brands } from "@castcli/domain"
 import { CastDevice, VolumeLevel } from "@castcli/domain"
 import { SeekTargetError } from "@castcli/domain"
@@ -76,17 +77,18 @@ const remember: (target: Target) => Effect.Effect<void, never, State.Store> = Ma
   .type<Target>().pipe(
     Match.tag("Cast", ({ device }) => State.rememberDevice(device.ip)),
     Match.tag("Dlna", ({ renderer }) => State.rememberRenderer(renderer.friendlyName)),
+    Match.tag("AirPlay", ({ device }) => State.rememberAirPlay(device.ip)),
     Match.exhaustive
   )
 
 /**
  * Resolve a device and act on it, whichever protocol answers.
  *
- * The two handlers are deliberately different shapes. There is no session to
- * hand the DLNA one, because UPnP has none — the renderer it receives is a
- * bundle of control URLs, and every question asked of it is another POST.
+ * The three handlers are deliberately different shapes. Cast has a persistent
+ * session; DLNA and AirPlay are request-response over HTTP with no connection
+ * to hold open between commands.
  */
-const onTarget = <A, E1, E2, R1, R2>(
+const onTarget = <A, E1, E2, E3, R1, R2, R3>(
   options: {
     readonly ip: Option.Option<Brands.Ipv4>
     readonly device: Option.Option<string>
@@ -97,6 +99,7 @@ const onTarget = <A, E1, E2, R1, R2>(
       status: Option.Option<CastSession.PlayerStatus>
     ) => Effect.Effect<A, E1, R1>
     readonly onDlna: (renderer: DlnaRenderer.Renderer) => Effect.Effect<A, E2, R2>
+    readonly onAirPlay: (device: import("@castcli/domain").AirPlayDevice) => Effect.Effect<A, E3, R3>
   }
 ) =>
   Effect.gen(function*() {
@@ -110,6 +113,7 @@ const onTarget = <A, E1, E2, R1, R2>(
           // renderer exists for exactly as long as the action takes.
           Match.tag("Dlna", ({ renderer }) =>
             Effect.scoped(Effect.flatMap(DlnaRenderer.connect(renderer), handlers.onDlna))),
+          Match.tag("AirPlay", ({ device }) => handlers.onAirPlay(device)),
           Match.exhaustive
         ),
         // Only once it worked. Remembering a device that turned out to be
@@ -194,6 +198,14 @@ const status = Command.make(
               state: playing.state,
               position: playing.position
             }))
+          )),
+      onAirPlay: (device) =>
+        Effect.flatMap(AirPlaySession.playbackInfo(device), (info) =>
+          report(
+            Option.map(info, (playing) => ({
+              state: playing.rate === 1 ? "PLAYING" : "PAUSED",
+              position: Brands.Seconds.makeOption(playing.position ?? 0)
+            }))
           ))
     })
   })
@@ -205,7 +217,8 @@ const pause = Command.make(
   Effect.fn(function*({ device, ip }) {
     yield* onTarget({ device, ip }, {
       onCast: (session) => session.mediaCommand(Session.MediaCommand.PAUSE()),
-      onDlna: (renderer) => renderer.pause
+      onDlna: (renderer) => renderer.pause,
+      onAirPlay: (device) => AirPlaySession.rate(device, 0)
     })
     yield* Console.log("paused")
   })
@@ -217,7 +230,8 @@ const resume = Command.make(
   Effect.fn(function*({ device, ip }) {
     yield* onTarget({ device, ip }, {
       onCast: (session) => session.mediaCommand(Session.MediaCommand.PLAY()),
-      onDlna: (renderer) => renderer.resume
+      onDlna: (renderer) => renderer.resume,
+      onAirPlay: (device) => AirPlaySession.rate(device, 1)
     })
     yield* Console.log("resumed")
   })
@@ -268,6 +282,20 @@ const toggle = Command.make(
             Match.whenOr("PLAYING", "TRANSITIONING", () =>
               Effect.andThen(renderer.pause, Console.log("paused"))),
             Match.exhaustive
+          )),
+      onAirPlay: (device) =>
+        Effect.flatMap(AirPlaySession.playbackInfo(device), (playback) =>
+          Match.value(
+            Option.getOrElse(
+              Option.map(playback, (playing) => (playing.rate === 1 ? "PLAYING" : "PAUSED")),
+              () => "PLAYING" as const
+            )
+          ).pipe(
+            Match.when("PAUSED", () =>
+              Effect.andThen(AirPlaySession.rate(device, 1), Console.log("resumed"))),
+            Match.when("PLAYING", () =>
+              Effect.andThen(AirPlaySession.rate(device, 0), Console.log("paused"))),
+            Match.exhaustive
           ))
     })
   })
@@ -294,7 +322,8 @@ const volume = Command.make(
 
     yield* onTarget({ device, ip }, {
       onCast: (session) => session.setVolume(wanted),
-      onDlna: (renderer) => renderer.setVolume(wanted)
+      onDlna: (renderer) => renderer.setVolume(wanted),
+      onAirPlay: () => Effect.void
     })
     yield* Console.log(`volume set to ${level}%`)
   })
@@ -308,7 +337,8 @@ const stop = Command.make(
       onCast: (session) => session.stopReceiver,
       // A renderer has no receiver application to close, so `Stop` is the whole
       // of it: the transport goes to STOPPED and the device drops the pull.
-      onDlna: (renderer) => renderer.stop
+      onDlna: (renderer) => renderer.stop,
+      onAirPlay: (device) => AirPlaySession.stop(device)
     })
     yield* Console.log("stopped")
   })
@@ -457,6 +487,19 @@ const seek = Command.make(
           // — and that is a better answer than one guessed from a file the
           // DLNA path does not write.
           yield* renderer.seek(Brands.Seconds.make(Math.max(0, wanted - offset)))
+          yield* Console.log(`seeking to ${TimeCode.format(wanted)}`)
+        }),
+
+      onAirPlay: (device) =>
+        Effect.gen(function*() {
+          const playback = yield* AirPlaySession.playbackInfo(device)
+          const within = Option.match(playback, {
+            onNone: () => 0,
+            onSome: (playing) => playing.position ?? 0
+          })
+          const wanted = yield* wantedFrom(offset + within, flags)
+          
+          yield* AirPlaySession.scrub(device, Brands.Seconds.make(Math.max(0, wanted)))
           yield* Console.log(`seeking to ${TimeCode.format(wanted)}`)
         })
     })

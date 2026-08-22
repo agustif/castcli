@@ -17,7 +17,7 @@
 
 import { Array, Console, Data, Duration, Effect, Match, Option } from "effect"
 import { HttpClient } from "effect/unstable/http"
-import { CastDevice, DeviceNotFoundError, Ipv4, Port } from "@castcli/domain"
+import { AirPlayDevice, CastDevice, DeviceNotFoundError, Ipv4, Port } from "@castcli/domain"
 import { Mdns } from "@castcli/platform"
 import {
   Description as DlnaDescription,
@@ -27,10 +27,12 @@ import {
 import * as State from "../State.ts"
 
 const CAST_SERVICE = "_googlecast._tcp.local"
+const AIRPLAY_SERVICE = "_airplay._tcp.local"
 
 export type Target = Data.TaggedEnum<{
   readonly Cast: { readonly device: CastDevice }
   readonly Dlna: { readonly renderer: DlnaDescription.Renderer; readonly location: string }
+  readonly AirPlay: { readonly device: AirPlayDevice }
 }>
 
 export const Target = Data.taggedEnum<Target>()
@@ -38,6 +40,7 @@ export const Target = Data.taggedEnum<Target>()
 export const describe: (target: Target) => string = Match.type<Target>().pipe(
   Match.tag("Cast", ({ device }) => `${device.name} — Cast at ${device.ip}:${device.port}`),
   Match.tag("Dlna", ({ renderer }) => `${renderer.friendlyName} — DLNA`),
+  Match.tag("AirPlay", ({ device }) => `${device.name} — AirPlay at ${device.ip}:${device.port}`),
   Match.exhaustive
 )
 
@@ -47,6 +50,9 @@ export const describe: (target: Target) => string = Match.type<Target>().pipe(
  */
 export const castAt = (address: Ipv4, devicePort: number): CastDevice =>
   new CastDevice({ name: address, ip: address, port: Port.make(devicePort) })
+
+export const airPlayAt = (address: Ipv4, devicePort: number): AirPlayDevice =>
+  new AirPlayDevice({ name: address, ip: address, port: Port.make(devicePort) })
 
 /**
  * Fetch a renderer's description and read it.
@@ -71,8 +77,8 @@ export const describeRenderer = (client: HttpClient.HttpClient, location: string
 /**
  * Everything on the network we could play to, still undescribed.
  *
- * Both sweeps run at once because they are independent waits on different
- * sockets, and running them one after the other would double the time a person
+ * All three sweeps run at once because they are independent waits on different
+ * sockets, and running them sequentially would triple the time a person
  * spends looking at "scanning…" for no reason.
  */
 export const discover = (timeout: Duration.Duration) =>
@@ -83,11 +89,12 @@ export const discover = (timeout: Duration.Duration) =>
         Effect.orElseSucceed(
           Effect.scoped(Ssdp.search(DlnaSsdp.MEDIA_RENDERER, timeout)),
           () => []
-        )
+        ),
+        Effect.orElseSucceed(Mdns.discoverAirPlayWithRetry(AIRPLAY_SERVICE, timeout), () => [])
       ],
-      { concurrency: 2 }
+      { concurrency: 3 }
     ),
-    ([cast, upnp]) => ({ cast, upnp })
+    ([cast, upnp, airplay]) => ({ cast, upnp, airplay })
   )
 
 /** Every renderer that answered, with its description read. */
@@ -113,11 +120,11 @@ const matcher = (name: Option.Option<string>) => (candidate: string): boolean =>
   })
 
 /**
- * Sweep both networks and pick something, ignoring whatever was remembered.
+ * Sweep all three networks and pick something, ignoring whatever was remembered.
  *
- * Cast first when both answer to the name. It is the protocol this tool knows
- * best and the one whose behaviour has been watched end to end on a real
- * television; DLNA is the fallback, not the preference.
+ * Cast first when multiple answer to the name, as it is the protocol this tool
+ * knows best and the one watched end to end on real hardware. AirPlay second,
+ * DLNA third.
  */
 export const search = Effect.fn("target.search")(function*(options: {
   readonly name: Option.Option<string>
@@ -134,23 +141,34 @@ export const search = Effect.fn("target.search")(function*(options: {
   return yield* Option.match(cast, {
     onSome: (device) => Effect.succeed(Target.Cast({ device })),
     onNone: () =>
-      Effect.flatMap(renderersAmong(client, found.upnp), (described) =>
-        Option.match(
-          Array.findFirst(described, (candidate) => matches(candidate.renderer.friendlyName)),
-          {
-            onSome: (candidate) => Effect.succeed(Target.Dlna(candidate)),
-            onNone: () =>
-              Effect.fail(
-                new DeviceNotFoundError({
-                  query: Option.getOrElse(options.name, () => "(first available)"),
-                  found: [
-                    ...found.cast.map((device) => device.name),
-                    ...described.map((one) => one.renderer.friendlyName)
-                  ]
-                })
-              )
-          }
-        ))
+      Effect.gen(function*() {
+        const airplay = Array.findFirst(
+          found.airplay.filter((device) => device.supportsVideo),
+          (candidate) => matches(candidate.name)
+        )
+        return yield* Option.match(airplay, {
+          onSome: (device) => Effect.succeed(Target.AirPlay({ device })),
+          onNone: () =>
+            Effect.flatMap(renderersAmong(client, found.upnp), (described) =>
+              Option.match(
+                Array.findFirst(described, (candidate) => matches(candidate.renderer.friendlyName)),
+                {
+                  onSome: (candidate) => Effect.succeed(Target.Dlna(candidate)),
+                  onNone: () =>
+                    Effect.fail(
+                      new DeviceNotFoundError({
+                        query: Option.getOrElse(options.name, () => "(first available)"),
+                        found: [
+                          ...found.cast.map((device) => device.name),
+                          ...found.airplay.map((device) => device.name),
+                          ...described.map((one) => one.renderer.friendlyName)
+                        ]
+                      })
+                    )
+                }
+              ))
+        })
+      })
   })
 })
 
@@ -187,18 +205,29 @@ const rememberedRenderer = (
   })
 
 /**
+ * Turn a remembered AirPlay address back into a device.
+ *
+ * Try the address directly first, then fall back to discovery if unreachable.
+ */
+const rememberedAirPlay = (
+  ip: Ipv4,
+  options: { readonly name: Option.Option<string>; readonly timeout: Duration.Duration; readonly devicePort: number }
+) =>
+  Effect.succeed(Target.AirPlay({ device: airPlayAt(ip, options.devicePort) }))
+
+/**
  * Find something to act on.
  *
  * An explicit address is obeyed exactly and is always Cast — nothing else
  * listens on a bare address without a description to fetch first. Otherwise the
- * name decides, and both networks are searched at once.
+ * name decides, and all three networks are searched at once.
  *
  * With no name at all the device from the last session is tried first, because
  * a four second sweep before every pause is most of what those commands cost.
- * What "last session" means differs by protocol, and deliberately: a Cast
- * address goes straight back to the device, while a remembered renderer is a
- * name that still has to be turned into a URL by a sweep. See `State.LastTarget`
- * for why the URL itself is not the thing kept.
+ * What "last session" means differs by protocol, and deliberately: Cast and
+ * AirPlay addresses go straight back to the device, while a remembered renderer
+ * is a name that still has to be turned into a URL by a sweep. See
+ * `State.LastTarget` for why the URL itself is not the thing kept.
  */
 export const resolve = Effect.fn("target.resolve")(function*(options: {
   readonly ip: Option.Option<Ipv4>
@@ -222,6 +251,7 @@ export const resolve = Effect.fn("target.resolve")(function*(options: {
           Match.tag("Cast", ({ ip }) =>
             Effect.succeed(Target.Cast({ device: castAt(ip, options.devicePort) }))),
           Match.tag("Dlna", ({ friendlyName }) => rememberedRenderer(friendlyName, options)),
+          Match.tag("AirPlay", ({ ip }) => rememberedAirPlay(ip, options)),
           Match.exhaustive
         )
       })

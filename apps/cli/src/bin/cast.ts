@@ -54,7 +54,7 @@ import {
   NoVideoStreamError,
   ServerBindError
 } from "@castcli/domain"
-import { CastDevice } from "@castcli/domain"
+import { CastDevice, AirPlayDevice } from "@castcli/domain"
 import { Mdns } from "@castcli/platform"
 import {
   Description as DlnaDescription,
@@ -71,6 +71,7 @@ import { routes, type SessionState } from "../Server/Routes.ts"
 import * as State from "../State.ts"
 
 const CAST_SERVICE = "_googlecast._tcp.local"
+const AIRPLAY_SERVICE = "_airplay._tcp.local"
 
 /** Unique only within one MediaInformation, so a constant is enough. */
 const SUBTITLE_TRACK_ID = TrackId.make(1)
@@ -102,18 +103,17 @@ const localAddress = (override: Option.Option<string>) =>
 /**
  * A device we could play to, whichever protocol it speaks.
  *
- * A tagged union rather than an interface with two implementations. The two
- * protocols agree on almost nothing — one launches an application over a
- * persistent TLS connection, the other posts SOAP at a URL — and the single
- * thing they share, that the *device* fetches the media from us, is a property
- * of the media server rather than of any object. With two protocols an
- * interface would be a shape traced around the first one; a union makes every
- * site that acts on a target handle both, and `Match.exhaustive` says so at
- * compile time.
+ * A tagged union rather than an interface with three implementations. The three
+ * protocols agree on almost nothing — Cast launches an application over TLS,
+ * DLNA posts SOAP, AirPlay speaks HTTP — and the single thing they share, that
+ * the *device* fetches the media from us, is a property of the media server
+ * rather than of any object. A union makes every site that acts on a target
+ * handle all three, and `Match.exhaustive` says so at compile time.
  */
 type Target = Data.TaggedEnum<{
   readonly Cast: { readonly device: CastDevice }
   readonly Dlna: { readonly renderer: DlnaDescription.Renderer; readonly location: string }
+  readonly AirPlay: { readonly device: AirPlayDevice }
 }>
 
 const Target = Data.taggedEnum<Target>()
@@ -121,6 +121,7 @@ const Target = Data.taggedEnum<Target>()
 const describeTarget: (target: Target) => string = Match.type<Target>().pipe(
   Match.tag("Cast", ({ device }) => `${device.name} — Cast at ${device.ip}:${device.port}`),
   Match.tag("Dlna", ({ renderer }) => `${renderer.friendlyName} — DLNA`),
+  Match.tag("AirPlay", ({ device }) => `${device.name} — AirPlay at ${device.ip}:${device.port}`),
   Match.exhaustive
 )
 
@@ -146,9 +147,8 @@ const describeRenderer = (client: HttpClient.HttpClient, location: string) =>
 /**
  * Everything on the network we could play to.
  *
- * Both sweeps run at once because they are independent waits on different
- * sockets, and running them one after the other would double the time a person
- * spends looking at "scanning…" for no reason.
+ * All three sweeps run at once because they are independent waits on different
+ * sockets, and running them sequentially would triple the time.
  */
 const discoverTargets = (timeout: Duration.Duration) =>
   Effect.map(
@@ -158,11 +158,12 @@ const discoverTargets = (timeout: Duration.Duration) =>
         Effect.orElseSucceed(
           Effect.scoped(Ssdp.search(DlnaSsdp.MEDIA_RENDERER, timeout)),
           () => []
-        )
+        ),
+        Effect.orElseSucceed(Mdns.discoverAirPlayWithRetry(AIRPLAY_SERVICE, timeout), () => [])
       ],
-      { concurrency: 2 }
+      { concurrency: 3 }
     ),
-    ([cast, upnp]) => ({ cast, upnp })
+    ([cast, upnp, airplay]) => ({ cast, upnp, airplay })
   )
 
 const scan = Command.make(
@@ -183,6 +184,13 @@ const scan = Command.make(
           `\n    status    ${device.status ?? "idle"}`
       ), { discard: true })
 
+    yield* Effect.forEach(found.airplay.filter(device => device.supportsVideo), (device) =>
+      Console.log(
+        `\n  ${device.name}\n    protocol  AirPlay` +
+          `\n    address   ${device.address}` +
+          `\n    model     ${device.model ?? "unknown"}`
+      ), { discard: true })
+
     // A renderer's advertisement is only a pointer: what it is called, and
     // whether it can play video at all, live in the description at that URL.
     yield* Effect.forEach(found.upnp, (device) =>
@@ -201,14 +209,14 @@ const scan = Command.make(
 
     yield* Effect.when(
       Console.log("none found — check the device is awake and on this network"),
-      Effect.succeed(found.cast.length === 0 && found.upnp.length === 0)
+      Effect.succeed(found.cast.length === 0 && found.upnp.length === 0 && found.airplay.length === 0)
     )
     yield* Effect.when(
       Effect.flatMap(
         localAddress(config.advertiseHost),
         (address) => Console.log(`\nlocal address to advertise: ${address}`)
       ),
-      Effect.succeed(found.cast.length > 0 || found.upnp.length > 0)
+      Effect.succeed(found.cast.length > 0 || found.upnp.length > 0 || found.airplay.length > 0)
     )
   })
 ).pipe(Command.withDescription("List devices on this network, Cast and DLNA alike"))
@@ -289,46 +297,57 @@ const resolveTarget = Effect.fn("cast.resolveTarget")(function*(options: {
             onSome: (name) => candidate.toLowerCase().includes(name)
           })
 
-        // Cast first when both answer to the name. It is the protocol this
+        // Cast first when multiple answer to the name. It is the protocol this
         // tool knows best and the one whose behaviour has been watched end to
-        // end on a real television; DLNA is the fallback, not the preference.
+        // end on a real television; AirPlay second, DLNA third.
         const cast = Array.findFirst(found.cast, (candidate) => matches(candidate.name))
 
         return yield* Option.match(cast, {
           onSome: (device) => Effect.succeed(Target.Cast({ device })),
           onNone: () =>
-            Effect.flatMap(
-              Effect.forEach(
-                found.upnp,
-                (device) =>
-                  Effect.map(describeRenderer(client, device.location), (described) =>
-                    Option.map(described, (renderer) => ({
-                      renderer,
-                      location: device.location
-                    }))),
-                { concurrency: 4 }
-              ),
-              (described) =>
-                Option.match(
-                  Array.findFirst(
-                    Array.getSomes(described),
-                    (candidate) => matches(candidate.renderer.friendlyName)
-                  ),
-                  {
-                    onSome: (candidate) => Effect.succeed(Target.Dlna(candidate)),
-                    onNone: () =>
-                      Effect.fail(
-                        new DeviceNotFoundError({
-                          query: Option.getOrElse(options.name, () => "(first available)"),
-                          found: [
-                            ...found.cast.map((device) => device.name),
-                            ...Array.getSomes(described).map((one) => one.renderer.friendlyName)
-                          ]
-                        })
+            Effect.gen(function*() {
+              const airplay = Array.findFirst(
+                found.airplay.filter((device) => device.supportsVideo),
+                (candidate) => matches(candidate.name)
+              )
+              return yield* Option.match(airplay, {
+                onSome: (device) => Effect.succeed(Target.AirPlay({ device })),
+                onNone: () =>
+                  Effect.flatMap(
+                    Effect.forEach(
+                      found.upnp,
+                      (device) =>
+                        Effect.map(describeRenderer(client, device.location), (described) =>
+                          Option.map(described, (renderer) => ({
+                            renderer,
+                            location: device.location
+                          }))),
+                      { concurrency: 4 }
+                    ),
+                    (described) =>
+                      Option.match(
+                        Array.findFirst(
+                          Array.getSomes(described),
+                          (candidate) => matches(candidate.renderer.friendlyName)
+                        ),
+                        {
+                          onSome: (candidate) => Effect.succeed(Target.Dlna(candidate)),
+                          onNone: () =>
+                            Effect.fail(
+                              new DeviceNotFoundError({
+                                query: Option.getOrElse(options.name, () => "(first available)"),
+                                found: [
+                                  ...found.cast.map((device) => device.name),
+                                  ...found.airplay.map((device) => device.name),
+                                  ...Array.getSomes(described).map((one) => one.renderer.friendlyName)
+                                ]
+                              })
+                            )
+                        }
                       )
-                  }
-                )
-            )
+                  )
+              })
+            })
         })
       })
   })
@@ -651,6 +670,7 @@ const play = Command.make(
       // both networks preferring Cast — which a Chromecast on the same network
       // will happily answer.
       Match.tag("Dlna", ({ renderer }) => State.rememberRenderer(renderer.friendlyName)),
+      Match.tag("AirPlay", ({ device: found }) => State.rememberAirPlay(found.ip)),
       Match.exhaustive
     )
     const advertise = yield* localAddress(config.advertiseHost)
@@ -1017,6 +1037,26 @@ const play = Command.make(
           ),
             from: resumed,
             onPosition: (at) => Ref.set(position, at)
+          })
+        )),
+      Match.tag("AirPlay", ({ device: airplayDevice }) =>
+        Effect.andThen(
+          State.setActive(
+            Option.some(
+              new State.ActiveStream({
+                file: absolute,
+                offsetSeconds: resumed,
+                seekable: true
+              })
+            )
+          ),
+          Effect.gen(function*() {
+            const { Session: AirPlaySession } = yield* Effect.promise(() => import("@castcli/airplay"))
+            yield* AirPlaySession.play(airplayDevice, {
+              contentLocation: `${baseUrl}/stream?o=${resumed}`,
+              startPosition: resumed
+            })
+            yield* Console.log(`playing on ${airplayDevice.name}`)
           })
         )),
       Match.exhaustive
