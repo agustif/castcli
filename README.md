@@ -13,6 +13,11 @@ to the link while it runs.
 
 Written because VLC could not do it, for a reason worth recording.
 
+**Note on AirPlay:** This tool speaks Cast and DLNA. AirPlay was researched and the
+cryptographic infrastructure (HomeKit pairing) was built, but the sender protocol
+was deliberately not implemented. See [`docs/airplay.md`](docs/airplay.md) for the
+reasoning — primarily that it cannot be verified without physical Apple TV hardware.
+
 ## The bug this exists to work around
 
 VLC 3 builds the URL it hands the TV from whichever local address its socket
@@ -273,6 +278,10 @@ packages/
   quality/      ladder, signals (state → phase), controller (phase → action)
   dlna/         DLNA/UPnP: SSDP, SOAP, DIDL-Lite, and actions generated from
                 the vendored service descriptions
+  airplay/      HomeKit pairing (PairSetup/PairVerify), SRP, TLV8, and crypto
+                primitives; sender protocol deliberately not implemented
+  source/       First-source readers: decode from RFCs and C headers as Schema
+                codecs, used by codegen scripts
   platform/     generic Node bridges: UDP for mDNS, http.createServer
   emulator/     devices, emulated well enough to test against
 apps/
@@ -294,7 +303,7 @@ such an import resolve.
 | `npm run vocabulary:sync` | refetch the media vocabulary from Google (needs the network) |
 | `npm run depcruise` | no cycles, Node builtins stay in `platform`/`protocol`, packages never import the app |
 | `npm run codegen:check` | generated wire descriptors, media vocabulary and UPnP actions are not stale |
-| `npm test` | 213 tests, in about a second |
+| `npm test` | 577 tests, in about a second |
 | `npm run test:e2e` | 4 tests that run the built binary at emulated devices, Cast and DLNA |
 | `npm run check` | all of the above — and the only thing CI runs |
 

@@ -108,7 +108,10 @@ Recorded so it does not have to be re-argued:
 
 ## The third protocol
 
-AirPlay was researched and deliberately not built; the reasoning is in
+AirPlay was researched and the cryptographic infrastructure was built: HomeKit
+pairing (PairSetup/PairVerify), SRP6a, Ed25519, X25519, ChaCha20-Poly1305,
+HKDF, and TLV8 encoding all exist in `packages/airplay` and are tested. The
+reasoning for not proceeding to the sender protocol is in
 [`airplay.md`](airplay.md). The short version is that it fails this project's
 own test twice over. There is no first source to generate from — unlike
 Chromium's `.proto` and the UPnP service descriptions, what exists is

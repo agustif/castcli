@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "lint": "oxlint --deny-warnings",
+    "lint": "NODE_OPTIONS='--import tsx' oxlint --deny-warnings",
     "codegen": "tsx scripts/generate-protocol.ts && tsx scripts/extract-receiver-vocabulary.ts && tsx scripts/generate-upnp-actions.ts && tsx scripts/generate-hap-pairing.ts",
     "codegen:check": "tsx scripts/generate-protocol.ts --check && tsx scripts/extract-receiver-vocabulary.ts --check && tsx scripts/generate-upnp-actions.ts --check && tsx scripts/generate-hap-pairing.ts --check",
     "depcruise": "depcruise \"packages/**/*.ts\" \"apps/**/*.ts\" --config .dependency-cruiser.cjs --output-type err",
