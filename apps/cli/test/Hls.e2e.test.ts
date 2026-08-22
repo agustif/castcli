@@ -37,7 +37,7 @@ describe("cast play, against an emulated device", () => {
   // `it.live`, not `it.effect`: the latter supplies a TestClock, so the polling
   // below would wait on a clock that never advances. This test is about real
   // processes taking real time.
-  it.live.skip(
+  it.live(
     "serves HLS the receiver can actually walk",
     () =>
       Effect.gen(function*() {
@@ -155,7 +155,7 @@ describe("cast play, against an emulated device", () => {
     { timeout: 300_000 }
   )
 
-  it.live.skip(
+  it.live(
     "still serves the progressive stream, which the receiver pulls whole",
     () =>
       Effect.gen(function*() {
