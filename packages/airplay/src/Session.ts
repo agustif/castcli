@@ -4,7 +4,7 @@
 // device fetches from us. Query-string parameters for Content-Location and
 // Start-Position (documented contract). No FairPlay, no mirroring.
 
-import { Effect, Option, Schema } from "effect"
+import { Effect, Option } from "effect"
 import { HttpClient } from "effect/unstable/http"
 import { AirPlayDevice, Seconds } from "@castcli/domain"
 
