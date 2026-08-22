@@ -42,7 +42,8 @@
     "castcli/no-or-die": "error",
     "castcli/no-as-cast": "error",
     "castcli/no-non-null": "error",
-    "castcli/no-any": "error"
+    "castcli/no-any": "error",
+    "castcli/no-dev-dependency-in-runtime": "error"
   },
   "ignorePatterns": [
     "dist/**",
@@ -81,6 +82,17 @@
       ],
       "rules": {
         "castcli/no-node-fs": "off"
+      }
+    },
+    {
+      "files": [
+        "tools/*/test/**"
+      ],
+      "rules": {
+        "castcli/no-node-child-process": "off",
+        "castcli/no-any": "off",
+        "castcli/no-await": "off",
+        "eslint/require-yield": "off"
       }
     },
     {
