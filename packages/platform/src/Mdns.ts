@@ -550,9 +550,34 @@ export const advertiseAirPlay = (options: {
 
     const response = buildResponse()
 
-    // Bind to a random port and send to multicast
-    yield* Effect.sync(() => socket.bind())
+    // Bind to MDNS_PORT to receive queries
+    yield* Effect.callback<void>((resume) => {
+      socket.bind(MDNS_PORT, () => resume(Effect.void))
+    })
 
+    // Listen for queries and respond
+    const queries = yield* Queue.unbounded<{ message: Buffer; rinfo: dgram.RemoteInfo }>()
+
+    socket.on("message", (message: Buffer, rinfo: dgram.RemoteInfo) => {
+      Queue.offerUnsafe(queries, { message, rinfo })
+    })
+
+    yield* Effect.forkScoped(
+      Stream.runForEach(Stream.fromQueue(queries), ({ message, rinfo }) =>
+        Effect.sync(() => {
+          // Check if this is a query for _airplay._tcp
+          if (message.length >= 12) {
+            const flags = message.readUInt16BE(2)
+            const isQuery = (flags & 0x8000) === 0
+            if (isQuery) {
+              // Send unicast response to the querier
+              socket.send(response, rinfo.port, rinfo.address, () => {})
+            }
+          }
+        }))
+    )
+
+    // Also send periodic multicast announcements
     yield* Effect.forkScoped(
       Effect.repeat(
         Effect.sync(() => socket.send(response, MDNS_PORT, MDNS_ADDRESS, () => {})),
