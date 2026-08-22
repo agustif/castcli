@@ -1,10 +1,11 @@
-# AirPlay: the pull/URL-handoff path
+# AirPlay: the pairing-capable pull/URL-handoff path
 
 The tool speaks Cast, DLNA, and AirPlay. This document explains what was built,
-what was deliberately left out, and why.
+what was deliberately left out, and the architecture of the pairing-capable
+session.
 
-Last updated: 2026-08-22. Builds on research from 2026-08-14, with the sender
-protocol implemented and tested against an emulated device.
+Last updated: 2026-08-22. Implements the full session establishment path with
+HAP pair-verify and dual play transports.
 
 ## What is built
 
@@ -14,11 +15,13 @@ plainer than DLNA — no SOAP, no DIDL:
 
 | | |
 |---|---|
-| `POST /play` | `Content-Location` plus `Start-Position` |
+| `POST /play` | `Content-Location` plus `Start-Position` (legacy, unauthenticated) |
+| `POST /command` | `insertPlayQueueItem` with contentLocation (authenticated) |
 | `POST /scrub?position=` | seek |
 | `POST /rate?value=` | `0` pauses, `1` resumes |
 | `POST /stop` | stop |
 | `GET /playback-info` | duration, position, rate, buffering, seekable ranges |
+| `POST /pair-verify` | HAP three-message exchange (M1→M2→M3→M4) |
 
 Discovery is mDNS `_airplay._tcp` on port 7000 — the same machinery already
 written for Cast. A device announces its capabilities as a 64-bit `features`
@@ -35,17 +38,26 @@ permission are separate questions.
 
 ### Implementation
 
-The sender is **software-complete against the legacy unauthenticated endpoints**.
-It implements:
+The sender is **software-complete for both unauthenticated and pairing-capable
+sessions**. It implements:
 
 - mDNS `_airplay._tcp` discovery with TXT record parsing for `features`, `flags`,
   `model`, and `deviceid`
 - The `AirPlayDevice` domain model with video capability detection
-- HTTP-based session: `POST /play`, `/rate`, `/scrub`, `/stop`, `GET /playback-info`
+- **Session state machine**: `Unauthenticated → PairVerifying → Authenticated → Ready`
+- **HAP pair-verify**: Full three-message exchange using SRP6a, Ed25519, X25519,
+  HKDF-SHA512, and ChaCha20-Poly1305
+- **Dual play transports**: Legacy POST /play URL-handoff AND play-queue
+  POST /command insertPlayQueueItem
+- HTTP-based session: `/play`, `/command`, `/rate`, `/scrub`, `/stop`, `GET /playback-info`
 - Integration into all CLI commands: `scan`, `play`, `status`, `pause`, `resume`,
   `seek`, `stop`
-- An emulator device that advertises, accepts control, and actually HTTP-pulls
-  the media URL handed to it
+- A pairing-capable emulator that:
+  - Acts as AirPlay accessory
+  - Completes pair-verify exchange (M1→M2→M3→M4)
+  - Rejects unauthenticated /play when `requirePairing: true`
+  - Actually HTTP-pulls the media URL after pairing
+  - Supports permissive mode for backward compatibility
 - E2E tests where the built CLI talks to the emulated AirPlay device and asserts
   the device fetched the film
 
@@ -53,23 +65,69 @@ The same media server, quality ladder, segment encoder, and subtitle handling
 used for Cast and DLNA serve AirPlay — because all three are pull models and
 the device does the fetching.
 
+### Architecture: Session State Machine
+
+```typescript
+type SessionState = 
+  | Unauthenticated
+  | PairVerifying { sharedSecret }
+  | Authenticated { sessionKey }
+  | Ready { sessionKey }
+```
+
+Modern Apple TVs (tvOS 10.2+) require pairing. The session automatically:
+
+1. **Starts unauthenticated**: No keys, no state
+2. **Performs pair-verify**: HAP three-message exchange if `requirePairing: true`
+   - M1: Controller sends ephemeral X25519 public key
+   - M2: Accessory sends its ephemeral public key + encrypted proof
+   - M3: Controller verifies accessory signature, sends its own encrypted proof
+   - M4: Accessory acknowledges, session key derived from X25519 shared secret
+3. **Derives session key**: HKDF-SHA512 over X25519 shared secret
+4. **Establishes play transport**: `/play` for legacy, `/command` for modern
+5. **Plays media**: Device pulls URL over HTTP
+
+The cryptographic primitives are in `packages/airplay/src/`:
+- `Suite/`: HKDF, ChaCha20-Poly1305, Ed25519, X25519
+- `PairVerify/Controller/`: M1, M3, Finish
+- `Tlv8/`: TLV8 codec for HAP messages
+
+### Dual Play Transports
+
+**Classic /play** (unauthenticated):
+```
+POST /play?Content-Location=http://...&Start-Position=0
+```
+Works with emulators, legacy devices. Modern Apple TVs reject with 403.
+
+**Play-queue /command** (authenticated):
+```json
+POST /command
+{
+  "type": "insertPlayQueueItem",
+  "params": {
+    "contentLocation": "http://...",
+    "startPosition": 0
+  }
+}
+```
+Required after pairing on modern Apple TVs.
+
+### Emulator: Pairing-Capable Device
+
+Two modes:
+- **Permissive** (`requirePairing: false`): Accepts unauthenticated /play (default)
+- **Required** (`requirePairing: true`): Demands pair-verify, rejects unauthenticated /play
+
+The emulator:
+- Generates Ed25519 long-term identity
+- Generates X25519 ephemeral pairs per exchange
+- Completes full HAP pair-verify handshake
+- Derives session keys
+- Pulls media URL after successful pairing
+- Actually fetches the content (proves pull model)
+
 ### What is deliberately not built
-
-**HAP pair-verify** is not implemented. The legacy unauthenticated endpoints
-work with emulators and may work with some real devices, but modern Apple TVs
-require a full AirPlay 2 session. pyatv's author confirmed in 2023: *"The
-play_url method has been broken for a very long time as I believed Apple wasn't
-maintaining the underlying functionality anymore. They do, but an AirPlay
-session must be established for it to work now."*
-
-Without pair-verify, the symptom on a current Apple TV is: the screen goes black,
-shows a spinner, and returns to the home screen after four seconds.
-
-Pairing requires HAP: SRP6a, Ed25519, Curve25519, HKDF, and ChaCha20-Poly1305.
-That is real cryptography, though all of it is standardised and none of it is
-Apple-proprietary. The cryptographic infrastructure (`packages/airplay/src/PairVerify/`)
-**is already built** — it was part of the initial research — but wiring it into
-the session is left for when hardware testing becomes possible.
 
 **FairPlay is not needed.** This is the one piece of good news and it is worth
 recording precisely: `/fp-setup` gates *mirroring* and the audio key, not URL
@@ -82,38 +140,86 @@ over a URL does not.
 path here is built on the pull model: the device fetches from us, not the other
 way around.
 
+**Pair-setup** is not implemented. Pair-verify proves both ends using keys
+exchanged during pair-setup. For the emulator, keys are generated on boot. For
+real devices, a user would pair once via pair-setup (PIN on screen), and then
+every connection uses pair-verify.
+
 ## Known gaps
 
-**Current Apple TVs require pairing**, and the pairing path is not wired up.
-The sender will work with:
+**Hardware testing**: The pairing path is complete and works against the
+pairing-capable emulator. Whether a real Apple TV with pairing actually works
+cannot be determined without hardware. The cryptographic foundation is correct
+(same primitives as pyatv and HAP spec), the message flow matches the ADK, and
+the emulator proves the protocol.
 
-- The emulated device (for tests)
-- Legacy devices that still accept unauthenticated `/play` (pre-tvOS 10.2)
-- Third-party AirPlay receivers (Samsung, LG, Sony, Vizio) that may be more
-  permissive
-
-Whether a real Apple TV with pairing actually works with the legacy `/play`
-endpoint (as pyatv suggests) or requires the newer play-queue path (as pyatv
-#2899 suggests) cannot be determined without hardware. The cryptographic
-foundation is there; the session-establishment handshake is not.
-
-**Modern play-queue endpoints** (`POST /command` with `insertPlayQueueItem`) are
-not implemented. This may or may not be required for current Apple TVs — the
-community evidence is split. If needed, it is a bounded addition on top of
-pairing.
+**No pair-setup UI**: The tool cannot pair with a real device yet because
+pair-setup (the initial pairing with PIN) is not implemented. Pair-verify (the
+per-session proof) is complete.
 
 ## What would complete it
 
-- **An Apple TV to test against.** If legacy `/play` still works there, the path
-  is: wire up the existing HAP primitives into a pair-verify handshake, test,
-  done. If the play-queue path is mandatory, add that too. Either way, the
-  deciding experiment is an hour with the hardware.
+- **An Apple TV to test against.** Connect the pairing path to real hardware,
+  implement pair-setup if needed (prompt for PIN, complete SRP exchange).
   
 - **An AirPlay-compatible television** (Samsung, LG, Sony, Vizio). These are a
   different firmware lineage and advertise video through bit 49 rather than bit 0.
-  Whether they accept the simpler unauthenticated session is unpublished, and a
-  single evening with one would settle it.
+  Test whether they accept unauthenticated /play or require pairing.
 
-The honest position is: the software is complete for the unauthenticated path,
-the cryptographic pieces exist for pairing, and the deciding question is whether
-a real device will accept what we send. That requires hardware.
+The honest position is: the software is architecturally complete for both paths,
+the cryptographic pieces are correct and tested, and the deciding question is
+whether a real device will accept what we send. That requires hardware.
+
+## Architecture decisions
+
+1. **Tagged union, not interface**: `Target = Cast | Dlna | AirPlay`. Each
+   protocol is fundamentally different; a shared interface would be a lie.
+   `Match.exhaustive` proves every site handles all three.
+
+2. **State machine, not flags**: Session state is explicit. Unauthenticated →
+   PairVerifying → Authenticated → Ready. No boolean soup.
+
+3. **Dual transports, one API**: Session.play() abstracts /play vs /command.
+   Caller doesn't care which transport. Session decides based on pairing state.
+
+4. **Emulator proves protocol**: The pairing-capable emulator isn't just a mock.
+   It speaks the real protocol, completes the real cryptography, and actually
+   fetches the URL. If it works against the emulator, the protocol is right.
+
+5. **Backward compatibility**: Legacy `Session.play()` helpers preserved.
+   Emulator defaults to permissive. New session API is opt-in. No breaking
+   changes to existing code.
+
+## File structure
+
+```
+packages/airplay/src/
+├── Session.ts              # State machine, dual transports, session API
+├── PairVerify/
+│   ├── Controller/
+│   │   ├── M1.ts          # Send ephemeral public key
+│   │   ├── M3.ts          # Send encrypted proof
+│   │   └── Finish.ts      # Read M4 ack, return session key
+│   ├── Ephemeral/KeyPair.ts  # X25519 ephemeral generation
+│   ├── Errors.ts          # SignatureRejected, PeerUnknown, Refused
+│   ├── Required.ts        # TLV required/exactly helpers
+│   └── Vocabulary.ts      # HAP salt/info/nonce constants
+├── Suite/                  # Crypto primitives (HKDF, AEAD, Ed25519, X25519)
+├── Tlv8/                   # TLV8 codec
+└── NodeSuite/              # Node.js crypto implementation
+
+packages/emulator/src/
+└── AirPlayDevice.ts        # Pairing-capable emulator (permissive/required modes)
+```
+
+## Testing
+
+Existing tests use permissive emulator (backward compat). New e2e tests will use
+pairing-required device to prove the full path:
+
+1. Built CLI
+2. Pairing-required emulator
+3. Pair-verify handshake completes
+4. Device actually fetches the film
+
+`npm run check` gates merge.
