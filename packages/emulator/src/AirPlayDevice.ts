@@ -136,7 +136,7 @@ export const make = (options: {
                   )
 
                   return { status: 200, body: m2Bytes, contentType: "application/octet-stream" }
-                }).pipe(Effect.orElseSucceed(() => ({ status: 500, body: "Internal error" })))
+                })
               }
 
               // M3/M4: Controller sends encrypted proof, we verify and mark paired
@@ -154,9 +154,9 @@ export const make = (options: {
                 }
 
                 return { status: 400, body: "Invalid state" }
-              }).pipe(Effect.orElseSucceed(() => ({ status: 500, body: "Internal error" })))
-            }).pipe(Effect.orElseSucceed(() => ({ status: 500, body: "Internal error" })))
-          }).pipe(Effect.orElseSucceed(() => ({ status: 500, body: "Internal error" })))
+              })
+            })
+          })
         }).pipe(Effect.orElseSucceed(() => ({ status: 500, body: "Internal error" })))
         : Effect.succeed(NOT_FOUND)
 
@@ -173,76 +173,78 @@ export const make = (options: {
           Match.when({ path: "/play", method: "POST" }, () =>
             Effect.gen(function*() {
               const verified = yield* Ref.get(pairVerified)
-              return yield* Effect.if(verified, {
-                onTrue: () => Effect.gen(function*() {
+              return yield* (verified
+                ? Effect.gen(function*() {
                   const params = url.searchParams
                   const contentLocation = params.get("Content-Location") ?? ""
                   const startPosition = Number(params.get("Start-Position") ?? "0")
 
-                  return yield* Effect.if(contentLocation.length > 0, {
-                    onTrue: () => Effect.gen(function*() {
+                  yield* Effect.when(
+                    Effect.gen(function*() {
                       yield* Ref.set(loaded, Option.some({ url: contentLocation, position: startPosition }))
                       yield* Ref.set(position, startPosition)
                       yield* Ref.set(rateRef, 1)
                       yield* Queue.offer(pulls, contentLocation)
-                      return { status: 200, body: "" }
                     }),
-                    onFalse: () => Effect.succeed({ status: 200, body: "" })
-                  })
-                }),
-                onFalse: () => Effect.succeed(FORBIDDEN)
-              })
+                    () => contentLocation.length > 0
+                  )
+
+                  return { status: 200, body: "" }
+                })
+                : Effect.succeed(FORBIDDEN)
+              )
             })),
 
           Match.when({ path: "/command", method: "POST" }, () =>
             Effect.gen(function*() {
               const verified = yield* Ref.get(pairVerified)
-              return yield* Effect.if(verified, {
-                onTrue: () => Effect.gen(function*() {
+              return yield* (verified
+                ? Effect.gen(function*() {
                   const bodyText = new TextDecoder().decode(body)
                   const urlMatch = bodyText.match(/Content-Location.*?<string>(.*?)<\/string>/s)
                   const posMatch = bodyText.match(/Start-Position.*?<real>([\d.]+)<\/real>/s)
 
-                  return yield* Effect.if(urlMatch !== null && urlMatch[1] !== undefined, {
-                    onTrue: () => Effect.gen(function*() {
-                      const contentLocation = urlMatch[1]
+                  yield* Effect.when(
+                    Effect.gen(function*() {
+                      const contentLocation = urlMatch![1]!
                       const startPosition = posMatch ? Number(posMatch[1]) : 0
 
                       yield* Ref.set(loaded, Option.some({ url: contentLocation, position: startPosition }))
                       yield* Ref.set(position, startPosition)
                       yield* Ref.set(rateRef, 1)
                       yield* Queue.offer(pulls, contentLocation)
-                      return { status: 200, body: "" }
                     }),
-                    onFalse: () => Effect.succeed({ status: 200, body: "" })
-                  })
-                }),
-                onFalse: () => Effect.succeed(FORBIDDEN)
-              })
+                    () => urlMatch !== null && urlMatch[1] !== undefined
+                  )
+
+                  return { status: 200, body: "" }
+                })
+                : Effect.succeed(FORBIDDEN)
+              )
             })),
 
           Match.when({ path: "/scrub", method: "POST" }, () =>
             Effect.gen(function*() {
               const positionParam = url.searchParams.get("position")
-              return yield* Effect.if(positionParam !== null, {
-                onTrue: () => Effect.gen(function*() {
+              yield* Effect.when(
+                Effect.gen(function*() {
                   yield* Ref.set(position, Number(positionParam))
-                  return { status: 200, body: "" }
                 }),
-                onFalse: () => Effect.succeed({ status: 200, body: "" })
-              })
+                () => positionParam !== null
+              )
+              return { status: 200, body: "" }
             })),
 
           Match.when({ path: "/rate", method: "POST" }, () =>
             Effect.gen(function*() {
               const value = url.searchParams.get("value")
-              return yield* Effect.if(value !== null, {
-                onTrue: () => Effect.gen(function*() {
+              yield* Effect.when(
+                Effect.gen(function*() {
                   yield* Ref.set(rateRef, Number(value))
-                  return { status: 200, body: "" }
                 }),
-                onFalse: () => Effect.succeed({ status: 200, body: "" })
-              })
+                () => value !== null
+              )
+              return { status: 200, body: "" }
             })),
 
           Match.when({ path: "/stop", method: "POST" }, () =>
