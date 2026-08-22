@@ -272,6 +272,7 @@ const resolveTarget = Effect.fn("cast.resolveTarget")(function*(options: {
   readonly ip: Option.Option<Ipv4>
   readonly name: Option.Option<string>
   readonly devicePort: number
+  readonly airplayPort: number
   readonly timeout: Duration.Duration
 }) {
   const client = yield* HttpClient.HttpClient
@@ -284,7 +285,25 @@ const resolveTarget = Effect.fn("cast.resolveTarget")(function*(options: {
 
   return yield* Option.match(shortcut, {
     onSome: (address) =>
-      Effect.succeed(Target.Cast({ device: deviceAt(address, options.devicePort) })),
+      Effect.gen(function*() {
+        // When using --ip, try both Cast and AirPlay at that address.
+        // Check AirPlay first (simpler HTTP check), fall back to Cast.
+        const airplayDevice = new AirPlayDevice({
+          name: address,
+          ip: address,
+          port: Port.make(options.airplayPort)
+        })
+        
+        // Simple check: try to fetch AirPlay /server-info endpoint
+        const isAirPlay = yield* client.get(`http://${address}:${options.airplayPort}/server-info`).pipe(
+          Effect.map(() => true),
+          Effect.orElseSucceed(() => false)
+        )
+        
+        return isAirPlay
+          ? Target.AirPlay({ device: airplayDevice })
+          : Target.Cast({ device: deviceAt(address, options.devicePort) })
+      }),
 
     onNone: () =>
       Effect.gen(function*() {
@@ -651,6 +670,7 @@ const play = Command.make(
       ip,
       name: device,
       devicePort: config.devicePort,
+      airplayPort: config.airplayPort,
       timeout: config.discoveryTimeout
     })
 

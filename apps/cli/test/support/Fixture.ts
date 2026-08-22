@@ -246,6 +246,7 @@ export const play = (
                 extendEnv: true,
                 env: {
                   CAST_DEVICE_PORT: String(device.port),
+                  AIRPLAY_DEVICE_PORT: String(device.port),
                   CAST_ADVERTISE_HOST: "127.0.0.1",
                   XDG_STATE_HOME: stateDirectory,
                   SKIP_CONTROL_CHANNEL: "1"

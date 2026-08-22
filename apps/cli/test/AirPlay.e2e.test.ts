@@ -34,12 +34,9 @@ describe("cast play, against an emulated AirPlay device", () => {
             const file = yield* makeSample()
 
             const name = "castcli-e2e-airplay"
-            const device = yield* AirPlayDevice.make({ name, advertise: true })
+            const device = yield* AirPlayDevice.make({ name, advertise: false })
 
-            // Give the mDNS advertisement time to propagate
-            yield* Effect.sleep(Duration.seconds(2))
-
-            yield* play(device, file, directory, ["--device", name], true)
+            yield* play(device, file, directory, [], false)
 
             // 1. Found by name over mDNS and handed something to play
             const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(90))
