@@ -57,11 +57,12 @@ const decodeResponse = Schema.decodeEffect(Schema.fromJsonString(ControlResponse
 /**
  * The socket path where the running player listens.
  *
- * Lives in XDG_RUNTIME_DIR when set, else a temp directory. Removed when the
- * player stops, so a stale socket means no player is running.
+ * Lives in XDG_STATE_HOME (for tests) or XDG_RUNTIME_DIR when set, else a temp
+ * directory. Removed when the player stops, so a stale socket means no player
+ * is running.
  */
 const socketPath = () => {
-  const base = process.env["XDG_RUNTIME_DIR"] ?? os.tmpdir()
+  const base = process.env["XDG_STATE_HOME"] ?? process.env["XDG_RUNTIME_DIR"] ?? os.tmpdir()
   return path.join(base, "castcli-control.sock")
 }
 
