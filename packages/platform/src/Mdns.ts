@@ -456,47 +456,56 @@ export const advertiseAirPlay = (options: {
 }): Effect.Effect<void, never, Scope.Scope> =>
   Effect.gen(function*() {
     const socket = dgram.createSocket({ type: "udp4", reuseAddr: true })
+    const queries = yield* Queue.unbounded<{ packet: Buffer; from: dgram.RemoteInfo }>()
+
+    socket.on("message", (packet: Buffer, from: dgram.RemoteInfo) => {
+      Queue.offerUnsafe(queries, { packet, from })
+    })
+    socket.on("error", () => undefined)
 
     yield* Effect.acquireRelease(
-      Effect.sync(() => socket),
+      Effect.callback<void>((resume) => {
+        socket.bind(MDNS_PORT, () => resume(Effect.void))
+      }),
       () => Effect.sync(() => socket.close())
+    )
+
+    yield* Effect.try({
+      try: () => socket.addMembership(MDNS_ADDRESS),
+      catch: (cause) => cause
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logDebug(`could not join the mDNS group; answering unicast only: ${cause}`)
+      )
     )
 
     const serviceName = `${options.name}._airplay._tcp.local.`
     const serviceType = "_airplay._tcp.local."
-    const hostname = `${options.name}.local.`
+    const hostname = `${options.name.replaceAll(" ", "-")}.local.`
 
-    // Build mDNS response with PTR, TXT, SRV, A records
     const buildResponse = (): Buffer => {
-      const header = Buffer.alloc(12)
-      header.writeUInt16BE(0, 0) // Transaction ID
-      header.writeUInt16BE(0x8400, 2) // Flags: Response, Authoritative
-      header.writeUInt16BE(0, 4) // Questions
-      header.writeUInt16BE(4, 6) // Answers (PTR, TXT, SRV, A)
-      header.writeUInt16BE(0, 8) // Authority
-      header.writeUInt16BE(0, 10) // Additional
-
       const TTL = 120
-      const ttlBuf = Buffer.alloc(4)
-      ttlBuf.writeUInt32BE(TTL, 0)
+      const CACHE_FLUSH = 0x8000
+      const CLASS_IN = 1
 
-      // PTR record: _airplay._tcp.local. -> device._airplay._tcp.local.
-      const ptrName = encodeName(serviceType)
-      const ptrData = encodeName(serviceName)
-      const ptrRecord = Buffer.concat([
-        ptrName,
-        Buffer.from([0x00, 0x0c]), // TYPE PTR
-        Buffer.from([0x00, 0x01]), // CLASS IN
-        ttlBuf,
-        Buffer.from([0x00, ptrData.length]), // RDLENGTH
-        ptrData
-      ])
+      const record = (name: string, type: number, data: Buffer, ttl = TTL): Buffer => {
+        const header = Buffer.alloc(8)
+        header.writeUInt16BE(type, 0)
+        header.writeUInt16BE(CLASS_IN | CACHE_FLUSH, 2)
+        header.writeUInt32BE(ttl, 4)
+        const length = Buffer.alloc(2)
+        length.writeUInt16BE(data.length, 0)
+        return Buffer.concat([encodeName(name), header, length, data])
+      }
 
-      // TXT record: key=value pairs for features
-      const txtName = encodeName(serviceName)
+      const srvData = Buffer.alloc(6)
+      srvData.writeUInt16BE(0, 0) // Priority
+      srvData.writeUInt16BE(0, 2) // Weight
+      srvData.writeUInt16BE(Number(options.port), 4) // Port
+
       const txtPairs = [
         `fn=${options.name}`,
-        `features=0x5A7FFFF7,0xE`, // Video support bits
+        `features=0x5A7FFFF7,0xE`,
         `model=AppleTV3,2`,
         `deviceid=AA:BB:CC:DD:EE:FF`,
         `flags=0x4`
@@ -507,81 +516,37 @@ export const advertiseAirPlay = (options: {
           return Buffer.concat([Buffer.from([pairBuf.length]), pairBuf])
         })
       )
-      const txtRecord = Buffer.concat([
-        txtName,
-        Buffer.from([0x00, 0x10]), // TYPE TXT
-        Buffer.from([0x00, 0x01]), // CLASS IN
-        ttlBuf,
-        Buffer.from([0x00, txtData.length]), // RDLENGTH
-        txtData
-      ])
 
-      // SRV record: device._airplay._tcp.local. -> device.local:port
-      const srvName = encodeName(serviceName)
-      const srvData = Buffer.alloc(6)
-      srvData.writeUInt16BE(0, 0) // Priority
-      srvData.writeUInt16BE(0, 2) // Weight
-      srvData.writeUInt16BE(Number(options.port), 4) // Port
-      const srvTarget = encodeName(hostname)
-      const srvRecord = Buffer.concat([
-        srvName,
-        Buffer.from([0x00, 0x21]), // TYPE SRV
-        Buffer.from([0x00, 0x01]), // CLASS IN
-        ttlBuf,
-        Buffer.from([0x00, srvData.length + srvTarget.length]), // RDLENGTH
-        srvData,
-        srvTarget
-      ])
+      const addressData = Buffer.from([127, 0, 0, 1])
 
-      // A record: device.local. -> 127.0.0.1
-      const aName = encodeName(hostname)
-      const aData = Buffer.from([127, 0, 0, 1])
-      const aRecord = Buffer.concat([
-        aName,
-        Buffer.from([0x00, 0x01]), // TYPE A
-        Buffer.from([0x00, 0x01]), // CLASS IN
-        ttlBuf,
-        Buffer.from([0x00, 0x04]), // RDLENGTH
-        aData
-      ])
+      const records = [
+        record(serviceType, 0x000c, encodeName(serviceName)), // PTR
+        record(serviceName, 0x0021, Buffer.concat([srvData, encodeName(hostname)])), // SRV
+        record(serviceName, 0x0010, txtData), // TXT
+        record(hostname, 0x0001, addressData) // A
+      ]
 
-      return Buffer.concat([header, ptrRecord, srvRecord, txtRecord, aRecord])
+      const header = Buffer.alloc(12)
+      header.writeUInt16BE(0, 0) // Transaction ID
+      header.writeUInt16BE(0x8400, 2) // Flags: Response, Authoritative
+      header.writeUInt16BE(0, 4) // Questions
+      header.writeUInt16BE(records.length, 6) // Answers
+      header.writeUInt16BE(0, 8) // Authority
+      header.writeUInt16BE(0, 10) // Additional
+
+      return Buffer.concat([header, ...records])
     }
 
     const response = buildResponse()
 
-    // Bind to MDNS_PORT to receive queries
-    yield* Effect.callback<void>((resume) => {
-      socket.bind(MDNS_PORT, () => resume(Effect.void))
-    })
-
-    // Listen for queries and respond
-    const queries = yield* Queue.unbounded<{ message: Buffer; rinfo: dgram.RemoteInfo }>()
-
-    socket.on("message", (message: Buffer, rinfo: dgram.RemoteInfo) => {
-      Queue.offerUnsafe(queries, { message, rinfo })
-    })
-
     yield* Effect.forkScoped(
-      Stream.runForEach(Stream.fromQueue(queries), ({ message, rinfo }) =>
-        Effect.sync(() => {
-          // Check if this is a query for _airplay._tcp
-          if (message.length >= 12) {
-            const flags = message.readUInt16BE(2)
-            const isQuery = (flags & 0x8000) === 0
-            if (isQuery) {
-              // Send unicast response to the querier
-              socket.send(response, rinfo.port, rinfo.address, () => {})
-            }
-          }
-        }))
-    )
-
-    // Also send periodic multicast announcements
-    yield* Effect.forkScoped(
-      Effect.repeat(
-        Effect.sync(() => socket.send(response, MDNS_PORT, MDNS_ADDRESS, () => {})),
-        Schedule.spaced("5 seconds")
-      )
+      Stream.runForEach(Stream.fromQueue(queries), ({ from, packet }) =>
+        Effect.when(
+          Effect.sync(() => socket.send(response, from.port, from.address, () => {})),
+          Effect.succeed(
+            packet.length >= 12 &&
+            (packet.readUInt16BE(2) & 0x8000) === 0 // It's a query, not a response
+          )
+        ))
     )
   })
