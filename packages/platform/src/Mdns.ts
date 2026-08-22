@@ -450,7 +450,7 @@ export const discoverAirPlayWithRetry = Effect.fn("Mdns.discoverAirPlayWithRetry
  * Emulator only: real devices advertise themselves. This is for tests to
  * discover emulated devices without hard-coding addresses.
  */
-export const advertiseAirPlay = (_options: {
+export const advertiseAirPlay = (options: {
   readonly name: string
   readonly port: Port
 }): Effect.Effect<void, never, Scope.Scope> =>
@@ -462,19 +462,100 @@ export const advertiseAirPlay = (_options: {
       () => Effect.sync(() => socket.close())
     )
 
-    // Minimal mDNS response packet advertising AirPlay service
-    // Just enough for the emulated device to be discoverable
-    const buffer = Buffer.alloc(512)
-    buffer.writeUInt16BE(0, 0) // Transaction ID
-    buffer.writeUInt16BE(0x8400, 2) // Flags: Response, Authoritative
-    buffer.writeUInt16BE(0, 4) // Questions
-    buffer.writeUInt16BE(1, 6) // Answers
-    buffer.writeUInt16BE(0, 8) // Authority
-    buffer.writeUInt16BE(0, 10) // Additional
+    const serviceName = `${options.name}._airplay._tcp.local.`
+    const serviceType = "_airplay._tcp.local."
+    const hostname = `${options.name}.local.`
+
+    // Build mDNS response with PTR, TXT, SRV, A records
+    const buildResponse = (): Buffer => {
+      const header = Buffer.alloc(12)
+      header.writeUInt16BE(0, 0) // Transaction ID
+      header.writeUInt16BE(0x8400, 2) // Flags: Response, Authoritative
+      header.writeUInt16BE(0, 4) // Questions
+      header.writeUInt16BE(4, 6) // Answers (PTR, TXT, SRV, A)
+      header.writeUInt16BE(0, 8) // Authority
+      header.writeUInt16BE(0, 10) // Additional
+
+      const TTL = 120
+      const ttlBuf = Buffer.alloc(4)
+      ttlBuf.writeUInt32BE(TTL, 0)
+
+      // PTR record: _airplay._tcp.local. -> device._airplay._tcp.local.
+      const ptrName = encodeName(serviceType)
+      const ptrData = encodeName(serviceName)
+      const ptrRecord = Buffer.concat([
+        ptrName,
+        Buffer.from([0x00, 0x0c]), // TYPE PTR
+        Buffer.from([0x00, 0x01]), // CLASS IN
+        ttlBuf,
+        Buffer.from([0x00, ptrData.length]), // RDLENGTH
+        ptrData
+      ])
+
+      // TXT record: key=value pairs for features
+      const txtName = encodeName(serviceName)
+      const txtPairs = [
+        `fn=${options.name}`,
+        `features=0x5A7FFFF7,0xE`, // Video support bits
+        `model=AppleTV3,2`,
+        `deviceid=AA:BB:CC:DD:EE:FF`,
+        `flags=0x4`
+      ]
+      const txtData = Buffer.concat(
+        txtPairs.map((pair) => {
+          const pairBuf = Buffer.from(pair, "utf8")
+          return Buffer.concat([Buffer.from([pairBuf.length]), pairBuf])
+        })
+      )
+      const txtRecord = Buffer.concat([
+        txtName,
+        Buffer.from([0x00, 0x10]), // TYPE TXT
+        Buffer.from([0x00, 0x01]), // CLASS IN
+        ttlBuf,
+        Buffer.from([0x00, txtData.length]), // RDLENGTH
+        txtData
+      ])
+
+      // SRV record: device._airplay._tcp.local. -> device.local:port
+      const srvName = encodeName(serviceName)
+      const srvData = Buffer.alloc(6)
+      srvData.writeUInt16BE(0, 0) // Priority
+      srvData.writeUInt16BE(0, 2) // Weight
+      srvData.writeUInt16BE(Number(options.port), 4) // Port
+      const srvTarget = encodeName(hostname)
+      const srvRecord = Buffer.concat([
+        srvName,
+        Buffer.from([0x00, 0x21]), // TYPE SRV
+        Buffer.from([0x00, 0x01]), // CLASS IN
+        ttlBuf,
+        Buffer.from([0x00, srvData.length + srvTarget.length]), // RDLENGTH
+        srvData,
+        srvTarget
+      ])
+
+      // A record: device.local. -> 127.0.0.1
+      const aName = encodeName(hostname)
+      const aData = Buffer.from([127, 0, 0, 1])
+      const aRecord = Buffer.concat([
+        aName,
+        Buffer.from([0x00, 0x01]), // TYPE A
+        Buffer.from([0x00, 0x01]), // CLASS IN
+        ttlBuf,
+        Buffer.from([0x00, 0x04]), // RDLENGTH
+        aData
+      ])
+
+      return Buffer.concat([header, ptrRecord, srvRecord, txtRecord, aRecord])
+    }
+
+    const response = buildResponse()
+
+    // Bind to a random port and send to multicast
+    yield* Effect.sync(() => socket.bind())
 
     yield* Effect.forkScoped(
       Effect.repeat(
-        Effect.sync(() => socket.send(buffer, MDNS_PORT, MDNS_ADDRESS, () => {})),
+        Effect.sync(() => socket.send(response, MDNS_PORT, MDNS_ADDRESS, () => {})),
         Schedule.spaced("5 seconds")
       )
     )
