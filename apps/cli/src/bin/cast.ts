@@ -69,7 +69,7 @@ import { Media } from "@castcli/protocol"
 import { HttpServer as HttpServerPlatform } from "@castcli/platform"
 import { routes, type SessionState } from "../Server/Routes.ts"
 import * as State from "../State.ts"
-import * as ControlChannel from "../ControlChannel.ts"
+// import * as ControlChannel from "../ControlChannel.ts" // Temporarily disabled for debugging
 
 const CAST_SERVICE = "_googlecast._tcp.local"
 const AIRPLAY_SERVICE = "_airplay._tcp.local"
