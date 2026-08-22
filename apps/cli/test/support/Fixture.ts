@@ -255,6 +255,11 @@ export const play = (
         (handle) =>
           // Killed when the scope closes, whatever the fiber was doing. The
           // player never exits on its own — that is the point of it.
-          Effect.addFinalizer(() => Effect.orElseSucceed(handle.kill(), () => undefined))
+          // Use Effect.never to keep this alive indefinitely; the finalizer
+          // will run when the test scope closes.
+          Effect.zipRight(
+            Effect.addFinalizer(() => Effect.orElseSucceed(handle.kill(), () => undefined)),
+            Effect.never
+          )
       )
     ))
