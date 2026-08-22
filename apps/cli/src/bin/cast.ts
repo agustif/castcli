@@ -71,8 +71,8 @@ import { routes, type SessionState } from "../Server/Routes.ts"
 import * as State from "../State.ts"
 import * as ControlChannel from "../ControlChannel.ts"
 
-const CAST_SERVICE = "_googlecast._tcp.local."
-const AIRPLAY_SERVICE = "_airplay._tcp.local."
+const CAST_SERVICE = "_googlecast._tcp.local"
+const AIRPLAY_SERVICE = "_airplay._tcp.local"
 
 /** Unique only within one MediaInformation, so a constant is enough. */
 const SUBTITLE_TRACK_ID = TrackId.make(1)
