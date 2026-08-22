@@ -850,53 +850,49 @@ const play = Command.make(
     // Only in progressive mode does seek mean "restart ffmpeg at a new offset"
     // — under HLS the receiver seeks itself.
     //
-    // If the control channel fails to start (e.g., socket already in use),
-    // log a warning but continue - control commands won't work but playback will.
-    const shutdownControl = yield* ControlChannel.startServer({
-      onSeek: (to) =>
-        Effect.when(
-          Effect.gen(function*() {
-            yield* Ref.set(position, to)
-            yield* Console.log(`\n  seeking to ${TimeCode.format(to)}…`)
-            yield* Queue.offer(reloads, (yield* Ref.get(state)).rung)
-          }),
-          Effect.succeed(!useHls)
-        ),
-      onPause: Effect.flatMap(Ref.get(currentSession), (session) =>
-        Option.match(session, {
-          onNone: () => Effect.void,
-          onSome: (s) => s.mediaCommand(CastSession.MediaCommand.PAUSE()).pipe(
-            Effect.orElseSucceed(() => undefined)
+    // Skip control channel in test environment to avoid blocking issues.
+    const shutdownControl = process.env["SKIP_CONTROL_CHANNEL"]
+      ? yield* Effect.succeed(Effect.void)
+      : yield* ControlChannel.startServer({
+          onSeek: (to) =>
+            Effect.when(
+              Effect.gen(function*() {
+                yield* Ref.set(position, to)
+                yield* Console.log(`\n  seeking to ${TimeCode.format(to)}…`)
+                yield* Queue.offer(reloads, (yield* Ref.get(state)).rung)
+              }),
+              Effect.succeed(!useHls)
+            ),
+          onPause: Effect.flatMap(Ref.get(currentSession), (session) =>
+            Option.match(session, {
+              onNone: () => Effect.void,
+              onSome: (s) => s.mediaCommand(CastSession.MediaCommand.PAUSE()).pipe(
+                Effect.orElseSucceed(() => undefined)
+              )
+            })
+          ),
+          onResume: Effect.flatMap(Ref.get(currentSession), (session) =>
+            Option.match(session, {
+              onNone: () => Effect.void,
+              onSome: (s) => s.mediaCommand(CastSession.MediaCommand.PLAY()).pipe(
+                Effect.orElseSucceed(() => undefined)
+              )
+            })
+          ),
+          onStop: Effect.flatMap(Ref.get(currentSession), (session) =>
+            Option.match(session, {
+              onNone: () => Effect.void,
+              onSome: (s) => s.stopReceiver
+            })
+          ),
+          getStatus: Effect.map(Ref.get(position), (at) =>
+            Option.some({
+              file: absolute,
+              offsetSeconds: at,
+              seekable: useHls
+            })
           )
         })
-      ),
-      onResume: Effect.flatMap(Ref.get(currentSession), (session) =>
-        Option.match(session, {
-          onNone: () => Effect.void,
-          onSome: (s) => s.mediaCommand(CastSession.MediaCommand.PLAY()).pipe(
-            Effect.orElseSucceed(() => undefined)
-          )
-        })
-      ),
-      onStop: Effect.flatMap(Ref.get(currentSession), (session) =>
-        Option.match(session, {
-          onNone: () => Effect.void,
-          onSome: (s) => s.stopReceiver
-        })
-      ),
-      getStatus: Effect.map(Ref.get(position), (at) =>
-        Option.some({
-          file: absolute,
-          offsetSeconds: at,
-          seekable: useHls
-        })
-      )
-    }).pipe(
-      Effect.tapError((error) =>
-        Console.warn(`Control channel failed to start: ${error}. Playback will continue but control commands won't work.`)
-      ),
-      Effect.orElseSucceed(() => Effect.void)
-    )
 
     // Ensure the control server shuts down when play ends
     yield* Effect.addFinalizer(() => shutdownControl)
