@@ -21,7 +21,7 @@ const TestServices = Layer.mergeAll(FetchHttpClient.layer, NodeServices.layer)
 
 describe("cast play, against an emulated AirPlay device", () => {
   it.live(
-    "finds an AirPlay device over mDNS and gets it to pull the film",
+    "finds an AirPlay device and gets it to pull HLS",
     () =>
       Effect.gen(function*() {
         yield* noStrayPlayers
@@ -47,20 +47,20 @@ describe("cast play, against an emulated AirPlay device", () => {
               onNone: () => Effect.void,
               onSome: (given) =>
                 Effect.sync(() => {
-                  assert.include(given.url, "/stream")
+                  assert.include(given.url, "/master.m3u8")
                 })
             })
 
             // 2. It really pulled. The device fetches the URL it was given.
             yield* eventually(
               device.fetched,
-              (urls) => urls.some((url) => url.includes("/stream")),
+              (urls) => urls.some((url) => url.includes("/master.m3u8")),
               Duration.seconds(90)
             )
             const fetched = yield* device.fetched
             assert.isTrue(
-              fetched.some((url) => url.includes("/stream")),
-              `the device never pulled the stream: ${fetched.join(", ")}`
+              fetched.some((url) => url.includes("/master.m3u8")),
+              `the device never pulled the HLS manifest: ${fetched.join(", ")}`
             )
 
             const currentRate = yield* device.rate
