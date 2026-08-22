@@ -5,7 +5,7 @@
 // Start-Position (documented contract). No FairPlay, no mirroring.
 
 import { Effect, Option } from "effect"
-import { HttpClient } from "effect/unstable/http"
+import { HttpBody, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { AirPlayDevice, Seconds } from "@castcli/domain"
 
 export interface PlayOptions {
@@ -39,6 +39,33 @@ export const play = (device: AirPlayDevice, options: PlayOptions) =>
     }`
 
     yield* client.post(fullUrl)
+  })
+
+/**
+ * POST /command - play-queue path (insertPlayQueueItem).
+ *
+ * Binary plist body with Content-Location and Start-Position.
+ */
+export const playQueue = (device: AirPlayDevice, options: PlayOptions) =>
+  Effect.gen(function*() {
+    const client = yield* HttpClient.HttpClient
+    const url = `http://${device.ip}:${device.port}/command`
+
+    const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>type</key><string>insertPlayQueueItem</string>
+  <key>Content-Location</key><string>${options.contentLocation}</string>
+  <key>Start-Position</key><real>${options.startPosition ?? 0}</real>
+</dict>
+</plist>`
+
+    yield* client.execute(
+      HttpClientRequest.post(url, {
+        body: HttpBody.text(plist, "application/x-apple-plist")
+      })
+    )
   })
 
 /** POST /scrub?position=<seconds> */

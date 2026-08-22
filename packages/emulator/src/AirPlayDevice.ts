@@ -94,51 +94,69 @@ export const make = (options: {
           const items = yield* Schema.decodeUnknownEffect(Items)(body).pipe(
             Effect.orElseSucceed(() => [])
           )
-          const stateItem = items.find((item: any) => item.type === TlvType.State)
-          if (!stateItem || stateItem.value.length === 0) {
-            return { status: 400, body: "Missing state" }
-          }
-
-          const pairVerifyState = stateItem.value[0]
-
-          // M1/M2: Controller sends ephemeral public key
-          if (pairVerifyState === 1) {
-            const controllerPubKey = items.find((item: any) => item.type === TlvType.PublicKey)
-            if (!controllerPubKey) {
-              return { status: 400, body: "Missing public key" }
+          const stateItem = items.find((item: unknown) => {
+            if (typeof item === "object" && item !== null && "type" in item && "value" in item) {
+              return item.type === TlvType.State
+            }
+            return false
+          })
+          return yield* Effect.gen(function*() {
+            if (!stateItem || !("value" in stateItem) || !(stateItem.value instanceof Uint8Array) || stateItem.value.length === 0) {
+              return { status: 400, body: "Missing state" }
             }
 
-            const suite = yield* Effect.provide(AirPlay.Suite.Suite, Layer.provide(AirPlay.NodeSuite, NodeCrypto.layer))
-            const accessoryEphemeral = yield* suite.x25519KeyPair
-            const accessoryEphemeralPublic = yield* suite.x25519PublicKey(
-              accessoryEphemeral.privateKey
-            )
+            const pairVerifyState = stateItem.value[0]
 
-            const m2 = [
-              { type: TlvType.State, value: new Uint8Array([2]) },
-              { type: TlvType.PublicKey, value: accessoryEphemeralPublic }
-            ]
-            const m2Bytes = yield* Schema.encodeEffect(Items)(m2).pipe(
-              Effect.orElseSucceed(() => new Uint8Array(0))
-            )
+            // M1/M2: Controller sends ephemeral public key
+            return yield* Effect.gen(function*() {
+              if (pairVerifyState === 1) {
+                const controllerPubKey = items.find((item: unknown) => {
+                  if (typeof item === "object" && item !== null && "type" in item) {
+                    return (item as { type: number }).type === TlvType.PublicKey
+                  }
+                  return false
+                })
+                return yield* Effect.gen(function*() {
+                  if (!controllerPubKey) {
+                    return { status: 400, body: "Missing public key" }
+                  }
 
-            return { status: 200, body: m2Bytes, contentType: "application/octet-stream" }
-          }
+                  const suite = yield* Effect.provide(AirPlay.Suite.Suite, Layer.provide(AirPlay.NodeSuite, NodeCrypto.layer))
+                  const accessoryEphemeral = yield* suite.x25519KeyPair
+                  const accessoryEphemeralPublic = yield* suite.x25519PublicKey(
+                    accessoryEphemeral.privateKey
+                  )
 
-          // M3/M4: Controller sends encrypted proof, we verify and mark paired
-          if (pairVerifyState === 3) {
-            // Simplified: just mark as verified for emulator
-            yield* Ref.set(pairVerified, true)
+                  const m2 = [
+                    { type: TlvType.State, value: new Uint8Array([2]) },
+                    { type: TlvType.PublicKey, value: accessoryEphemeralPublic }
+                  ]
+                  const m2Bytes = yield* Schema.encodeEffect(Items)(m2).pipe(
+                    Effect.orElseSucceed(() => new Uint8Array(0))
+                  )
 
-            const m4 = [{ type: TlvType.State, value: new Uint8Array([4]) }]
-            const m4Bytes = yield* Schema.encodeEffect(Items)(m4).pipe(
-              Effect.orElseSucceed(() => new Uint8Array(0))
-            )
+                  return { status: 200, body: m2Bytes, contentType: "application/octet-stream" }
+                }).pipe(Effect.orElseSucceed(() => ({ status: 500, body: "Internal error" })))
+              }
 
-            return { status: 200, body: m4Bytes, contentType: "application/octet-stream" }
-          }
+              // M3/M4: Controller sends encrypted proof, we verify and mark paired
+              return yield* Effect.gen(function*() {
+                if (pairVerifyState === 3) {
+                  // Simplified: just mark as verified for emulator
+                  yield* Ref.set(pairVerified, true)
 
-          return { status: 400, body: "Invalid state" }
+                  const m4 = [{ type: TlvType.State, value: new Uint8Array([4]) }]
+                  const m4Bytes = yield* Schema.encodeEffect(Items)(m4).pipe(
+                    Effect.orElseSucceed(() => new Uint8Array(0))
+                  )
+
+                  return { status: 200, body: m4Bytes, contentType: "application/octet-stream" }
+                }
+
+                return { status: 400, body: "Invalid state" }
+              }).pipe(Effect.orElseSucceed(() => ({ status: 500, body: "Internal error" })))
+            }).pipe(Effect.orElseSucceed(() => ({ status: 500, body: "Internal error" })))
+          }).pipe(Effect.orElseSucceed(() => ({ status: 500, body: "Internal error" })))
         }).pipe(Effect.orElseSucceed(() => ({ status: 500, body: "Internal error" })))
         : Effect.succeed(NOT_FOUND)
 
@@ -155,64 +173,76 @@ export const make = (options: {
           Match.when({ path: "/play", method: "POST" }, () =>
             Effect.gen(function*() {
               const verified = yield* Ref.get(pairVerified)
-              if (!verified) {
-                return FORBIDDEN
-              }
+              return yield* Effect.if(verified, {
+                onTrue: () => Effect.gen(function*() {
+                  const params = url.searchParams
+                  const contentLocation = params.get("Content-Location") ?? ""
+                  const startPosition = Number(params.get("Start-Position") ?? "0")
 
-              const params = url.searchParams
-              const contentLocation = params.get("Content-Location") ?? ""
-              const startPosition = Number(params.get("Start-Position") ?? "0")
-
-              if (contentLocation.length > 0) {
-                yield* Ref.set(loaded, Option.some({ url: contentLocation, position: startPosition }))
-                yield* Ref.set(position, startPosition)
-                yield* Ref.set(rateRef, 1)
-                yield* Queue.offer(pulls, contentLocation)
-              }
-
-              return { status: 200, body: "" }
+                  return yield* Effect.if(contentLocation.length > 0, {
+                    onTrue: () => Effect.gen(function*() {
+                      yield* Ref.set(loaded, Option.some({ url: contentLocation, position: startPosition }))
+                      yield* Ref.set(position, startPosition)
+                      yield* Ref.set(rateRef, 1)
+                      yield* Queue.offer(pulls, contentLocation)
+                      return { status: 200, body: "" }
+                    }),
+                    onFalse: () => Effect.succeed({ status: 200, body: "" })
+                  })
+                }),
+                onFalse: () => Effect.succeed(FORBIDDEN)
+              })
             })),
 
           Match.when({ path: "/command", method: "POST" }, () =>
             Effect.gen(function*() {
               const verified = yield* Ref.get(pairVerified)
-              if (!verified) {
-                return FORBIDDEN
-              }
+              return yield* Effect.if(verified, {
+                onTrue: () => Effect.gen(function*() {
+                  const bodyText = new TextDecoder().decode(body)
+                  const urlMatch = bodyText.match(/Content-Location.*?<string>(.*?)<\/string>/s)
+                  const posMatch = bodyText.match(/Start-Position.*?<real>([\d.]+)<\/real>/s)
 
-              const bodyText = new TextDecoder().decode(body)
-              const urlMatch = bodyText.match(/Content-Location.*?<string>(.*?)<\/string>/s)
-              const posMatch = bodyText.match(/Start-Position.*?<real>([\d.]+)<\/real>/s)
+                  return yield* Effect.if(urlMatch !== null && urlMatch[1] !== undefined, {
+                    onTrue: () => Effect.gen(function*() {
+                      const contentLocation = urlMatch[1]
+                      const startPosition = posMatch ? Number(posMatch[1]) : 0
 
-              if (urlMatch && urlMatch[1]) {
-                const contentLocation = urlMatch[1]
-                const startPosition = posMatch ? Number(posMatch[1]) : 0
-
-                yield* Ref.set(loaded, Option.some({ url: contentLocation, position: startPosition }))
-                yield* Ref.set(position, startPosition)
-                yield* Ref.set(rateRef, 1)
-                yield* Queue.offer(pulls, contentLocation)
-              }
-
-              return { status: 200, body: "" }
+                      yield* Ref.set(loaded, Option.some({ url: contentLocation, position: startPosition }))
+                      yield* Ref.set(position, startPosition)
+                      yield* Ref.set(rateRef, 1)
+                      yield* Queue.offer(pulls, contentLocation)
+                      return { status: 200, body: "" }
+                    }),
+                    onFalse: () => Effect.succeed({ status: 200, body: "" })
+                  })
+                }),
+                onFalse: () => Effect.succeed(FORBIDDEN)
+              })
             })),
 
           Match.when({ path: "/scrub", method: "POST" }, () =>
             Effect.gen(function*() {
               const positionParam = url.searchParams.get("position")
-              if (positionParam) {
-                yield* Ref.set(position, Number(positionParam))
-              }
-              return { status: 200, body: "" }
+              return yield* Effect.if(positionParam !== null, {
+                onTrue: () => Effect.gen(function*() {
+                  yield* Ref.set(position, Number(positionParam))
+                  return { status: 200, body: "" }
+                }),
+                onFalse: () => Effect.succeed({ status: 200, body: "" })
+              })
             })),
 
           Match.when({ path: "/rate", method: "POST" }, () =>
             Effect.gen(function*() {
               const value = url.searchParams.get("value")
-              if (value) {
-                yield* Ref.set(rateRef, Number(value))
-              }
-              return { status: 200, body: "" }
+              return yield* Effect.if(value !== null, {
+                onTrue: () => Effect.gen(function*() {
+                  yield* Ref.set(rateRef, Number(value))
+                  return { status: 200, body: "" }
+                }),
+                onFalse: () => Effect.succeed({ status: 200, body: "" })
+              })
             })),
 
           Match.when({ path: "/stop", method: "POST" }, () =>
