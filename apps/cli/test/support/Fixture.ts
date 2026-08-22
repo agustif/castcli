@@ -219,8 +219,7 @@ export const play = (
   Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
     Effect.forkScoped(
       Effect.flatMap(
-        Effect.acquireRelease(
-          spawner.spawn(
+        spawner.spawn(
             // The bundle, not the sources through tsx: it starts in 0.1s where
             // tsx takes 0.7s, and it is what `npm i -g` installs — so this
             // tests what people actually run. `npm run test:e2e` builds it.
@@ -250,11 +249,15 @@ export const play = (
                   CAST_ADVERTISE_HOST: "127.0.0.1",
                   XDG_STATE_HOME: stateDirectory
                 }
-              }
-            )
-          ),
-          (handle) => Effect.orElseSucceed(handle.kill(), () => undefined)
+            }
+          )
         ),
-        () => Effect.never
+        (handle) =>
+          // Killed when the scope closes, whatever the fiber was doing. The
+          // player never exits on its own — that is the point of it.
+          Effect.andThen(
+            Effect.addFinalizer(() => Effect.orElseSucceed(handle.kill(), () => undefined)),
+            Effect.never
+          )
       )
     ))
