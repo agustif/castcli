@@ -186,7 +186,7 @@ export const make = (options: {
                       yield* Ref.set(rateRef, 1)
                       yield* Queue.offer(pulls, contentLocation)
                     }),
-                    () => contentLocation.length > 0
+                    Effect.succeed(contentLocation.length > 0)
                   )
 
                   return { status: 200, body: "" }
@@ -214,7 +214,7 @@ export const make = (options: {
                       yield* Ref.set(rateRef, 1)
                       yield* Queue.offer(pulls, contentLocation)
                     }),
-                    () => urlMatch !== null && urlMatch[1] !== undefined
+                    Effect.succeed(urlMatch !== null && urlMatch[1] !== undefined)
                   )
 
                   return { status: 200, body: "" }
@@ -230,7 +230,7 @@ export const make = (options: {
                 Effect.gen(function*() {
                   yield* Ref.set(position, Number(positionParam))
                 }),
-                () => positionParam !== null
+                Effect.succeed(positionParam !== null)
               )
               return { status: 200, body: "" }
             })),
@@ -242,7 +242,7 @@ export const make = (options: {
                 Effect.gen(function*() {
                   yield* Ref.set(rateRef, Number(value))
                 }),
-                () => value !== null
+                Effect.succeed(value !== null)
               )
               return { status: 200, body: "" }
             })),
