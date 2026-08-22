@@ -59,14 +59,14 @@ export class CueCounts extends Schema.Class<CueCounts>("CueCounts")({
 /**
  * The device the last command acted on.
  *
- * Tagged, because the two protocols are not identified by the same thing and
+ * Tagged, because the three protocols are not identified by the same thing and
  * the difference is not cosmetic: a control command has to know which network
- * to sweep before it can act, and a television and a Chromecast in the same
- * room will both answer to "the last device I used".
+ * to sweep before it can act, and devices in the same room will answer to
+ * "the last device I used" regardless of protocol.
  *
- * The Cast arm keeps an address, which is a DHCP lease rather than an identity
- * and so can go stale. That costs one failed connection and then discovery runs
- * anyway, which is why the shortcut can only ever save time.
+ * The Cast and AirPlay arms keep an address, which is a DHCP lease rather than
+ * an identity and so can go stale. That costs one failed connection and then
+ * discovery runs anyway, which is why the shortcut can only ever save time.
  *
  * The DLNA arm deliberately keeps the renderer's **name** and not its
  * description URL, even though the URL is the thing `Renderer.connect` needs.
@@ -80,7 +80,8 @@ export class CueCounts extends Schema.Class<CueCounts>("CueCounts")({
  */
 export const LastTarget = Schema.TaggedUnion({
   Cast: { ip: Ipv4 },
-  Dlna: { friendlyName: Schema.String }
+  Dlna: { friendlyName: Schema.String },
+  AirPlay: { ip: Ipv4 }
 })
 
 export type LastTarget = typeof LastTarget.Type
@@ -211,6 +212,7 @@ const addressOf: (target: LastTarget) => Option.Option<Ipv4> = Match.type<LastTa
   // A renderer has no address worth handing to anything: it is reached through
   // the control URLs in its description, which are fetched afresh every time.
   Match.tag("Dlna", () => Option.none<Ipv4>()),
+  Match.tag("AirPlay", ({ ip }) => Option.some(ip)),
   Match.exhaustive
 )
 
@@ -251,6 +253,8 @@ const rememberTarget = (target: LastTarget) =>
     store.update((state) => new Remembered({ ...state, lastTarget: target })))
 
 export const rememberDevice = (ip: Ipv4) => rememberTarget({ _tag: "Cast", ip })
+
+export const rememberAirPlay = (ip: Ipv4) => rememberTarget({ _tag: "AirPlay", ip })
 
 /**
  * A renderer is remembered by name. See `LastTarget` for why its description

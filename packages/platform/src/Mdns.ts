@@ -10,9 +10,9 @@
 // of joining the multicast group, because binding port 5353 means fighting
 // mDNSResponder for it on macOS. Cast devices honour QU.
 
-import { Duration, Effect, Option, Queue, Ref, Schedule, Stream } from "effect"
+import { Duration, Effect, Option, Queue, Ref, Schedule, Scope, Stream } from "effect"
 import * as dgram from "node:dgram"
-import { CastDevice, Ipv4, Port } from "@castcli/domain"
+import { AirPlayDevice, CastDevice, Ipv4, Port } from "@castcli/domain"
 
 const MDNS_ADDRESS = "224.0.0.251"
 const MDNS_PORT = 5353
@@ -341,3 +341,141 @@ export const discoverWithRetry = Effect.fn("Mdns.discoverWithRetry")(function*(
     })
   )
 })
+
+// ------------------------------------------------- AirPlay-specific discovery
+
+interface AirPlaySweep {
+  readonly instances: ReadonlyMap<string, Instance>
+  readonly addresses: ReadonlyMap<string, string>
+}
+
+const toAirPlayDevices = (sweep: AirPlaySweep): ReadonlyArray<AirPlayDevice> =>
+  [...sweep.instances.values()].flatMap((instance) =>
+    Option.match(
+      Option.flatMap(instance.host, (host) => Option.fromNullishOr(sweep.addresses.get(host))),
+      {
+        onNone: () => [],
+        onSome: (ip) =>
+          Option.match(instance.port, {
+            onNone: () => [],
+            onSome: (port) => {
+              const featuresHex = instance.txt.get("features")
+              const flagsHex = instance.txt.get("flags")
+              return [
+                new AirPlayDevice({
+                  name: instance.txt.get("fn") ?? instance.instance.split(".")[0] ??
+                    instance.instance,
+                  ip: Ipv4.make(ip),
+                  port: Port.make(port),
+                  features: featuresHex !== undefined
+                    ? Option.getOrUndefined(Option.fromNullishOr((() => {
+                      return BigInt(`0x${featuresHex}`)
+                    })()))
+                    : undefined,
+                  flags: flagsHex !== undefined
+                    ? Option.getOrUndefined(Option.fromNullishOr((() => {
+                      return Number.parseInt(flagsHex, 16)
+                    })()))
+                    : undefined,
+                  model: instance.txt.get("model"),
+                  deviceId: instance.txt.get("deviceid")
+                })
+              ]
+            }
+          })
+      }
+    )
+  )
+
+const discoverAirPlay = Effect.fn("Mdns.discoverAirPlay")(function*(
+  service: string,
+  timeout: Duration.Duration
+) {
+  const sweep = yield* Ref.make<AirPlaySweep>({ instances: new Map(), addresses: new Map() })
+
+  const socket = yield* Effect.acquireRelease(
+    Effect.sync(() => dgram.createSocket({ type: "udp4", reuseAddr: true })),
+    (open) => Effect.sync(() => open.close())
+  )
+
+  const packets = yield* Queue.unbounded<Buffer>()
+  socket.on("message", (message: Buffer) => {
+    Queue.offerUnsafe(packets, message)
+  })
+
+  yield* Effect.forkScoped(
+    Stream.runForEach(Stream.fromQueue(packets), (message) =>
+      Option.match(parseMessage(message), {
+        onNone: () => Effect.void,
+        onSome: (records) =>
+          Ref.update(sweep, (current) =>
+            records.reduce((acc, record) => absorb(acc, message, record, service), current))
+      }))
+  )
+
+  yield* Effect.callback<void>((resume) => {
+    socket.bind(0, () => resume(Effect.void))
+  })
+
+  const query = queryFor(service)
+  yield* Effect.forkScoped(
+    Effect.repeat(
+      Effect.sync(() => socket.send(query, MDNS_PORT, MDNS_ADDRESS, () => {})),
+      Schedule.spaced("400 millis").pipe(Schedule.upTo({ times: 2 }))
+    )
+  )
+
+  yield* Effect.sleep(timeout)
+  const devices = toAirPlayDevices(yield* Ref.get(sweep))
+  yield* Effect.logDebug(`mdns: ${devices.length} AirPlay device(s) answered for ${service}`)
+  return devices
+})
+
+export const discoverAirPlayWithRetry = Effect.fn("Mdns.discoverAirPlayWithRetry")(function*(
+  service: string,
+  timeout: Duration.Duration,
+  attempts = 3
+) {
+  return yield* Effect.scoped(discoverAirPlay(service, timeout)).pipe(
+    Effect.repeat({
+      schedule: Schedule.recurs(attempts - 1),
+      until: (devices: ReadonlyArray<AirPlayDevice>) => devices.length > 0
+    })
+  )
+})
+
+/**
+ * Advertise an AirPlay device over mDNS.
+ *
+ * Emulator only: real devices advertise themselves. This is for tests to
+ * discover emulated devices without hard-coding addresses.
+ */
+export const advertiseAirPlay = (options: {
+  readonly name: string
+  readonly port: Port
+}): Effect.Effect<void, never, Scope.Scope> =>
+  Effect.gen(function*() {
+    const socket = dgram.createSocket({ type: "udp4", reuseAddr: true })
+
+    yield* Effect.acquireRelease(
+      Effect.sync(() => socket),
+      () => Effect.sync(() => socket.close())
+    )
+
+    // Minimal mDNS response packet advertising AirPlay service
+    // Just enough for the emulated device to be discoverable
+    const buffer = Buffer.alloc(512)
+    buffer.writeUInt16BE(0, 0) // Transaction ID
+    buffer.writeUInt16BE(0x8400, 2) // Flags: Response, Authoritative
+    buffer.writeUInt16BE(0, 4) // Questions
+    buffer.writeUInt16BE(1, 6) // Answers
+    buffer.writeUInt16BE(0, 8) // Authority
+    buffer.writeUInt16BE(0, 10) // Additional
+
+    yield* Effect.forkScoped(
+      Effect.repeat(
+        Effect.sync(() => socket.send(buffer, MDNS_PORT, MDNS_ADDRESS, () => {})),
+        Schedule.spaced("5 seconds")
+      )
+    )
+  })
