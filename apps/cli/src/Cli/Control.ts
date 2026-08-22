@@ -199,8 +199,8 @@ const status = Command.make(
               position: playing.position
             }))
           )),
-      onAirPlay: (device) =>
-        Effect.flatMap(AirPlaySession.playbackInfo(device), (info) =>
+      onAirPlay: (airplayDevice) =>
+        Effect.flatMap(AirPlaySession.playbackInfo(airplayDevice), (info) =>
           report(
             Option.map(info, (playing) => ({
               state: playing.rate === 1 ? "PLAYING" : "PAUSED",
@@ -218,7 +218,7 @@ const pause = Command.make(
     yield* onTarget({ device, ip }, {
       onCast: (session) => session.mediaCommand(Session.MediaCommand.PAUSE()),
       onDlna: (renderer) => renderer.pause,
-      onAirPlay: (device) => AirPlaySession.rate(device, 0)
+      onAirPlay: (airplayDevice) => AirPlaySession.rate(airplayDevice, 0)
     })
     yield* Console.log("paused")
   })
@@ -231,7 +231,7 @@ const resume = Command.make(
     yield* onTarget({ device, ip }, {
       onCast: (session) => session.mediaCommand(Session.MediaCommand.PLAY()),
       onDlna: (renderer) => renderer.resume,
-      onAirPlay: (device) => AirPlaySession.rate(device, 1)
+      onAirPlay: (airplayDevice) => AirPlaySession.rate(airplayDevice, 1)
     })
     yield* Console.log("resumed")
   })
@@ -283,8 +283,8 @@ const toggle = Command.make(
               Effect.andThen(renderer.pause, Console.log("paused"))),
             Match.exhaustive
           )),
-      onAirPlay: (device) =>
-        Effect.flatMap(AirPlaySession.playbackInfo(device), (playback) =>
+      onAirPlay: (airplayDevice) =>
+        Effect.flatMap(AirPlaySession.playbackInfo(airplayDevice), (playback) =>
           Match.value(
             Option.getOrElse(
               Option.map(playback, (playing) => (playing.rate === 1 ? "PLAYING" : "PAUSED")),
@@ -292,9 +292,9 @@ const toggle = Command.make(
             )
           ).pipe(
             Match.when("PAUSED", () =>
-              Effect.andThen(AirPlaySession.rate(device, 1), Console.log("resumed"))),
+              Effect.andThen(AirPlaySession.rate(airplayDevice, 1), Console.log("resumed"))),
             Match.when("PLAYING", () =>
-              Effect.andThen(AirPlaySession.rate(device, 0), Console.log("paused"))),
+              Effect.andThen(AirPlaySession.rate(airplayDevice, 0), Console.log("paused"))),
             Match.exhaustive
           ))
     })
@@ -338,7 +338,7 @@ const stop = Command.make(
       // A renderer has no receiver application to close, so `Stop` is the whole
       // of it: the transport goes to STOPPED and the device drops the pull.
       onDlna: (renderer) => renderer.stop,
-      onAirPlay: (device) => AirPlaySession.stop(device)
+      onAirPlay: (airplayDevice) => AirPlaySession.stop(airplayDevice)
     })
     yield* Console.log("stopped")
   })
@@ -490,16 +490,16 @@ const seek = Command.make(
           yield* Console.log(`seeking to ${TimeCode.format(wanted)}`)
         }),
 
-      onAirPlay: (device) =>
+      onAirPlay: (airplayDevice) =>
         Effect.gen(function*() {
-          const playback = yield* AirPlaySession.playbackInfo(device)
+          const playback = yield* AirPlaySession.playbackInfo(airplayDevice)
           const within = Option.match(playback, {
             onNone: () => 0,
             onSome: (playing) => playing.position ?? 0
           })
           const wanted = yield* wantedFrom(offset + within, flags)
           
-          yield* AirPlaySession.scrub(device, Brands.Seconds.make(Math.max(0, wanted)))
+          yield* AirPlaySession.scrub(airplayDevice, Brands.Seconds.make(Math.max(0, wanted)))
           yield* Console.log(`seeking to ${TimeCode.format(wanted)}`)
         })
     })

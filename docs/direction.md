@@ -55,19 +55,16 @@ An elaborate estimator for a quantity the receiver already knows: its own buffer
 level.
 
 HLS moves that decision to the side that has the information, and it is now
-implemented. A VOD playlist makes every segment of every variant addressable, so
-the receiver switches quality on a segment boundary and seeks by asking for a
+**the default**. A VOD playlist makes every segment of every variant addressable,
+so the receiver switches quality on a segment boundary and seeks by asking for a
 different segment. Nothing restarts. The objection at the time — that preparing
 variants nobody watches burns CPU — turned out not to apply, because segments
 are encoded only when requested; a thousand of them across six variants cost
 nothing until someone asks for one.
 
-It is not the default, for a reason that has nothing to do with the design: the
-progressive path has been watched end to end on a real television and HLS has
-only been verified against an emulated one. Both are served side by side and
-`--hls` chooses. When a real device confirms it, the default flips and the
-controller's actuation — the reload queue, the `LOAD` reissue, the
-probe-and-hold logic — can go.
+Progressive becomes an escape hatch (`--progressive`) for debugging. The quality
+controller runs only for progressive; HLS skips it entirely because the receiver
+chooses from the playlist.
 
 ## Testing the inversion
 
@@ -133,17 +130,15 @@ ladder, segment encoder, and subtitle handling.
 
 ## What is left
 
-**Hardware to test against.** Three things wait on it and nothing else:
+**Hardware to test against.** Two things wait on it and nothing else:
 
-- **One Cast session with `--hls`.** After that it becomes the default and the
-  quality controller's actuation — the reload queue, the `LOAD` reissue, the
-  probe-and-hold logic — can be deleted.
 - **One DLNA television.** The whole path is verified against an emulated
   renderer and has never met a real set.
 - **An Apple TV** (or an AirPlay-compatible television), to test whether the
-  implemented sender works with that device. The software is complete for the
-  unauthenticated path; pairing is the only missing piece for modern Apple TVs.
-  Which endpoint a given device expects is an hour's experiment with the
-  hardware.
+  implemented sender works with that device and to wire the HAP pairing
+  handshake. The cryptographic infrastructure is complete; connecting it to the
+  session requires a device that demands pairing. Which endpoint a given device
+  expects (authenticated vs legacy unauthenticated) is an hour's experiment with
+  the hardware.
 
 Everything that can be verified without a device has been.

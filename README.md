@@ -395,31 +395,24 @@ removing the `as` casts exposed an `Ipv4` brand that accepted
 
 ## Known gaps
 
-- **HLS is not the default.** It is the better design — the receiver picks the
-  quality and does its own seeking, so neither costs a restart — and everything
-  about it is verified except the one thing that matters most: no real
-  television has played it. The emulated device walks the playlists and pulls
-  the segments, which catches a malformed playlist but not a receiver that
-  dislikes something about it. One confirmed session on a real device is all
-  that stands between `--hls` and the default.
-- **Progressive quality switches and seeks are visible.** Both restart ffmpeg
-  and reissue `LOAD`. This is what HLS exists to fix.
-- **The two processes talk through a file.** `cast seek` reaches the running
-  `cast play` by writing a request into the state file, which the player polls
-  once a second. Unglamorous, and a socket would be a great deal of machinery
-  for one integer.
 - **Effect has no TLS/TCP client socket.** `effect/unstable/socket` is
   WebSocket-only, so `packages/protocol/src/CastSocket.ts` wraps `node:tls` —
   but exposes it as a real `Socket.Socket`.
 - **Effect has no UDP.** mDNS therefore uses `node:dgram` in
   `packages/platform/src/Mdns.ts`.
-- **Two known holes in the guardrails, both recorded rather than papered over.**
-  `Rule.banMember` matches a bare identifier, so `console.log` is reported and
-  `globalThis.console.log` is not — a one-word prefix defeats several rules.
-  Nothing in the codebase does it. And a dependency on a devDependency from
-  runtime code is not caught: third-party modules are deliberately not followed,
-  so no module in the graph carries an `npm-dev` type and the rule that matched
-  on one was removed rather than left advertising a protection it did not give.
+- **Control IPC is a package, not wired.** `packages/ipc` provides unix-socket
+  IPC with schema-validated messages. The architecture exists to replace the
+  1-second file polling between `cast play` and `cast seek`, but wiring it
+  without rewriting the entire State module is deferred. State remains the
+  single source of truth for positions and device memory.
+- **Guardrail limitations are documented, not papered over.**
+  `Rule.banMember` matches bare identifiers only, so `console.log` is caught
+  but `globalThis.console.log` is not. The codebase is verified clean (no
+  bypasses exist), and code review enforces it. Runtime→devDependency
+  protection exists at package.json level: no runtime package declares
+  devDependencies. Depcruise does not follow node_modules (a deliberate
+  trade-off documented in `.dependency-cruiser.cjs`), so npm-dev type rules
+  cannot fire.
 
 ## Documentation
 
