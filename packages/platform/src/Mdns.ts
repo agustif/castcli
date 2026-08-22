@@ -450,7 +450,7 @@ export const discoverAirPlayWithRetry = Effect.fn("Mdns.discoverAirPlayWithRetry
  * Emulator only: real devices advertise themselves. This is for tests to
  * discover emulated devices without hard-coding addresses.
  */
-export const advertiseAirPlay = (options: {
+export const advertiseAirPlay = (_options: {
   readonly name: string
   readonly port: Port
 }): Effect.Effect<void, never, Scope.Scope> =>

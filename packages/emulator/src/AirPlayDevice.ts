@@ -5,7 +5,7 @@
 // over HTTP, exactly as an Apple TV does, because `/play` hands it a URL and
 // it fetches that URL.
 
-import { Effect, Option, Queue, Ref, Scope, Stream } from "effect"
+import { Effect, Match, Option, Queue, Ref, Scope, Stream } from "effect"
 import { Brands } from "@castcli/domain"
 import { HttpClient } from "effect/unstable/http"
 import { Mdns } from "@castcli/platform"
@@ -100,50 +100,60 @@ export const make = (options: {
       Effect.gen(function*() {
         const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`)
         const path = url.pathname
+        const method = request.method ?? "GET"
         yield* bodyOf(request) // Read body even if unused
 
-        if (path === "/play" && request.method === "POST") {
-          const params = url.searchParams
-          const contentLocation = params.get("Content-Location") ?? ""
-          const startPosition = Number(params.get("Start-Position") ?? "0")
+        return yield* Match.value({ path, method }).pipe(
+          Match.when({ path: "/play", method: "POST" }, () =>
+            Effect.gen(function*() {
+              const params = url.searchParams
+              const contentLocation = params.get("Content-Location") ?? ""
+              const startPosition = Number(params.get("Start-Position") ?? "0")
 
-          yield* Ref.set(loaded, Option.some({ url: contentLocation, position: startPosition }))
-          yield* Ref.set(position, startPosition)
-          yield* Ref.set(rateRef, 1)
+              yield* Ref.set(loaded, Option.some({ url: contentLocation, position: startPosition }))
+              yield* Ref.set(position, startPosition)
+              yield* Ref.set(rateRef, 1)
 
-          if (contentLocation) {
-            yield* Queue.offer(pulls, contentLocation)
-          }
+              yield* Effect.when(
+                Queue.offer(pulls, contentLocation),
+                Effect.succeed(contentLocation.length > 0)
+              )
 
-          return { status: 200, body: "" }
-        }
+              return { status: 200, body: "" } satisfies Answer
+            })),
 
-        if (path === "/scrub" && request.method === "POST") {
-          const positionParam = url.searchParams.get("position")
-          if (positionParam) {
-            yield* Ref.set(position, Number(positionParam))
-          }
-          return { status: 200, body: "" }
-        }
+          Match.when({ path: "/scrub", method: "POST" }, () =>
+            Effect.gen(function*() {
+              const positionParam = url.searchParams.get("position")
+              yield* Option.match(Option.fromNullishOr(positionParam), {
+                onNone: () => Effect.void,
+                onSome: (value) => Ref.set(position, Number(value))
+              })
+              return { status: 200, body: "" } satisfies Answer
+            })),
 
-        if (path === "/rate" && request.method === "POST") {
-          const value = url.searchParams.get("value")
-          if (value) {
-            yield* Ref.set(rateRef, Number(value))
-          }
-          return { status: 200, body: "" }
-        }
+          Match.when({ path: "/rate", method: "POST" }, () =>
+            Effect.gen(function*() {
+              const value = url.searchParams.get("value")
+              yield* Option.match(Option.fromNullishOr(value), {
+                onNone: () => Effect.void,
+                onSome: (v) => Ref.set(rateRef, Number(v))
+              })
+              return { status: 200, body: "" } satisfies Answer
+            })),
 
-        if (path === "/stop" && request.method === "POST") {
-          yield* Ref.set(rateRef, 0)
-          yield* Ref.set(position, 0)
-          return { status: 200, body: "" }
-        }
+          Match.when({ path: "/stop", method: "POST" }, () =>
+            Effect.gen(function*() {
+              yield* Ref.set(rateRef, 0)
+              yield* Ref.set(position, 0)
+              return { status: 200, body: "" } satisfies Answer
+            })),
 
-        if (path === "/playback-info" && request.method === "GET") {
-          const currentRate = yield* Ref.get(rateRef)
-          const currentPosition = yield* Ref.get(position)
-          const plist = `<?xml version="1.0" encoding="UTF-8"?>
+          Match.when({ path: "/playback-info", method: "GET" }, () =>
+            Effect.gen(function*() {
+              const currentRate = yield* Ref.get(rateRef)
+              const currentPosition = yield* Ref.get(position)
+              const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -153,10 +163,11 @@ export const make = (options: {
   <key>readyToPlay</key><true />
 </dict>
 </plist>`
-          return { status: 200, body: plist, contentType: "text/x-apple-plist+xml" }
-        }
+              return { status: 200, body: plist, contentType: "text/x-apple-plist+xml" } satisfies Answer
+            })),
 
-        return NOT_FOUND
+          Match.orElse(() => Effect.succeed(NOT_FOUND))
+        )
       })
 
     yield* Effect.forkScoped(

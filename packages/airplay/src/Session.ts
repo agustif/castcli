@@ -17,10 +17,10 @@ export interface PlayOptions {
 }
 
 export interface PlaybackInfo {
-  readonly duration?: number
-  readonly position?: number
-  readonly rate?: number
-  readonly readyToPlay?: boolean
+  readonly duration: number | undefined
+  readonly position: number | undefined
+  readonly rate: number | undefined
+  readonly readyToPlay: boolean | undefined
 }
 
 /**
@@ -94,6 +94,6 @@ export const playbackInfo = (device: AirPlayDevice): Effect.Effect<Option.Option
         position: position ? Number(position[1]) : undefined,
         rate: rateMatch ? Number(rateMatch[1]) : undefined,
         readyToPlay: ready ? ready[1] === "true" : undefined
-      } as PlaybackInfo)
+      })
       : Option.none()
   })
