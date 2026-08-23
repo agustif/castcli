@@ -35,6 +35,8 @@ export const AppConfig = Config.all({
   /** Cast devices always listen on 8009; overridable for emulators and tests. */
   devicePort: withDefault(Port, "CAST_DEVICE_PORT", Port.make(8009)),
 
+  airplayPort: withDefault(Port, "AIRPLAY_DEVICE_PORT", Port.make(7000)),
+
   /** How long each mDNS sweep waits for replies. */
   discoveryTimeout: withDefault(
     Schema.Int.pipe(

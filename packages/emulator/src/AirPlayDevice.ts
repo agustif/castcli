@@ -92,71 +92,70 @@ export const make = (options: {
           const { TlvType } = AirPlay.GeneratedPairing
 
           const items = yield* Schema.decodeUnknownEffect(Items)(body).pipe(
-            Effect.orElseSucceed(() => [])
+            Effect.orElseSucceed((): ReadonlyArray<{ type: number; value: Uint8Array }> => [])
           )
-          const stateItem = items.find((item: unknown) => {
-            if (typeof item === "object" && item !== null && "type" in item && "value" in item) {
-              return item.type === TlvType.State
-            }
-            return false
-          })
-          return yield* Effect.gen(function*() {
-            if (!stateItem || !("value" in stateItem) || !(stateItem.value instanceof Uint8Array) || stateItem.value.length === 0) {
-              return { status: 400, body: "Missing state" }
-            }
+          const stateItem = items.find((item) => item.type === TlvType.State)
 
-            const pairVerifyState = stateItem.value[0]
+          return yield* Option.match(
+            Option.fromNullishOr(stateItem).pipe(
+              Option.filter((item): item is { type: number; value: Uint8Array } =>
+                typeof item === "object" && item !== null && "value" in item && item.value instanceof Uint8Array && item.value.length > 0
+              )
+            ),
+            {
+              onNone: () => Effect.succeed({ status: 400, body: "Missing state" } satisfies Answer),
+              onSome: (stateEntry) => Effect.gen(function*() {
+                const pairVerifyState = stateEntry.value[0]
 
-            // M1/M2: Controller sends ephemeral public key
-            return yield* Effect.gen(function*() {
-              if (pairVerifyState === 1) {
-                const controllerPubKey = items.find((item: unknown) => {
-                  if (typeof item === "object" && item !== null && "type" in item) {
-                    return (item as { type: number }).type === TlvType.PublicKey
-                  }
-                  return false
-                })
-                return yield* Effect.gen(function*() {
-                  if (!controllerPubKey) {
-                    return { status: 400, body: "Missing public key" }
-                  }
+                return yield* Match.value(pairVerifyState).pipe(
+                  Match.when(1, () => Effect.gen(function*() {
+                    const controllerPubKey = items.find((entry: unknown) =>
+                      typeof entry === "object" &&
+                      entry !== null &&
+                      "type" in entry &&
+                      typeof entry.type === "number" &&
+                      entry.type === TlvType.PublicKey
+                    )
 
-                  const suite = yield* Effect.provide(AirPlay.Suite.Suite, Layer.provide(AirPlay.NodeSuite, NodeCrypto.layer))
-                  const accessoryEphemeral = yield* suite.x25519KeyPair
-                  const accessoryEphemeralPublic = yield* suite.x25519PublicKey(
-                    accessoryEphemeral.privateKey
-                  )
+                    return yield* Option.match(
+                      Option.fromNullishOr(controllerPubKey),
+                      {
+                        onNone: () => Effect.succeed({ status: 400, body: "Missing public key" } satisfies Answer),
+                        onSome: () => Effect.gen(function*() {
+                          const suite = yield* Effect.provide(AirPlay.Suite.Suite, Layer.provide(AirPlay.NodeSuite, NodeCrypto.layer))
+                          const accessoryEphemeral = yield* suite.x25519KeyPair
+                          const accessoryEphemeralPublic = yield* suite.x25519PublicKey(
+                            accessoryEphemeral.privateKey
+                          )
 
-                  const m2 = [
-                    { type: TlvType.State, value: new Uint8Array([2]) },
-                    { type: TlvType.PublicKey, value: accessoryEphemeralPublic }
-                  ]
-                  const m2Bytes = yield* Schema.encodeEffect(Items)(m2).pipe(
-                    Effect.orElseSucceed(() => new Uint8Array(0))
-                  )
+                          const m2 = [
+                            { type: TlvType.State, value: new Uint8Array([2]) },
+                            { type: TlvType.PublicKey, value: accessoryEphemeralPublic }
+                          ]
+                          const m2Bytes = yield* Schema.encodeEffect(Items)(m2).pipe(
+                            Effect.orElseSucceed(() => new Uint8Array(0))
+                          )
 
-                  return { status: 200, body: m2Bytes, contentType: "application/octet-stream" }
-                })
-              }
+                          return { status: 200, body: m2Bytes, contentType: "application/octet-stream" } satisfies Answer
+                        })
+                      }
+                    )
+                  })),
+                  Match.when(3, () => Effect.gen(function*() {
+                    yield* Ref.set(pairVerified, true)
 
-              // M3/M4: Controller sends encrypted proof, we verify and mark paired
-              return yield* Effect.gen(function*() {
-                if (pairVerifyState === 3) {
-                  // Simplified: just mark as verified for emulator
-                  yield* Ref.set(pairVerified, true)
+                    const m4 = [{ type: TlvType.State, value: new Uint8Array([4]) }]
+                    const m4Bytes = yield* Schema.encodeEffect(Items)(m4).pipe(
+                      Effect.orElseSucceed(() => new Uint8Array(0))
+                    )
 
-                  const m4 = [{ type: TlvType.State, value: new Uint8Array([4]) }]
-                  const m4Bytes = yield* Schema.encodeEffect(Items)(m4).pipe(
-                    Effect.orElseSucceed(() => new Uint8Array(0))
-                  )
-
-                  return { status: 200, body: m4Bytes, contentType: "application/octet-stream" }
-                }
-
-                return { status: 400, body: "Invalid state" }
+                    return { status: 200, body: m4Bytes, contentType: "application/octet-stream" } satisfies Answer
+                  })),
+                  Match.orElse(() => Effect.succeed({ status: 400, body: "Invalid state" } satisfies Answer))
+                )
               })
-            })
-          })
+            }
+          )
         }).pipe(Effect.orElseSucceed(() => ({ status: 500, body: "Internal error" })))
         : Effect.succeed(NOT_FOUND)
 
@@ -206,7 +205,15 @@ export const make = (options: {
 
                   yield* Effect.when(
                     Effect.gen(function*() {
-                      const contentLocation = urlMatch![1]!
+                      const contentLocation = yield* Option.match(
+                        Option.fromNullishOr(urlMatch).pipe(
+                          Option.flatMap((match) => Option.fromNullishOr(match[1]))
+                        ),
+                        {
+                          onNone: () => Effect.succeed(""),
+                          onSome: (contentUrl) => Effect.succeed(contentUrl)
+                        }
+                      )
                       const startPosition = posMatch ? Number(posMatch[1]) : 0
 
                       yield* Ref.set(loaded, Option.some({ url: contentLocation, position: startPosition }))
@@ -282,11 +289,10 @@ export const make = (options: {
             response.writeHead(written.status, {
               "content-type": written.contentType ?? "text/plain"
             })
-            if (typeof written.body === "string") {
-              response.end(written.body)
-            } else {
-              response.end(Buffer.from(written.body))
-            }
+            Match.value(written.body).pipe(
+              Match.when(Match.string, (str) => response.end(str)),
+              Match.orElse((buf) => response.end(Buffer.from(buf)))
+            )
           })))
     )
 

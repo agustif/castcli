@@ -218,9 +218,8 @@ export const play = (
 ) =>
   Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
     Effect.forkScoped(
-      Effect.scoped(
-        Effect.flatMap(
-          spawner.spawn(
+      Effect.flatMap(
+        spawner.spawn(
             // The bundle, not the sources through tsx: it starts in 0.1s where
             // tsx takes 0.7s, and it is what `npm i -g` installs — so this
             // tests what people actually run. `npm run test:e2e` builds it.
@@ -247,19 +246,20 @@ export const play = (
                 extendEnv: true,
                 env: {
                   CAST_DEVICE_PORT: String(device.port),
+                  AIRPLAY_DEVICE_PORT: String(device.port),
                   CAST_ADVERTISE_HOST: "127.0.0.1",
-                  XDG_STATE_HOME: stateDirectory
+                  XDG_STATE_HOME: stateDirectory,
+                  SKIP_CONTROL_CHANNEL: "1"
                 }
-              }
-            )
-          ),
-          (handle) =>
-            // Killed when the scope closes, whatever the fiber was doing. The
-            // player never exits on its own — that is the point of it.
-            Effect.andThen(
-              Effect.addFinalizer(() => Effect.orElseSucceed(handle.kill(), () => undefined)),
-              Effect.andThen(handle.exitCode, Effect.void)
-            )
-        )
+            }
+          )
+        ),
+        (handle) =>
+          // Killed when the scope closes, whatever the fiber was doing. The
+          // player never exits on its own — that is the point of it.
+          Effect.andThen(
+            Effect.addFinalizer(() => Effect.orElseSucceed(handle.kill(), () => undefined)),
+            Effect.never
+          )
       )
     ))

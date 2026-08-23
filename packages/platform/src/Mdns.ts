@@ -479,9 +479,9 @@ export const advertiseAirPlay = (options: {
       )
     )
 
-    const serviceName = `${options.name}._airplay._tcp.local.`
-    const serviceType = "_airplay._tcp.local."
-    const hostname = `${options.name.replaceAll(" ", "-")}.local.`
+    const serviceName = `${options.name}._airplay._tcp.local`
+    const serviceType = "_airplay._tcp.local"
+    const hostname = `${options.name.replaceAll(" ", "-")}.local`
 
     const buildResponse = (): Buffer => {
       const TTL = 120
