@@ -1339,9 +1339,12 @@ cast.pipe(
   Effect.tapError((error) =>
     Console.error(
       `error: ${Match.value(error).pipe(
-        Match.when(Match.string, (err) => (err.length > 0 ? err : error._tag)),
-        Match.when({ message: Match.string }, (err) => (err.message.length > 0 ? err.message : error._tag)),
-        Match.orElse(() => error._tag)
+        Match.when(Match.string, (s) => s.length > 0 ? s : "unknown"),
+        Match.when({ _tag: Match.string, message: Match.string }, (e) => 
+          e.message.length > 0 ? e.message : e._tag
+        ),
+        Match.when({ _tag: Match.string }, (e) => e._tag),
+        Match.orElse(() => "unknown")
       )}`
     )
   ),

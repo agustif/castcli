@@ -5,12 +5,16 @@
 // and encrypted with an incrementing nonce counter. The session keys are derived
 // from the pair-verify shared secret via HKDF.
 
-import { Effect, Redacted, Ref } from "effect"
+import { Effect, Redacted, Ref, Data } from "effect"
 import type { PlatformError } from "effect/PlatformError"
 import { Suite as SuiteService, Nonce, ForgedFrame } from "./Suite/index.ts"
 import { Info as GeneratedInfo, Salt as GeneratedSalt } from "./Generated/index.ts"
 
 export { SuiteService as Suite }
+
+export class FrameTooShort extends Data.TaggedError("FrameTooShort")<{
+  readonly message: string
+}> {}
 
 /**
  * Session keys derived after pair-verify.
@@ -111,14 +115,18 @@ export const encryptFrame = (
 export const decryptFrame = (
   session: EncryptedSession,
   frame: Uint8Array
-): Effect.Effect<Uint8Array, PlatformError | ForgedFrame, SuiteService> =>
+): Effect.Effect<Uint8Array, PlatformError | ForgedFrame | FrameTooShort, SuiteService> =>
   Effect.gen(function*() {
     const suite = yield* SuiteService
     
-    yield* Effect.when(
-      Effect.fail({ _tag: "FrameTooShort" as const, message: "Frame too short" }),
-      Effect.succeed(frame.length < 2)
+    const frameTooShortError = Effect.succeed(frame.length < 2).pipe(
+      Effect.flatMap((tooShort) =>
+        tooShort
+          ? Effect.fail(new FrameTooShort({ message: "Frame too short" }))
+          : Effect.succeed(undefined)
+      )
     )
+    yield* frameTooShortError
 
     const lengthHigh = frame[0] ?? 0
     const lengthLow = frame[1] ?? 0
