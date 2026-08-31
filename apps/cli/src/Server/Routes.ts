@@ -231,9 +231,25 @@ export const routes = (options: MediaServerOptions) =>
                     offset += chunk.length
                   }
 
-                  return HttpServerResponse.uint8Array(buffer, {
+                  // ffmpeg emits SDT (PID 0x11) before PAT. Cheap Cast receivers
+                  // probe the first packet and LOAD_FAILED unless it is PAT.
+                  const TS = 188
+                  const packetCount = Math.floor(buffer.length / TS)
+                  const packets = globalThis.Array.from({ length: packetCount }, (_, n) =>
+                    buffer.subarray(n * TS, (n + 1) * TS)
+                  )
+                  const pidOf = (packet: Uint8Array) =>
+                    (((packet[1] ?? 0) & 0x1f) << 8) | (packet[2] ?? 0)
+                  const kept = packets.filter((packet) => pidOf(packet) !== 0x11)
+                  const patFirst = new Uint8Array(kept.reduce((sum, packet) => sum + packet.length, 0))
+                  kept.reduce((offset, packet) => {
+                    patFirst.set(packet, offset)
+                    return offset + packet.length
+                  }, 0)
+
+                  return HttpServerResponse.uint8Array(patFirst, {
                     contentType: Hls.SEGMENT_CONTENT_TYPE,
-                    headers: { "cache-control": "no-store" }
+                    headers: playlistHeaders
                   })
                 })
             })

@@ -87,7 +87,7 @@ export const master = (
     "#EXT-X-VERSION:3",
     ...Array.flatMap(rungs, (rung, index) => [
       `#EXT-X-STREAM-INF:BANDWIDTH=${rung.bitrate + audioBitsPerSecond},` +
-        `RESOLUTION=${widthFor(rung.height)}x${rung.height},CODECS="avc1.4d401f,mp4a.40.2"`,
+        `RESOLUTION=${widthFor(rung.height)}x${rung.height},CODECS="avc1.64001e,mp4a.40.2"`,
       variantUrl(index)
     ]),
     ""
