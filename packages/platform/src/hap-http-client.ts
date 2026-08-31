@@ -1,35 +1,11 @@
-// Keep-alive HAP HTTP client using Effect Socket runtime.
+// Keep-alive HAP HTTP client using @effect/platform Socket.
 //
-// After pair-verify M4 the same socket expects HAP IP frames wrapping HTTP/1.1.
+// After pair-verify M4, HTTP is HAP-framed (2-byte LE length + ChaCha20-Poly1305).
 
-import * as Net from "node:net"
-import { Effect, Deferred, Ref, Option } from "effect"
-import { systemError } from "effect/PlatformError"
-import type { PlatformError } from "effect/PlatformError"
-import { EncryptedSession as Encrypted, Suite } from "@castcli/airplay"
-
-export interface HapHttpClient {
-  readonly get: (
-    path: string
-  ) => Effect.Effect<{ status: number; body: Uint8Array }, PlatformError | Suite.ForgedFrame, Encrypted.Suite>
-  readonly post: (
-    path: string,
-    body: Uint8Array,
-    contentType?: string,
-    extraHeaders?: Record<string, string>
-  ) => Effect.Effect<{ status: number; body: Uint8Array }, PlatformError | Suite.ForgedFrame, Encrypted.Suite>
-  readonly exchange: (
-    method: string,
-    path: string,
-    body: Uint8Array,
-    contentType: string,
-    extraHeaders?: Record<string, string>,
-    protocol?: string
-  ) => Effect.Effect<{ status: number; body: Uint8Array }, PlatformError | Suite.ForgedFrame, Encrypted.Suite>
-  readonly enableEncryption: (session: Encrypted.EncryptedSession) => Effect.Effect<void>
-  readonly setReadTimeout: (ms: number) => Effect.Effect<void>
-  readonly close: () => Effect.Effect<void>
-}
+import { Effect, Ref, Option, Deferred, Scope } from "effect"
+import * as Socket from "effect/unstable/socket/Socket"
+import { makeNet } from "@effect/platform-node-shared/NodeSocket"
+import * as Airplay from "@castcli/airplay"
 
 interface Config {
   readonly host: string
@@ -39,11 +15,10 @@ interface Config {
 }
 
 interface State {
-  socket: Option.Option<Net.Socket>
-  session: Option.Option<Encrypted.EncryptedSession>
+  session: Option.Option<Airplay.EncryptedSession.EncryptedSession>
   readTimeoutMs: number
-  incoming: Uint8Array
-  waiters: Array<Deferred.Deferred<void, never>>
+  buffer: Uint8Array
+  pendingResponse: Option.Option<Deferred.Deferred<{ status: number; body: Uint8Array }, Socket.SocketError>>
 }
 
 const tryParseHttp = (
@@ -104,133 +79,106 @@ const encodeRequest = (
   return msg
 }
 
+const tryCompleteResponse = (
+  stateRef: Ref.Ref<State>,
+  suiteService: Airplay.Suite.Suite
+): Effect.Effect<boolean, Socket.SocketError> =>
+  Effect.gen(function* () {
+    const state = yield* Ref.get(stateRef)
+    const isEncrypted = Option.isSome(state.session)
+
+    let plaintext = state.buffer
+    if (isEncrypted) {
+      const sess = Option.getOrThrow(state.session)
+      const step = yield* Airplay.EncryptedSession.decryptAvailable(sess, state.buffer).pipe(
+        Effect.provideService(Airplay.Suite.Suite, suiteService),
+        Effect.mapError(
+          (err) =>
+            new Socket.SocketError({
+              reason: new Socket.SocketReadError({
+                cause: err
+              })
+            })
+        )
+      )
+      plaintext = step.plaintext
+      yield* Ref.update(stateRef, (s) => ({ ...s, buffer: step.rest }))
+    }
+
+    const parsed = tryParseHttp(plaintext)
+    if (Option.isSome(parsed)) {
+      if (!isEncrypted) {
+        yield* Ref.update(stateRef, (s) => ({ ...s, buffer: s.buffer.slice(parsed.value.consumed) }))
+      }
+      if (Option.isSome(state.pendingResponse)) {
+        yield* Deferred.succeed(Option.getOrThrow(state.pendingResponse), {
+          status: parsed.value.status,
+          body: parsed.value.body
+        })
+        yield* Ref.update(stateRef, (s) => ({ ...s, pendingResponse: Option.none() }))
+      }
+      return true
+    }
+    return false
+  })
+
 export const make = (
   host: string,
   port: number,
   dacp: string,
   remote: string
-): Effect.Effect<HapHttpClient> =>
+): Effect.Effect<
+  {
+    get: (path: string) => Effect.Effect<{ status: number; body: Uint8Array }, Socket.SocketError, Airplay.Suite.Suite>
+    post: (
+      path: string,
+      body: Uint8Array,
+      contentType?: string,
+      extraHeaders?: Record<string, string>
+    ) => Effect.Effect<{ status: number; body: Uint8Array }, Socket.SocketError, Airplay.Suite.Suite>
+    exchange: (
+      method: string,
+      path: string,
+      body: Uint8Array,
+      contentType: string,
+      extraHeaders?: Record<string, string>,
+      protocol?: string
+    ) => Effect.Effect<{ status: number; body: Uint8Array }, Socket.SocketError, Airplay.Suite.Suite>
+    enableEncryption: (session: Airplay.EncryptedSession.EncryptedSession) => Effect.Effect<void>
+    setReadTimeout: (ms: number) => Effect.Effect<void>
+  },
+  Socket.SocketError,
+  Scope.Scope | Airplay.Suite.Suite
+> =>
   Effect.gen(function* () {
     const config: Config = { host, port, dacp, remote }
+    const socket = yield* makeNet({ host, port })
     const stateRef = yield* Ref.make<State>({
-      socket: Option.none(),
       session: Option.none(),
       readTimeoutMs: 8000,
-      incoming: new Uint8Array(),
-      waiters: []
+      buffer: new Uint8Array(),
+      pendingResponse: Option.none()
     })
 
-    const notifyWaiters = Effect.gen(function* () {
-      const state = yield* Ref.get(stateRef)
-      for (const waiter of state.waiters) {
-        yield* Deferred.succeed(waiter, undefined)
-      }
-      yield* Ref.update(stateRef, (s) => ({ ...s, waiters: [] }))
-    })
+    const writer = yield* socket.writer
+    const suiteService = yield* Airplay.Suite.Suite
 
-    const ensureSocket = Effect.gen(function* () {
-      const state = yield* Ref.get(stateRef)
-      if (Option.isSome(state.socket) && !state.socket.value.destroyed) {
-        return state.socket.value
-      }
-
-      const socketDeferred = yield* Deferred.make<Net.Socket, PlatformError>()
-      const sock = Net.connect({ host, port }, () => {
-        Effect.runSync(Deferred.succeed(socketDeferred, sock))
-      })
-
-      sock.on("data", (chunk: Buffer) => {
-        Effect.runSync(
-          Effect.gen(function* () {
-            yield* Ref.update(stateRef, (st) => {
-              const newIncoming = new Uint8Array(st.incoming.length + chunk.length)
-              newIncoming.set(st.incoming)
-              newIncoming.set(chunk, st.incoming.length)
-              return { ...st, incoming: newIncoming }
-            })
-            yield* notifyWaiters
+    yield* Effect.forkScoped(
+      socket.run((chunk: Uint8Array) =>
+        Effect.gen(function* () {
+          yield* Ref.update(stateRef, (s) => {
+            const newBuffer = new Uint8Array(s.buffer.length + chunk.length)
+            newBuffer.set(s.buffer)
+            newBuffer.set(chunk, s.buffer.length)
+            return { ...s, buffer: newBuffer }
           })
-        )
-      })
-
-      sock.on("error", (err: Error) => {
-        Effect.runSync(
-          Deferred.fail(
-            socketDeferred,
-            systemError({
-              _tag: "Unknown",
-              module: "Socket",
-              method: "connect",
-              pathOrDescriptor: `${host}:${port}`,
-              description: err.message
-            })
-          )
-        )
-      })
-
-      const socket = yield* Deferred.await(socketDeferred)
-      yield* Ref.update(stateRef, (s) => ({ ...s, socket: Option.some(socket) }))
-      return socket
-    })
-
-    const waitForMore = Effect.gen(function* () {
-      const state = yield* Ref.get(stateRef)
-      const waiter = yield* Deferred.make<void, never>()
-      yield* Ref.update(stateRef, (s) => ({ ...s, waiters: [...s.waiters, waiter] }))
-      
-      yield* Effect.matchEffect(Effect.timeout(Deferred.await(waiter), state.readTimeoutMs), {
-        onFailure: () =>
-          Effect.fail(
-            systemError({
-              _tag: "TimedOut",
-              module: "Socket",
-              method: "read",
-              pathOrDescriptor: "socket",
-              description: "AirPlay HTTP read timed out"
-            })
-          ),
-        onSuccess: () => Effect.void
-      })
-    })
-
-    const readPlainHttp = Effect.gen(function* () {
-      while (true) {
-        const state = yield* Ref.get(stateRef)
-        const parsed = tryParseHttp(state.incoming)
-        if (Option.isSome(parsed)) {
-          yield* Ref.update(stateRef, (s) => ({ ...s, incoming: s.incoming.slice(parsed.value.consumed) }))
-          return { status: parsed.value.status, body: parsed.value.body }
-        }
-        yield* waitForMore
-      }
-    })
-
-    const readEncryptedHttp = (sess: Encrypted.EncryptedSession) =>
-      Effect.gen(function* () {
-        let decrypted = new Uint8Array()
-        while (true) {
-          const state = yield* Ref.get(stateRef)
-          const step = yield* Encrypted.decryptAvailable(sess, state.incoming)
-          if (step.plaintext.byteLength > 0) {
-            const next = new Uint8Array(decrypted.byteLength + step.plaintext.byteLength)
-            next.set(decrypted)
-            next.set(step.plaintext, decrypted.byteLength)
-            decrypted = next
-          }
-
-          const parsed = tryParseHttp(decrypted)
-          if (Option.isSome(parsed)) {
-            yield* Ref.update(stateRef, (s) => ({ ...s, incoming: step.rest }))
-            return { status: parsed.value.status, body: parsed.value.body }
-          }
-
-          if (step.rest.byteLength === state.incoming.byteLength) {
-            yield* waitForMore
-          } else {
-            yield* Ref.update(stateRef, (s) => ({ ...s, incoming: step.rest }))
-          }
-        }
-      })
+          yield* Effect.matchEffect(tryCompleteResponse(stateRef, suiteService), {
+            onFailure: () => Effect.void,
+            onSuccess: () => Effect.void
+          })
+        })
+      )
+    )
 
     const request = (
       method: string,
@@ -239,39 +187,38 @@ export const make = (
       contentType: string,
       extraHeaders?: Record<string, string>,
       protocol?: string
-    ): Effect.Effect<{ status: number; body: Uint8Array }, PlatformError | Suite.ForgedFrame, Encrypted.Suite> =>
+    ): Effect.Effect<{ status: number; body: Uint8Array }, Socket.SocketError, Airplay.Suite.Suite> =>
       Effect.gen(function* () {
-        const socket = yield* ensureSocket
         const msg = encodeRequest(config, method, path, body, contentType, extraHeaders ?? {}, protocol ?? "HTTP/1.1")
 
         const state = yield* Ref.get(stateRef)
         const wire = Option.isSome(state.session)
-          ? yield* Encrypted.encryptMessage(Option.getOrThrow(state.session), msg)
+          ? yield* Airplay.EncryptedSession.encryptMessage(Option.getOrThrow(state.session), msg).pipe(
+              Effect.mapError(
+                (err) =>
+                  new Socket.SocketError({
+                    reason: new Socket.SocketWriteError({ cause: err })
+                  })
+              )
+            )
           : msg
 
-        yield* Effect.callback<void, PlatformError>((resume) => {
-          socket.write(new Uint8Array(wire), (err) => {
-            if (err !== null && err !== undefined) {
-              resume(
-                Effect.fail(
-                  systemError({
-                    _tag: "Unknown",
-                    module: "Socket",
-                    method: "write",
-                    pathOrDescriptor: "socket",
-                    description: err.message
-                  })
-                )
-              )
-            } else {
-              resume(Effect.void)
-            }
-          })
-        })
+        const responseDeferred = yield* Deferred.make<{ status: number; body: Uint8Array }, Socket.SocketError>()
+        yield* Ref.update(stateRef, (s) => ({ ...s, pendingResponse: Option.some(responseDeferred) }))
 
-        return yield* (Option.isSome(state.session)
-          ? readEncryptedHttp(Option.getOrThrow(state.session))
-          : readPlainHttp)
+        yield* writer(wire)
+
+        return yield* Effect.matchEffect(Effect.timeout(Deferred.await(responseDeferred), state.readTimeoutMs), {
+          onFailure: () =>
+            Effect.fail(
+              new Socket.SocketError({
+                reason: new Socket.SocketReadError({
+                  cause: new Error("AirPlay HTTP read timed out")
+                })
+              })
+            ),
+          onSuccess: (result) => Effect.succeed(result)
+        })
       })
 
     return {
@@ -281,14 +228,6 @@ export const make = (
       exchange: (method, path, body, contentType, extraHeaders, protocol) =>
         request(method, path, body, contentType, extraHeaders, protocol),
       enableEncryption: (session) => Ref.update(stateRef, (s) => ({ ...s, session: Option.some(session) })),
-      setReadTimeout: (ms) => Ref.update(stateRef, (s) => ({ ...s, readTimeoutMs: ms })),
-      close: () =>
-        Effect.gen(function* () {
-          const state = yield* Ref.get(stateRef)
-          if (Option.isSome(state.socket)) {
-            state.socket.value.destroy()
-          }
-          yield* Ref.update(stateRef, (s) => ({ ...s, socket: Option.none() }))
-        })
+      setReadTimeout: (ms) => Ref.update(stateRef, (s) => ({ ...s, readTimeoutMs: ms }))
     }
   })

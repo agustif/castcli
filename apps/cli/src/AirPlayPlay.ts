@@ -8,7 +8,7 @@
 // RTSP SETUP (timingPort + NTP), RECORD, POST /play bplist, POST /rate,
 // poll /playback-info.
 
-import { Console, Data, Duration, Effect, Layer, Option, Redacted, Schema } from "effect"
+import { Console, Data, Duration, Effect, Layer, Option, Redacted, Schema, Scope } from "effect"
 import { NodeCrypto } from "@effect/platform-node"
 import type { AirPlayDevice } from "@castcli/domain"
 import {
@@ -381,7 +381,7 @@ export const play = (options: {
   readonly pairing: AirPlayPairing
   readonly contentLocation: string
   readonly startPosition: number
-}): Effect.Effect<void, unknown> =>
+}): Effect.Effect<void, unknown, Scope.Scope> =>
   Effect.gen(function*() {
     yield* Effect.when(
       Effect.gen(function*() {
@@ -469,7 +469,7 @@ export const play = (options: {
       return yield* EncryptedSession.make(sessionKeys)
     }).pipe(Effect.provide(cryptoLayer))
 
-    options.wire.enableEncryption(session)
+    yield* options.wire.enableEncryption(session)
     yield* Console.log("HAP control encryption on")
 
     // Session UUID for SETUP / X-Apple-Session-ID. Item UUID is separate (pyatv tvOS 26 queue).
@@ -486,7 +486,7 @@ export const play = (options: {
     const rtspUri = `rtsp://${localIp}/${rtspSession}`
     const timing = yield* bindTimingServer(localIp)
     yield* Console.log(`timingPort ${timing.port} host ${localIp} rtsp ${rtspUri}`)
-    options.wire.setReadTimeout(20000)
+    yield* options.wire.setReadTimeout(20000)
 
     const toBplist = (xml: string) =>
       Effect.try({
@@ -571,7 +571,7 @@ export const play = (options: {
       const remoteReq = doSetup("SETUP-remote", setupXmlRemote, "2")
       setupRes = yield* remoteReq.pipe(Effect.catchCause(catchHttp("SETUP-remote")))
     }
-    options.wire.setReadTimeout(8000)
+    yield* options.wire.setReadTimeout(8000)
 
     const setupXmlOut = bplistToXml(setupRes.body)
     const eventMatch = /<key>eventPort<\/key>\s*<integer>(\d+)<\/integer>/.exec(setupXmlOut)

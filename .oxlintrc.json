@@ -64,17 +64,7 @@
         "castcli/no-try-catch": "off",
         "castcli/no-await": "off",
         "castcli/no-process-exit": "off",
-        "castcli/no-if": "off",
-        "castcli/no-run-sync": "off"
-      }
-    },
-    {
-      "files": [
-        "apps/cli/src/AirPlayPairHttp.ts"
-      ],
-      "rules": {
-        "castcli/no-if": "off",
-        "castcli/no-run-sync": "off"
+        "castcli/no-if": "off"
       }
     },
     {
