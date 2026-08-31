@@ -15,6 +15,7 @@ import {
   eventually,
   makeSample,
   noStrayPlayers,
+  play,
   requireBinaries
 } from "./support/Fixture.ts"
 
@@ -45,39 +46,8 @@ describe("cast play, against an emulated AirPlay device", () => {
               requirePairing: true
             })
 
-            // Import ChildProcessSpawner to run the CLI
-            const { ChildProcess, ChildProcessSpawner } = yield* Effect.promise(() =>
-              import("effect/unstable/process")
-            )
-            const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-            const process = yield* Effect.promise(() => import("node:process"))
-
-            // Run: cast play --ip 127.0.0.1 FILE with AIRPLAY_DEVICE_PORT env var
-            // The CLI forks, so we don't wait for its exit code (it's long-running)
-            yield* Effect.scoped(
-              Effect.flatMap(
-                spawner.spawn(
-                  ChildProcess.make(
-                    process.execPath,
-                    [
-                      "dist/cast.cjs",
-                      "play",
-                      "--ip",
-                      "127.0.0.1",
-                      file
-                    ],
-                    {
-                      extendEnv: true,
-                      env: {
-                        XDG_STATE_HOME: directory,
-                        AIRPLAY_DEVICE_PORT: `${device.port}`
-                      }
-                    }
-                  )
-                ),
-                (handle) => handle.exitCode
-              )
-            )
+            // Use the Fixture.play helper which forks the CLI and sets env vars correctly
+            yield* play(device, file, directory, [])
 
             // 1. Device was handed something to play via POST /command after pair-setup and pair-verify
             const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(90))
