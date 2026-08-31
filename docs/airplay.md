@@ -23,7 +23,7 @@ play-queue, and the device fetches it. The control surface is plainer than DLNA
 | `POST /scrub?position=` | seek |
 | `POST /rate?value=` | `0` pauses, `1` resumes |
 | `POST /stop` | stop |
-| `GET /playback-info` | duration, position, rate, buffering, seekable ranges |
+| `GET /playback-info` | duration, position, rate, buffering, seekable ranges (XML or binary plist) |
 | `POST /setproperty` | set volume (0.0 to 1.0, XML plist) |
 
 Discovery is mDNS `_airplay._tcp` on port 7000 — the same machinery already
@@ -92,12 +92,6 @@ pair-verify) is not implemented. The current implementation sends plaintext HTTP
 after pair-verify. Real devices may require encrypted framing for some commands.
 
 ## Known gaps
-
-**Binary plist decoding** for playback-info is not implemented. The current
-implementation parses XML plists with Effect Schema and fast-xml-parser.
-GET /playback-info responses are decoded with a proper schema instead of regex,
-failing with a domain error (MalformedPlaybackInfo) on garbage input rather
-than returning half-parsed undefined fields.
 
 **mDNS discovery e2e** is not tested. The e2e test uses `--ip` to bypass
 discovery.
