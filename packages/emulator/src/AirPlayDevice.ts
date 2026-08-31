@@ -6,8 +6,8 @@
 import { Effect, Layer, Match, Option, Queue, Ref, Schema, Scope, Stream } from "effect"
 import type { PlatformError } from "effect/PlatformError"
 import { Brands } from "@castcli/domain"
-import { HttpClient } from "effect/unstable/http"
 import { Mdns } from "@castcli/platform"
+import { HttpClient } from "effect/unstable/http"
 import { NodeCrypto } from "@effect/platform-node"
 import * as http from "node:http"
 
@@ -595,7 +595,11 @@ export const make = (options: {
     )
 
     yield* Effect.when(
-      Mdns.advertiseAirPlay({ name, port }),
+      Mdns.advertiseAirPlay({
+        name,
+        port,
+        ...(options.requirePairing !== undefined ? { requirePairing: options.requirePairing } : {})
+      }),
       Effect.succeed(options.advertise === true)
     )
 
