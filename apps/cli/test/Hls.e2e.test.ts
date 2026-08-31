@@ -51,7 +51,8 @@ describe("cast play, against an emulated device", () => {
 
             const device = yield* Device.make({ segments: 2 })
 
-            yield* play(device, file, directory, [])
+            // Skip control channel for HLS tests due to interaction with Certificate generation
+            yield* play(device, file, directory, [], false, true)
 
             // 1. The device was handed an HLS presentation.
             const loaded = yield* eventually(
@@ -143,7 +144,7 @@ describe("cast play, against an emulated device", () => {
             const file = yield* makeSample()
 
             const device = yield* Device.make()
-            yield* play(device, file, directory, ["--progressive"])
+            yield* play(device, file, directory, ["--progressive"], false, true)
 
             const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(90))
 
@@ -199,7 +200,7 @@ describe("cast play, against an emulated device", () => {
               advertise: { friendlyName: name, model: "EmulatedForTests" }
             })
 
-            yield* play(device, file, directory, ["--device", name], true)
+            yield* play(device, file, directory, ["--device", name], true, true)
 
             const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(90))
             assert.isTrue(

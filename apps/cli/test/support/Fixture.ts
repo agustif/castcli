@@ -214,7 +214,9 @@ export const play = (
   stateDirectory: string,
   extra: ReadonlyArray<string>,
   /** Omit `--ip` so the player has to find the device for itself. */
-  byDiscovery = false
+  byDiscovery = false,
+  /** Skip control channel for tests that conflict with Certificate generation */
+  skipControlChannel = false
 ) =>
   Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
     Effect.forkScoped(
@@ -248,7 +250,8 @@ export const play = (
                   CAST_DEVICE_PORT: String(device.port),
                   AIRPLAY_DEVICE_PORT: String(device.port),
                   CAST_ADVERTISE_HOST: "127.0.0.1",
-                  XDG_STATE_HOME: stateDirectory
+                  XDG_STATE_HOME: stateDirectory,
+                  ...(skipControlChannel ? { SKIP_CONTROL_CHANNEL: "1" } : {})
                 }
             }
           )
