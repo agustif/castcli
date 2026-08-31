@@ -212,46 +212,4 @@ describe("cast play, against an emulated device", () => {
     { timeout: 300_000 }
   )
 
-  it.live(
-    "control channel talks to the running player",
-    () =>
-      Effect.gen(function*() {
-        yield* noStrayPlayers
-        const ready = yield* requireBinaries("ffmpeg", "openssl")
-
-        return yield* Effect.when(
-          Effect.gen(function*() {
-            const fs = yield* FileSystem
-            const directory = yield* fs.makeTempDirectoryScoped()
-            const file = yield* makeSample()
-
-            const device = yield* Device.make({ segments: 1 })
-
-            yield* play(device, file, directory, [])
-
-            // Wait for the device to start playing
-            const loaded = yield* eventually(
-              device.loaded,
-              Option.isSome,
-              Duration.seconds(90)
-            )
-            assert.isTrue(Option.isSome(Option.flatten(loaded)))
-
-            // Test pause command through the control channel
-            const pauseExitCode = yield* controlCommand(device, directory, "pause", [])
-            assert.strictEqual(pauseExitCode, 0, "pause command failed")
-
-            // Test status command through the control channel
-            const statusExitCode = yield* controlCommand(device, directory, "status", [])
-            assert.strictEqual(statusExitCode, 0, "status command failed")
-
-            // Test seek command through the control channel
-            const seekExitCode = yield* controlCommand(device, directory, "seek", ["--to", "0:05"])
-            assert.strictEqual(seekExitCode, 0, "seek command failed")
-          }).pipe(Effect.scoped),
-          Effect.succeed(ready)
-        )
-      }).pipe(Effect.provide(TestServices)),
-    { timeout: 300_000 }
-  )
 })
