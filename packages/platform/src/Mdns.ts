@@ -369,7 +369,8 @@ const toAirPlayDevices = (sweep: AirPlaySweep): ReadonlyArray<AirPlayDevice> =>
                   port: Port.make(port),
                   features: featuresHex !== undefined
                     ? Option.getOrUndefined(Option.fromNullishOr((() => {
-                      return BigInt(`0x${featuresHex}`)
+                      const firstValue = featuresHex.split(",")[0] ?? featuresHex
+                      return BigInt(firstValue.startsWith("0x") ? firstValue : `0x${firstValue}`)
                     })()))
                     : undefined,
                   flags: flagsHex !== undefined
@@ -453,6 +454,7 @@ export const discoverAirPlayWithRetry = Effect.fn("Mdns.discoverAirPlayWithRetry
 export const advertiseAirPlay = (options: {
   readonly name: string
   readonly port: Port
+  readonly requirePairing?: boolean
 }): Effect.Effect<void, never, Scope.Scope> =>
   Effect.gen(function*() {
     const socket = dgram.createSocket({ type: "udp4", reuseAddr: true })
@@ -508,7 +510,7 @@ export const advertiseAirPlay = (options: {
         `features=0x5A7FFFF7,0xE`,
         `model=AppleTV3,2`,
         `deviceid=AA:BB:CC:DD:EE:FF`,
-        `flags=0x4`
+        `flags=0x${options.requirePairing === false ? "0" : "4"}`
       ]
       const txtData = Buffer.concat(
         txtPairs.map((pair) => {
@@ -540,13 +542,13 @@ export const advertiseAirPlay = (options: {
     const response = buildResponse()
 
     yield* Effect.forkScoped(
-      Stream.runForEach(Stream.fromQueue(queries), ({ from, packet }) =>
-        Effect.when(
+      Stream.runForEach(Stream.fromQueue(queries), ({ from, packet }) => {
+        const isQuery = packet.length >= 12 && (packet.readUInt16BE(2) & 0x8000) === 0
+        
+        return Effect.when(
           Effect.sync(() => socket.send(response, from.port, from.address, () => {})),
-          Effect.succeed(
-            packet.length >= 12 &&
-            (packet.readUInt16BE(2) & 0x8000) === 0 // It's a query, not a response
-          )
-        ))
+          Effect.succeed(isQuery)
+        )
+      })
     )
   })
