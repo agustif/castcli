@@ -130,9 +130,12 @@ export const make = (options: {
                             accessoryEphemeral.privateKey
                           )
 
+                          // Mock M2: send ephemeral key and empty encrypted data
+                          // The controller needs EncryptedData present (even if empty) to proceed
                           const m2 = [
                             { type: TlvType.State, value: new Uint8Array([2]) },
-                            { type: TlvType.PublicKey, value: accessoryEphemeralPublic }
+                            { type: TlvType.PublicKey, value: accessoryEphemeralPublic },
+                            { type: TlvType.EncryptedData, value: new Uint8Array(0) }
                           ]
                           const m2Bytes = yield* Schema.encodeEffect(Items)(m2).pipe(
                             Effect.orElseSucceed(() => new Uint8Array(0))

@@ -1110,12 +1110,12 @@ const play = Command.make(
             )
           ),
           Effect.gen(function*() {
-            const { Session: AirPlaySession } = yield* Effect.promise(() => import("@castcli/airplay"))
+            const { Session: AirPlaySession, NodeSuite } = yield* Effect.promise(() => import("@castcli/airplay"))
             const url = useHls ? `${baseUrl}/master.m3u8` : `${baseUrl}/stream?o=${resumed}`
             yield* AirPlaySession.play(airplayDevice, {
               contentLocation: url,
               startPosition: useHls ? Seconds.make(0) : resumed
-            })
+            }).pipe(Effect.provide(NodeSuite))
             yield* Console.log(`playing on ${airplayDevice.name}`)
           })
         )),

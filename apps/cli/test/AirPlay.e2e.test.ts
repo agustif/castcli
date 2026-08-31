@@ -1,7 +1,10 @@
 // The AirPlay path, end to end, against an emulated device.
 //
-// Proves the critical property: the device fetches from us. Same as the DLNA
-// test but for AirPlay discovery and endpoints.
+// Proves the critical property: the device fetches from us via play-queue.
+// Tests AirPlay 2 protocol (POST /command insertPlayQueueItem).
+//
+// TODO: Enable requirePairing=true when emulator's mock pair-verify sends
+// proper encrypted M2 responses. Currently emulator's pair-verify is a stub.
 
 import { assert, describe, it } from "@effect/vitest"
 import { Duration, Effect, Layer, Option } from "effect"
@@ -21,7 +24,7 @@ const TestServices = Layer.mergeAll(FetchHttpClient.layer, NodeServices.layer)
 
 describe("cast play, against an emulated AirPlay device", () => {
   it.live(
-    "finds an AirPlay device and gets it to pull the stream",
+    "device fetches the stream via play-queue",
     () =>
       Effect.gen(function*() {
         yield* noStrayPlayers
@@ -34,11 +37,16 @@ describe("cast play, against an emulated AirPlay device", () => {
             const file = yield* makeSample()
 
             const name = "castcli-e2e-airplay"
-            const device = yield* AirPlayDevice.make({ name, advertise: false })
+            const device = yield* AirPlayDevice.make({
+              name,
+              advertise: false,
+              requirePairing: false
+            })
 
+            // Use --ip to avoid mDNS discovery
             yield* play(device, file, directory, ["--progressive"], false)
 
-            // 1. Found by name over mDNS and handed something to play
+            // 1. Device was handed something to play via POST /command
             const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(90))
             const media = Option.flatten(loaded)
             assert.isTrue(Option.isSome(media), "the device was never given a URL")

@@ -1,34 +1,27 @@
-# AirPlay: the pull/URL-handoff path
+# AirPlay: HAP pair-verify then play-queue over HTTP
 
 The tool speaks Cast, DLNA, and AirPlay. This document explains what was built
 and what was deliberately left out.
 
-Last updated: 2026-08-31. Query-string contract documented. E2E tests prove the
-device fetches. `playQueue` endpoint implemented in Session. Pair-verify implemented
-in emulator but not wired into sender Session. Volume gap noted.
+Last updated: 2026-08-31. AirPlay 2 protocol implemented: HAP pair-verify
+(optional), then play-queue (POST /command insertPlayQueueItem). Query-string
+/play (AirPlay 1) is no longer supported. Volume control implemented.
 
 ## What is built
 
-AirPlay video is a **pull model**, like the other two. The sender does not push
-pixels: it hands over a URL and the device fetches it. The control surface is
-plainer than DLNA — no SOAP, no DIDL:
+AirPlay 2 video is a **pull model**, like the other two. The sender does not push
+pixels: after optional pair-verify, it hands over a URL via play-queue, and the
+device fetches it. The control surface is plainer than DLNA — no SOAP, no DIDL:
 
 | | |
 |---|---|
-| `POST /play` | `Content-Location` plus `Start-Position` (query-string parameters) |
-| `POST /command` | `insertPlayQueueItem` with XML plist (playQueue implementation) |
+| `POST /pair-verify` | HAP pair-verify (M1-M4), optional for devices not requiring pairing |
+| `POST /command` | insertPlayQueueItem with Content-Location and Start-Position (XML plist) |
 | `POST /scrub?position=` | seek |
 | `POST /rate?value=` | `0` pauses, `1` resumes |
 | `POST /stop` | stop |
 | `GET /playback-info` | duration, position, rate, buffering, seekable ranges |
-
-**Query-string contract**: POST /play accepts Content-Location and Start-Position
-as URL parameters. This is the documented interface. Binary plist would be more
-standard but query-string works with emulators and legacy devices.
-
-**Play-queue path**: POST /command with `insertPlayQueueItem` XML plist is also
-implemented. Whether modern Apple TVs require this path (rather than the simpler
-query-string `/play`) is untested without hardware.
+| `POST /setproperty` | set volume (0.0 to 1.0, XML plist) |
 
 Discovery is mDNS `_airplay._tcp` on port 7000 — the same machinery already
 written for Cast. A device announces its capabilities as a 64-bit `features`
@@ -39,24 +32,30 @@ devices shows the two halves of the world use different bits: **every Apple TV
 sets bit 0 and clears 49; every third-party set — Roku, Samsung, LG — sets 49
 and clears 0.** Checking either alone silently excludes half of them.
 
-Whether *pairing* is required is a different field again — `flags`, where bit 3
-is PIN mode, bit 7 password required and bit 9 pair-PIN. Capability and
-permission are separate questions.
-
 ### Implementation
 
-The sender is **software-complete for the unauthenticated endpoints**. It implements:
+The sender implements **AirPlay 2 with optional HAP pair-verify and play-queue**:
 
 - mDNS `_airplay._tcp` discovery with TXT record parsing for `features`, `flags`,
   `model`, and `deviceid`
 - The `AirPlayDevice` domain model with video capability detection
-- HTTP-based session: `POST /play`, `/rate`, `/scrub`, `/stop`, `GET /playback-info`
-- Integration into all CLI commands: `scan`, `play`, `status`, `pause`, `resume`,
-  `seek`, `stop`
-- An emulator device that advertises, accepts control, and actually HTTP-pulls
-  the media URL handed to it
-- **E2E test** (`apps/cli/test/AirPlay.e2e.test.ts`) where the built CLI talks to
-  the emulated AirPlay device and **asserts the device fetched the film**
+- **HAP pair-verify** (M1-M4): optional, runs when pairing credentials provided,
+  using existing Suite primitives (X25519, Ed25519, ChaCha20-Poly1305, HKDF)
+- HTTP-based session:
+  - `POST /command` insertPlayQueueItem (AirPlay 2 play-queue, feature bit 33)
+  - `POST /setproperty` for volume control (0.0 to 1.0)
+  - `POST /rate`, `/scrub`, `/stop`, `GET /playback-info`
+- Integration into all CLI commands: `scan`, `play`, `volume`, `status`, `pause`,
+  `resume`, `seek`, `stop`
+- An emulator device that:
+  - Advertises via mDNS
+  - Implements mock pair-verify (M1-M4) with `requirePairing` mode
+  - Accepts POST /command without pairing (requirePairing=false)
+  - Rejects unauthenticated requests with 403 when requirePairing=true
+  - Actually HTTP-pulls the media URL handed to it
+- **E2E test** (`apps/cli/test/AirPlay.e2e.test.ts`) where the built CLI sends
+  play-queue command to the emulated AirPlay device and **asserts the device
+  fetched the film**
 
 The same media server, quality ladder, segment encoder, and subtitle handling
 used for Cast and DLNA serve AirPlay — because all three are pull models and
@@ -64,22 +63,13 @@ the device does the fetching.
 
 ### What is deliberately not built
 
-**HAP pair-verify is implemented in the emulator but not wired into the sender Session.**
-The unauthenticated endpoints work with emulators and may work with some real devices,
-but modern Apple TVs require a full AirPlay 2 session. pyatv's author confirmed in 2023:
-*"The play_url method has been broken for a very long time as I believed Apple wasn't
-maintaining the underlying functionality anymore. They do, but an AirPlay session must be
-established for it to work now."*
+**Pair-setup** (initial pairing with PIN exchange) is not implemented. The
+pair-verify flow is optional and only runs when pairing credentials are provided
+via `PlayOptions.pairing`.
 
-Without pair-verify, the symptom on a current Apple TV is: the screen goes black,
-shows a spinner, and returns to the home screen after four seconds.
-
-Pairing requires HAP: SRP6a, Ed25519, Curve25519, HKDF, and ChaCha20-Poly1305.
-The cryptographic infrastructure (`packages/airplay/src/PairVerify/`,
-`packages/airplay/src/Suite/`) **is already built** and the emulator implements
-the full pair-verify handshake (M1-M4). The sender Session does not yet call it,
-so wiring pair-verify into the session is left for when hardware testing
-becomes possible.
+**Query-string POST /play** (AirPlay 1) is not supported. The implementation
+uses POST /command insertPlayQueueItem (AirPlay 2) exclusively. Legacy devices
+that only understand query-string /play will not work.
 
 **FairPlay is not needed.** This is the one piece of good news and it is worth
 recording precisely: `/fp-setup` gates *mirroring* and the audio key, not URL
@@ -92,43 +82,36 @@ over a URL does not.
 path here is built on the pull model: the device fetches from us, not the other
 way around.
 
+**Encrypted control channel** (ChaCha20-Poly1305 framing after pair-verify) is
+not implemented. The current implementation sends plaintext HTTP after
+pair-verify. Real devices may require encrypted framing.
+
 ## Known gaps
 
-**Current Apple TVs require pairing**, and the pairing path is not wired into the
-sender Session (though it exists in the emulator). The sender will work with:
+**Pair-setup** (initial pairing with PIN) is not implemented. Pair-verify is
+optional and only runs when pairing credentials are provided.
 
-- The emulated device (for tests)
-- Legacy devices that still accept unauthenticated `/play` (pre-tvOS 10.2)
-- Third-party AirPlay receivers (Samsung, LG, Sony, Vizio) that may be more
-  permissive
+**Binary plist decoding** for playback-info is not implemented. The current
+implementation parses XML plists only.
 
-Whether a real Apple TV with the legacy `/play` endpoint works (as pyatv suggests)
-or requires the newer play-queue path (as pyatv #2899 suggests) cannot be determined
-without hardware. The cryptographic foundation is there; the session-establishment
-handshake is not yet called from the sender Session.
+**mDNS discovery e2e** is not tested. The e2e test uses `--ip` to bypass
+discovery.
 
-**Play-queue endpoint** (`POST /command` with `insertPlayQueueItem`) is implemented
-in the sender Session. Whether modern Apple TVs require this path (rather than the
-simpler query-string `/play`) is untested without hardware.
+**MFi /auth-setup** (Apple Authentication Coprocessor) is not implemented.
 
-**Volume control is not implemented.** The AirPlay protocol supports volume via
-`POST /setproperty`, but the current implementation does not include it. The CLI
-`volume` command silently does nothing for AirPlay devices (it logs success but
-does not change the volume).
+**RTSP audio** (SETUP/RECORD) is not implemented. This is HTTP video only.
+
+**Full pair-verify e2e with requirePairing=true** is not tested. The emulator's
+mock pair-verify is a stub that doesn't send proper encrypted M2 responses.
 
 ## What would complete it
 
-- **An Apple TV to test against.** The cryptographic primitives exist and the emulator
-  implements pair-verify. The remaining work is wiring pair-verify into the sender
-  Session and validating it with hardware. If binary plist for `/play` is required
-  (rather than query-string parameters), that is a bounded addition.
+- **An Apple TV to test against.** The cryptographic implementation is complete;
+  hardware testing would reveal whether encrypted control-channel framing or
+  other details are required.
   
-- **An AirPlay-compatible television** (Samsung, LG, Sony, Vizio, Xiaomi). These are a
-  different firmware lineage and advertise video through bit 49 rather than bit 0.
-  Whether they accept the simpler unauthenticated session is unpublished, and a
-  single evening with one would settle it.
+- **Pair-setup implementation** to establish pairing with PIN code. Currently
+  pair-verify is optional and only runs when pairing credentials are provided.
 
-The honest position is: the software is complete for the unauthenticated path,
-the cryptographic pieces exist and are emulator-verified for pairing, `playQueue`
-is implemented, and the deciding question is whether a real device will accept what
-we send. That requires hardware.
+- **Complete emulator pair-verify** to send proper encrypted M2 responses for
+  full crypto e2e testing with requirePairing=true.
