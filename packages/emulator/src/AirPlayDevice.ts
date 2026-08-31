@@ -58,6 +58,18 @@ export const make = (options: {
     const volume = yield* Ref.make(0.5)
     const pairVerified = yield* Ref.make(!requirePairing)
 
+    const accessoryEphemeralPrivateKey = yield* Ref.make(
+      Option.none<import("effect").Redacted.Redacted<Uint8Array>>()
+    )
+
+    const controllerEphemeralPublicKey = yield* Ref.make(
+      Option.none<Uint8Array>()
+    )
+
+    const encryptedSessionKeys = yield* Ref.make(
+      Option.none<{ readKey: import("effect").Redacted.Redacted<Uint8Array>; writeKey: import("effect").Redacted.Redacted<Uint8Array>; readNonce: import("effect").Ref.Ref<bigint>; writeNonce: import("effect").Ref.Ref<bigint> }>()
+    )
+
     // Generate accessory long-term Ed25519 keys for pair-verify and pair-setup
     const AirPlayForKeys = yield* Effect.promise(() => import("@castcli/airplay"))
     const suiteForKeys = yield* Effect.provide(AirPlayForKeys.Suite.Suite, Layer.provide(AirPlayForKeys.NodeSuite, NodeCrypto.layer))
@@ -189,6 +201,8 @@ export const make = (options: {
                             accessoryEphemeral.privateKey
                           )
 
+                          yield* Ref.set(accessoryEphemeralPrivateKey, Option.some(accessoryEphemeral.privateKey))
+
                           // Derive shared secret and session key
                           const sharedSecret = yield* suite.x25519SharedSecret({
                             privateKey: accessoryEphemeral.privateKey,
@@ -254,7 +268,68 @@ export const make = (options: {
                     )
                   })),
                   Match.when(3, () => Effect.gen(function*() {
+                    const controllerEncrypted = items.find((item) => item.type === TlvType.EncryptedData)?.value
+                    
+                    yield* Effect.when(
+                      Effect.fail(new Error("Missing encrypted data in M3")),
+                      Effect.succeed(controllerEncrypted === undefined)
+                    )
+
                     yield* Ref.set(pairVerified, true)
+
+                    const storedAccessoryPrivateKey = yield* Ref.get(accessoryEphemeralPrivateKey)
+
+                    yield* Option.match(storedAccessoryPrivateKey, {
+                      onNone: () => Effect.void,
+                      onSome: (accessoryPrivKey) =>
+                        Effect.gen(function*() {
+                          const { Redacted } = yield* Effect.promise(() => import("effect"))
+                          const AirPlayForEncryption = yield* Effect.promise(() => import("@castcli/airplay"))
+                          const suiteForEncryption = yield* Effect.provide(
+                            AirPlayForEncryption.Suite.Suite,
+                            Layer.provide(AirPlayForEncryption.NodeSuite, NodeCrypto.layer)
+                          )
+
+                          const controllerEphemeralPublicFromM1 = items.find((item) => item.type === TlvType.PublicKey)?.value
+
+                          yield* Effect.when(
+                            Effect.fail(new Error("Cannot derive control keys without controller ephemeral public key")),
+                            Effect.succeed(controllerEphemeralPublicFromM1 === undefined)
+                          )
+
+                          const sharedSecretForControl = yield* suiteForEncryption.x25519SharedSecret({
+                            privateKey: accessoryPrivKey,
+                            publicKey: controllerEphemeralPublicFromM1 ?? new Uint8Array(32)
+                          })
+
+                          const { Info: GeneratedInfo, Salt: GeneratedSalt } = AirPlayForEncryption.GeneratedPairing
+
+                          const controlReadKey = yield* suiteForEncryption.hkdfSha512({
+                            key: sharedSecretForControl,
+                            salt: GeneratedSalt.Control,
+                            info: GeneratedInfo.ControlWrite
+                          })
+
+                          const controlWriteKey = yield* suiteForEncryption.hkdfSha512({
+                            key: sharedSecretForControl,
+                            salt: GeneratedSalt.Control,
+                            info: GeneratedInfo.ControlRead
+                          })
+
+                          const readNonceRef = yield* Ref.make(BigInt(0))
+                          const writeNonceRef = yield* Ref.make(BigInt(0))
+
+                          yield* Ref.set(
+                            encryptedSessionKeys,
+                            Option.some({
+                              readKey: controlReadKey,
+                              writeKey: controlWriteKey,
+                              readNonce: readNonceRef,
+                              writeNonce: writeNonceRef
+                            })
+                          )
+                        })
+                    })
 
                     const m4 = [{ type: TlvType.State, value: new Uint8Array([4]) }]
                     const m4Bytes = yield* Schema.encodeEffect(Items)(m4).pipe(
