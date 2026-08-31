@@ -306,13 +306,32 @@ export const getAirPlayPairing = (deviceIp: Ipv4, deviceId: Option.Option<string
     Effect.flatMap(store.read, (state) =>
       Effect.gen(function*() {
         const key = Option.getOrElse(deviceId, () => deviceIp)
-        const pairing = Option.match(deviceId, {
-          onNone: () => Option.fromNullishOr(state.airplayPairings?.[deviceIp]),
-          onSome: (id) =>
-            Option.orElse(
-              Option.fromNullishOr(state.airplayPairings?.[id]),
-              () => Option.fromNullishOr(state.airplayPairings?.[deviceIp])
-            )
+        const pairing = yield* Option.match(deviceId, {
+          onNone: () => Effect.succeed(Option.fromNullishOr(state.airplayPairings?.[deviceIp])),
+          onSome: (id) => Effect.gen(function*() {
+            const byId = Option.fromNullishOr(state.airplayPairings?.[id])
+            return yield* Option.match(byId, {
+              onSome: (found) => Effect.succeed(Option.some(found)),
+              onNone: () => Effect.gen(function*() {
+                const byIp = Option.fromNullishOr(state.airplayPairings?.[deviceIp])
+                return yield* Option.match(byIp, {
+                  onNone: () => Effect.succeed(Option.none()),
+                  onSome: (ipPairing) => Effect.gen(function*() {
+                    return yield* Match.value(ipPairing.deviceId).pipe(
+                      Match.when(undefined, () => Effect.succeed(Option.some(ipPairing))),
+                      Match.when(id, () => Effect.succeed(Option.some(ipPairing))),
+                      Match.orElse(() => Effect.gen(function*() {
+                        yield* Effect.logDebug(
+                          `IP fallback rejected: ${deviceIp} has deviceId=${ipPairing.deviceId}, requested ${id}`
+                        )
+                        return Option.none()
+                      }))
+                    )
+                  })
+                })
+              })
+            })
+          })
         })
         
         yield* Option.match(pairing, {

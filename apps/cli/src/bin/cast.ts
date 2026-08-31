@@ -1267,8 +1267,17 @@ const play = Command.make(
                 // Same TCP socket for /info, pin-start, and every pair-setup
                 // message. A new connection is HTTP 470 and an empty M2.
                 yield* wire.get("/info")
-                const pinStart = yield* wire.post("/pair-pin-start", new Uint8Array())
-                yield* Console.log(`pair-pin-start HTTP ${pinStart.status}`)
+
+                const pinProvided = Option.isSome(pin) || Option.isSome(config.airplayPin)
+                
+                yield* Match.value(pinProvided).pipe(
+                  Match.when(true, () => Effect.logInfo("PIN provided via --pin or AIRPLAY_PIN; skipping pair-pin-start")),
+                  Match.when(false, () => Effect.gen(function*() {
+                    const pinStart = yield* wire.post("/pair-pin-start", new Uint8Array())
+                    yield* Console.log(`pair-pin-start HTTP ${pinStart.status}`)
+                  })),
+                  Match.exhaustive
+                )
 
                 const m1Bytes = yield* PairSetup.m1({ flags: [] })
                 const m2Http = yield* wire.post(pairSetupPath, m1Bytes)
@@ -1284,7 +1293,11 @@ const play = Command.make(
                   Effect.succeed(m2Http.status !== 200 || m2Response.byteLength < 16)
                 )
 
-                yield* Console.log("AirPlay PIN should now be on the TV")
+                yield* Match.value(pinProvided).pipe(
+                  Match.when(true, () => Console.log("Using PIN from --pin or AIRPLAY_PIN")),
+                  Match.when(false, () => Console.log("AirPlay PIN should now be on the TV")),
+                  Match.exhaustive
+                )
                 const airplayPin = yield* resolveAirPlayPin(pin, config.airplayPin)
 
                 const { request: m3Bytes, state: proved } = yield* PairSetup.m3(m2Response, { pin: airplayPin }).pipe(
