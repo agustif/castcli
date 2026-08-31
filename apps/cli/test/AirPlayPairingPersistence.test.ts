@@ -4,7 +4,7 @@
 // which cannot decode back. Schema.Uint8ArrayFromBase64 fixes it.
 
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { AirPlayPairing, Remembered } from "../src/State.ts"
 import { Ipv4 } from "@castcli/domain"
 
@@ -52,33 +52,33 @@ describe("AirPlayPairing persistence", () => {
       // Verify pairing round-tripped
       const decodedPairing = decoded.airplayPairings?.["test-key"]
       
-      const pairing = yield* Option.match(Option.fromNullishOr(decodedPairing), {
+      const roundTripped = yield* Option.match(Option.fromNullishOr(decodedPairing), {
         onNone: () => Effect.fail(new Error("Pairing not found after decode")),
         onSome: (p) => Effect.succeed(p)
       })
 
-      assert.strictEqual(pairing.deviceIp, "192.168.1.100")
-      assert.strictEqual(pairing.deviceId, "AA:BB:CC:DD:EE:FF")
-      assert.strictEqual(pairing.controllerIdentifier, "test-controller-id")
+      assert.strictEqual(roundTripped.deviceIp, "192.168.1.100")
+      assert.strictEqual(roundTripped.deviceId, "AA:BB:CC:DD:EE:FF")
+      assert.strictEqual(roundTripped.controllerIdentifier, "test-controller-id")
       
-      assert.strictEqual(pairing.controllerPublicKey.length, 32)
-      assert.strictEqual(pairing.controllerPrivateKey.length, 32)
-      assert.strictEqual(pairing.accessoryIdentifier.length, 16)
-      assert.strictEqual(pairing.accessoryPublicKey.length, 32)
+      assert.strictEqual(roundTripped.controllerPublicKey.length, 32)
+      assert.strictEqual(roundTripped.controllerPrivateKey.length, 32)
+      assert.strictEqual(roundTripped.accessoryIdentifier.length, 16)
+      assert.strictEqual(roundTripped.accessoryPublicKey.length, 32)
 
       for (let i = 0; i < 32; i++) {
         assert.strictEqual(
-          pairing.controllerPublicKey[i],
+          roundTripped.controllerPublicKey[i],
           i,
           `controllerPublicKey[${i}] mismatch`
         )
         assert.strictEqual(
-          pairing.controllerPrivateKey[i],
+          roundTripped.controllerPrivateKey[i],
           i + 100,
           `controllerPrivateKey[${i}] mismatch`
         )
         assert.strictEqual(
-          pairing.accessoryPublicKey[i],
+          roundTripped.accessoryPublicKey[i],
           i + 200,
           `accessoryPublicKey[${i}] mismatch`
         )
@@ -86,7 +86,7 @@ describe("AirPlayPairing persistence", () => {
       
       for (let i = 0; i < 16; i++) {
         assert.strictEqual(
-          pairing.accessoryIdentifier[i],
+          roundTripped.accessoryIdentifier[i],
           i + 50,
           `accessoryIdentifier[${i}] mismatch`
         )

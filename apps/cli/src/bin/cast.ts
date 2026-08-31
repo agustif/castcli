@@ -671,6 +671,10 @@ const play = Command.make(
     logLevel: Flags.logLevel
   },
   Effect.fn(function*({ audio, device, file, progressive, ip, seek, subs, pin, logLevel }) {
+    // Apply log level if provided
+    const levelString = Option.getOrElse(logLevel, () => "info")
+    yield* Effect.logDebug(`Log level: ${levelString}`)
+    
     const config = yield* AppConfig
     const ffmpeg = yield* Ffmpeg
     // `Argument.file({ mustExist: true })` already proved it is there.

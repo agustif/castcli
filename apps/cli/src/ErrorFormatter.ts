@@ -19,15 +19,23 @@ const formatSchemaIssue = (issue: SchemaIssue.Issue): string => {
 
 /**
  * Check if value has a specific property of a specific type.
+ * Uses Reflect.get to avoid type assertions.
  */
 const hasProperty = <T>(
   value: unknown,
   key: string,
   check: (val: unknown) => val is T
-): value is Record<string, unknown> & { [K in typeof key]: T } =>
-  typeof value === "object" && value !== null && key in value && check(value[key as keyof typeof value])
+): value is Record<string, unknown> & { [K in typeof key]: T } => {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    key in value &&
+    check(Reflect.get(value, key))
+  )
+}
 
 const isString = (val: unknown): val is string => typeof val === "string"
+const isObject = (val: unknown): val is object => typeof val === "object" && val !== null
 
 /**
  * Format any error for user display, with special handling for Schema issues.
@@ -43,7 +51,7 @@ export const formatError = (error: unknown): string => {
     Option.filter(
       Option.fromNullishOr(error),
       (e): e is { _tag: string; issue: SchemaIssue.Issue } =>
-        hasProperty(e, "_tag", isString) && hasProperty(e, "issue", () => true)
+        hasProperty(e, "_tag", isString) && hasProperty(e, "issue", isObject)
     ),
     {
       onSome: (e) => `Schema validation failed:\n${formatSchemaIssue(e.issue)}`,
@@ -76,7 +84,7 @@ export const formatError = (error: unknown): string => {
                           Option.filter(
                             Option.fromNullishOr(error),
                             (e): e is { message: string; cause: unknown } =>
-                              hasProperty(e, "message", isString) && hasProperty(e, "cause", () => true)
+                              hasProperty(e, "message", isString) && hasProperty(e, "cause", isObject)
                           ),
                           {
                             onSome: (e) => `${e.message}\nCause: ${formatError(e.cause)}`,
