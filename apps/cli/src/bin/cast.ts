@@ -25,7 +25,7 @@ import * as Flags from "../Cli/Flags.ts"
 import * as Control from "../Cli/Control.ts"
 import * as TimeCode from "../Cli/TimeCode.ts"
 import * as Target from "../Cli/Target.ts"
-import { FetchHttpClient, HttpClient, HttpRouter } from "effect/unstable/http"
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpBody, HttpRouter } from "effect/unstable/http"
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { NodeCrypto } from "@effect/platform-node"
 import { FileSystem } from "effect/FileSystem"
@@ -1127,7 +1127,6 @@ const play = Command.make(
                     "airplay.device.port": airplayDevice.port
                   }
                 })
-              ),
               ),
               onSome: (existing) => Effect.succeed(existing)
             })
