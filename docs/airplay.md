@@ -3,17 +3,11 @@
 The tool speaks Cast, DLNA, and AirPlay. This document explains what was built
 and what was deliberately left out.
 
-<<<<<<< HEAD
-Last updated: 2026-08-31. AirPlay 2 protocol implemented: HAP pair-setup (M1-M6)
-and pair-verify (M1-M4), then play-queue (POST /command insertPlayQueueItem).
-Volume control implemented. CLI performs pair-setup (PIN 3939 for emulator) then
-pair-verify automatically.
-=======
-Last updated: 2026-08-31. AirPlay 2 protocol implemented: HAP pair-verify
-(optional), then play-queue (POST /command insertPlayQueueItem). Query-string
-/play (AirPlay 1) is no longer supported. Volume control implemented.
-**Encrypted control channel** (ChaCha20-Poly1305) implemented after pair-verify.
->>>>>>> 43828c1 (docs: update airplay.md with encrypted control channel)
+Last updated: 2026-08-31. AirPlay 2 protocol implemented: HAP pair-setup (M1-M6),
+pair-verify (M1-M4), encrypted control channel (ChaCha20-Poly1305), MFi auth-setup
+(sender POST only), then play-queue (POST /command insertPlayQueueItem). Volume
+control implemented. CLI performs pair-setup (PIN 3939 for emulator), pair-verify,
+and auth-setup (when device requires MFi) automatically.
 
 ## What is built
 
@@ -59,6 +53,13 @@ The sender implements **AirPlay 2 with HAP pair-setup, pair-verify, encrypted co
   keys derived from pair-verify shared secret via HKDF with `Control-Salt` and
   `Control-Read-Encryption-Key` / `Control-Write-Encryption-Key` infos. Nonce counter
   increments per frame.
+- **MFi auth-setup** (sender POST only): Before pair-verify, if the device advertises
+  bit 26 (HasUnifiedAdvertiserInfo) or bit 51 (SupportsUnifiedPairSetupAndMFi) in its
+  features bitmask, the sender POSTs a Curve25519 public key to `/auth-setup`. The
+  receiver returns its public key + encrypted signature + MFi certificate. The sender
+  accepts any 200 response and does not verify the signature. This satisfies receivers
+  that refuse SETUP/play without the auth-setup exchange, while not implementing full
+  MFi accessory protocols (no Apple Authentication IC).
 - **CLI pairing workflow**: retrieves stored pairing or runs pair-setup, always
   runs pair-verify before play, fails closed if pairing/verify fails
 - **Pairing persistence**: stores controller and accessory keys in
@@ -111,7 +112,11 @@ than returning half-parsed undefined fields.
 **mDNS discovery e2e** is not tested. The e2e test uses `--ip` to bypass
 discovery.
 
-**MFi /auth-setup** (Apple Authentication Coprocessor) is not implemented.
+**MFi /auth-setup signature verification** is not implemented. The sender POSTs
+the required Curve25519 public key to satisfy third-party receivers that require
+it (bit 26 or bit 51 in features), but does not verify the returned MFi certificate
+or signature. This is sender-side compliance only; the tool is not a licensed MFi
+accessory and does not implement Apple Authentication IC protocols.
 
 **RTSP audio** (SETUP/RECORD) is not implemented. This is HTTP video only.
 

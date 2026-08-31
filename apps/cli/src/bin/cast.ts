@@ -289,21 +289,34 @@ const resolveTarget = Effect.fn("cast.resolveTarget")(function*(options: {
       Effect.gen(function*() {
         // When using --ip, try both Cast and AirPlay at that address.
         // Check AirPlay first (simpler HTTP check), fall back to Cast.
-        const airplayDevice = new AirPlayDevice({
-          name: address,
-          ip: address,
-          port: Port.make(options.airplayPort)
-        })
-        
-        // Simple check: try to fetch AirPlay /server-info endpoint
-        const isAirPlay = yield* client.get(`http://${address}:${options.airplayPort}/server-info`).pipe(
-          Effect.map(() => true),
-          Effect.orElseSucceed(() => false)
+        // Parse /server-info to get features bitmask.
+        const serverInfoResponse = yield* client.get(`http://${address}:${options.airplayPort}/server-info`).pipe(
+          Effect.flatMap((r) => r.text),
+          Effect.orElseSucceed(() => "")
         )
+
+        const isAirPlay = serverInfoResponse.length > 0
         
-        return isAirPlay
-          ? Target.AirPlay({ device: airplayDevice })
-          : Target.Cast({ device: deviceAt(address, options.devicePort) })
+        return yield* (isAirPlay
+          ? Effect.succeed(undefined).pipe(
+              Effect.map(() => {
+                const featuresMatch = serverInfoResponse.match(/<key>features<\/key>\s*<integer>(0x[0-9a-fA-F]+)<\/integer>/)
+                const features = featuresMatch && featuresMatch[1] !== undefined
+                  ? BigInt(featuresMatch[1])
+                  : undefined
+
+                const airplayDevice = new AirPlayDevice({
+                  name: address,
+                  ip: address,
+                  port: Port.make(options.airplayPort),
+                  features
+                })
+
+                return Target.AirPlay({ device: airplayDevice })
+              })
+            )
+          : Effect.succeed(Target.Cast({ device: deviceAt(address, options.devicePort) }))
+        )
       }),
 
     onNone: () =>

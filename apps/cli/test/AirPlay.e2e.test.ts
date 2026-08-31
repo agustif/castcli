@@ -43,7 +43,8 @@ describe("cast play, against an emulated AirPlay device", () => {
             const device = yield* EmulatorDevice.make({
               name,
               advertise: false,
-              requirePairing: true
+              requirePairing: true,
+              requireAuthSetup: true
             })
 
             // Use the Fixture.play helper which forks the CLI and sets env vars correctly

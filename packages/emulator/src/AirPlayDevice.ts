@@ -46,10 +46,12 @@ export const make = (options: {
   readonly name?: string
   readonly advertise?: boolean
   readonly requirePairing?: boolean
+  readonly requireAuthSetup?: boolean
 } = {}): Effect.Effect<AirPlayDevice, PlatformError, Scope.Scope | HttpClient.HttpClient> =>
   Effect.gen(function*() {
     const name = options.name ?? "Emulated AirPlay"
     const requirePairing = options.requirePairing ?? false
+    const requireAuthSetup = options.requireAuthSetup ?? false
 
     const loaded = yield* Ref.make(Option.none<{ url: string; position: number }>())
     const fetched = yield* Ref.make<ReadonlyArray<string>>([])
@@ -57,6 +59,7 @@ export const make = (options: {
     const position = yield* Ref.make(0)
     const volume = yield* Ref.make(0.5)
     const pairVerified = yield* Ref.make(!requirePairing)
+    const authSetupCompleted = yield* Ref.make(!requireAuthSetup)
 
     const accessoryEphemeralPrivateKey = yield* Ref.make(
       Option.none<import("effect").Redacted.Redacted<Uint8Array>>()
@@ -145,6 +148,42 @@ export const make = (options: {
             }
           )
       })
+
+    const handleAuthSetup = (_body: Uint8Array): Effect.Effect<Answer> =>
+      requireAuthSetup
+        ? Effect.gen(function*() {
+          yield* Ref.set(authSetupCompleted, true)
+
+          const AirPlay = yield* Effect.promise(() => import("@castcli/airplay"))
+          const suite = yield* Effect.provide(AirPlay.Suite.Suite, Layer.provide(AirPlay.NodeSuite, NodeCrypto.layer))
+
+          const serverEphemeralKeys = yield* suite.x25519KeyPair
+          const serverPublicKey = yield* suite.x25519PublicKey(serverEphemeralKeys.privateKey)
+
+          const stubCertificate = new TextEncoder().encode("STUB_MFI_CERT")
+          const certificateLength = new Uint8Array(4)
+          certificateLength[0] = (stubCertificate.length >> 24) & 0xff
+          certificateLength[1] = (stubCertificate.length >> 16) & 0xff
+          certificateLength[2] = (stubCertificate.length >> 8) & 0xff
+          certificateLength[3] = stubCertificate.length & 0xff
+
+          const stubSignature = new TextEncoder().encode("STUB_SIGNATURE_DATA")
+
+          const response = new Uint8Array(
+            32 + 4 + stubCertificate.length + stubSignature.length
+          )
+          response.set(serverPublicKey, 0)
+          response.set(certificateLength, 32)
+          response.set(stubCertificate, 36)
+          response.set(stubSignature, 36 + stubCertificate.length)
+
+          return {
+            status: 200,
+            body: response,
+            contentType: "application/octet-stream"
+          } satisfies Answer
+        }).pipe(Effect.orElseSucceed(() => ({ status: 500, body: "Internal error" })))
+        : Effect.succeed(NOT_FOUND)
 
     const handlePairVerify = (body: Uint8Array): Effect.Effect<Answer> =>
       requirePairing
@@ -355,6 +394,7 @@ export const make = (options: {
         return yield* Match.value({ path, method }).pipe(
           Match.when({ path: "/pair-setup", method: "POST" }, () => handlePairSetup(body)),
           Match.when({ path: "/pair-verify", method: "POST" }, () => handlePairVerify(body)),
+          Match.when({ path: "/auth-setup", method: "POST" }, () => handleAuthSetup(body)),
 
           Match.when({ path: "/play", method: "POST" }, () =>
             Effect.gen(function*() {
@@ -384,9 +424,10 @@ export const make = (options: {
           Match.when({ path: "/command", method: "POST" }, () =>
             Effect.gen(function*() {
               const verified = yield* Ref.get(pairVerified)
+              const authSetupDone = yield* Ref.get(authSetupCompleted)
               const maybeEncryptedSession = yield* Ref.get(encryptedSessionKeys)
 
-              return yield* (verified
+              return yield* (verified && authSetupDone
                 ? Effect.gen(function*() {
                   const bodyText = yield* Option.match(maybeEncryptedSession, {
                     onNone: () => Effect.succeed(new TextDecoder().decode(body)),
@@ -504,7 +545,7 @@ export const make = (options: {
 <dict>
   <key>model</key><string>Emulator</string>
   <key>deviceid</key><string>AA:BB:CC:DD:EE:FF</string>
-  <key>features</key><integer>0x1</integer>
+  <key>features</key><integer>${requireAuthSetup ? "0x4000001" : "0x1"}</integer>
   <key>srcvers</key><string>220.68</string>
 </dict>
 </plist>`,
