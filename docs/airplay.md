@@ -94,7 +94,10 @@ after pair-verify. Real devices may require encrypted framing for some commands.
 ## Known gaps
 
 **Binary plist decoding** for playback-info is not implemented. The current
-implementation parses XML plists only.
+implementation parses XML plists with Effect Schema and fast-xml-parser.
+GET /playback-info responses are decoded with a proper schema instead of regex,
+failing with a domain error (MalformedPlaybackInfo) on garbage input rather
+than returning half-parsed undefined fields.
 
 **mDNS discovery e2e** is not tested. The e2e test uses `--ip` to bypass
 discovery.
