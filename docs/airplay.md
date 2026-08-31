@@ -6,7 +6,7 @@ and what was deliberately left out.
 Last updated: 2026-08-31. AirPlay 2 protocol implemented: HAP pair-setup (M1-M6),
 pair-verify (M1-M4), encrypted control channel (ChaCha20-Poly1305), MFi auth-setup
 (sender POST only), then play-queue (POST /command insertPlayQueueItem). Volume
-control implemented. CLI performs pair-setup (PIN 3939 for emulator), pair-verify,
+control implemented. CLI performs pair-setup with user-provided PIN, pair-verify,
 and auth-setup (when device requires MFi) automatically.
 
 ## What is built
@@ -36,6 +36,26 @@ devices shows the two halves of the world use different bits: **every Apple TV
 sets bit 0 and clears 49; every third-party set — Roku, Samsung, LG — sets 49
 and clears 0.** Checking either alone silently excludes half of them.
 
+### PIN and Pairing Identity
+
+Real AirPlay devices display a PIN during pair-setup. The CLI requires the PIN
+via `--pin` flag or `AIRPLAY_PIN` environment variable. If neither is provided
+when pair-setup is needed, the CLI fails with a clear error:
+
+```
+error: AirPlay pairing requires a PIN — provide --pin or set AIRPLAY_PIN environment variable
+```
+
+The emulator uses PIN **3939** for testing. E2E tests set `AIRPLAY_PIN=3939`.
+
+Pairing records are stored in `XDG_STATE_HOME/castcli/state.json` keyed by:
+1. **Device ID (preferred)**: TXT record `deviceid` from mDNS discovery
+2. **IP address (fallback)**: for backward compatibility with existing state
+
+This ensures pairings survive DHCP lease changes when the device ID is available
+from mDNS discovery. When playing via `--ip` without mDNS discovery, the pairing
+is looked up by IP for backward compatibility.
+
 ### Implementation
 
 The sender implements **AirPlay 2 with HAP pair-setup, pair-verify, encrypted control channel, and play-queue**:
@@ -43,9 +63,8 @@ The sender implements **AirPlay 2 with HAP pair-setup, pair-verify, encrypted co
 - mDNS `_airplay._tcp` discovery with TXT record parsing for `features`, `flags`,
   `model`, and `deviceid`
 - The `AirPlayDevice` domain model with video capability detection
-- **HAP pair-setup** (M1-M6): establishes long-term Ed25519 keys with PIN code
-  (3939 for emulator testing), using existing PairSetup.Controller and Suite
-  primitives (SRP-6a, Ed25519, X25519, ChaCha20-Poly1305, HKDF)
+- **HAP pair-setup** (M1-M6): establishes long-term Ed25519 keys with user-provided PIN
+  via `--pin` flag or `AIRPLAY_PIN` environment variable
 - **HAP pair-verify** (M1-M4): runs before every play session, authenticates
   using stored long-term keys, using PairVerify.Controller
 - **Encrypted control channel**: After pair-verify, control POSTs are encrypted with
@@ -60,10 +79,12 @@ The sender implements **AirPlay 2 with HAP pair-setup, pair-verify, encrypted co
   accepts any 200 response and does not verify the signature. This satisfies receivers
   that refuse SETUP/play without the auth-setup exchange, while not implementing full
   MFi accessory protocols (no Apple Authentication IC).
-- **CLI pairing workflow**: retrieves stored pairing or runs pair-setup, always
-  runs pair-verify before play, fails closed if pairing/verify fails
+- **CLI pairing workflow**: retrieves stored pairing or runs pair-setup (requires PIN
+  via `--pin` flag or `AIRPLAY_PIN` env), always runs pair-verify before play, fails
+  closed if pairing/verify fails
 - **Pairing persistence**: stores controller and accessory keys in
-  `XDG_STATE_HOME/castcli/state.json` keyed by device IP
+  `XDG_STATE_HOME/castcli/state.json` keyed by device ID (TXT `deviceid`) first,
+  falling back to IP for backward compatibility with existing state
 - HTTP-based session:
   - `POST /command` insertPlayQueueItem (AirPlay 2 play-queue, feature bit 33)
   - `POST /setproperty` for volume control (0.0 to 1.0)
@@ -117,8 +138,4 @@ accessory and does not implement Apple Authentication IC protocols.
 ## What would complete it
 
 - **An Apple TV to test against.** The cryptographic implementation is complete;
-  hardware testing would reveal whether encrypted control-channel framing or
-  other details are required.
-  
-- **Encrypted control channel framing** if real devices require it after
-  pair-verify.
+  hardware testing would reveal whether additional details are required.

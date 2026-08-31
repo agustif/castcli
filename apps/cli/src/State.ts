@@ -59,12 +59,15 @@ export class CueCounts extends Schema.Class<CueCounts>("CueCounts")({
 /**
  * AirPlay pairing record for a specific device.
  * 
- * Stores the long-term keys established during pair-setup, keyed by device IP.
- * Required for pair-verify on devices that enforce pairing.
+ * Stores the long-term keys established during pair-setup.
+ * Keyed by device accessory ID (from TXT deviceid) first, with IP as fallback
+ * for existing state compatibility.
  */
 export class AirPlayPairing extends Schema.Class<AirPlayPairing>("AirPlayPairing")({
-  /** Device IP address this pairing is for */
+  /** Device IP address (deprecated key, kept for backward compatibility) */
   deviceIp: Ipv4,
+  /** Device accessory ID from TXT deviceid (preferred key) */
+  deviceId: Schema.optionalKey(Schema.String),
   /** Controller (sender) identity */
   controllerIdentifier: Schema.String,
   controllerPublicKey: Schema.Uint8Array,
@@ -111,7 +114,7 @@ export class Remembered extends Schema.Class<Remembered>("Remembered")({
   active: Schema.optional(ActiveStream),
   seek: Schema.optional(SeekRequest),
   cues: Schema.optionalKey(Schema.Record(Schema.String, CueCounts)),
-  /** AirPlay pairings by device IP */
+  /** AirPlay pairings by device ID (preferred) or IP (fallback) */
   airplayPairings: Schema.optionalKey(Schema.Record(Schema.String, AirPlayPairing))
 }) {}
 
@@ -296,17 +299,27 @@ export const setActive = (active: Option.Option<ActiveStream>) =>
         })
       })))
 
-/** Get stored AirPlay pairing for a device */
-export const getAirPlayPairing = (deviceIp: Ipv4) =>
+/** Get stored AirPlay pairing for a device, by deviceId (preferred) or IP (fallback) */
+export const getAirPlayPairing = (deviceIp: Ipv4, deviceId: Option.Option<string>) =>
   Effect.flatMap(Store, (store) =>
     Effect.map(store.read, (state) =>
-      Option.fromNullishOr(state.airplayPairings?.[deviceIp])))
+      Option.match(deviceId, {
+        onNone: () => Option.fromNullishOr(state.airplayPairings?.[deviceIp]),
+        onSome: (id) =>
+          Option.orElse(
+            Option.fromNullishOr(state.airplayPairings?.[id]),
+            () => Option.fromNullishOr(state.airplayPairings?.[deviceIp])
+          )
+      })))
 
-/** Store AirPlay pairing for a device */
+/** Store AirPlay pairing for a device, keyed by deviceId if available, otherwise IP */
 export const storeAirPlayPairing = (pairing: AirPlayPairing) =>
   Effect.flatMap(Store, (store) =>
-    store.update((state) =>
-      new Remembered({
+    store.update((state) => {
+      const key = pairing.deviceId ?? pairing.deviceIp
+      const existingPairings = state.airplayPairings ?? {}
+      return new Remembered({
         ...state,
-        airplayPairings: { ...state.airplayPairings, [pairing.deviceIp]: pairing }
-      })))
+        airplayPairings: { ...existingPairings, [key]: pairing }
+      })
+    }))
