@@ -19,6 +19,7 @@ import {
 
 /** Re-exported so callers need only this module. */
 export type TranscodeOptions = Args.TranscodeOptions
+export type TranscodeFileOptions = Args.TranscodeFileOptions
 export type SegmentOptions = Args.SegmentOptions
 import * as Vtt from "../Vtt/Codec.ts"
 import * as Args from "./Args.ts"

@@ -1,31 +1,30 @@
-// The HTTP endpoints the Cast device pulls from.
+// The HTTP endpoints the Cast device and AirPlay pull from.
 //
 // The device fetches these; we never push to it. That inversion is the whole
 // reason the original VLC bug existed — VLC advertised a link-local IPv6
 // address the TV could not route back to.
 //
-// Two presentations of the same film are served side by side, because they fail
-// in different ways and neither is strictly better:
+// Three presentations of the same film are served side by side:
 //
-//   * **progressive** (`/stream`) — a finished faststart MP4 with byte ranges.
-//     ffmpeg writes a seekable file (`+faststart`), we cache the bytes, and
-//     Range probes get 206 with Content-Length rather than a live pipe.
-//   * **HLS** (`/master.m3u8`) — a VOD presentation, one variant per rung, every
-//     segment addressable. The receiver chooses the quality and does its own
-//     seeking, so neither costs a restart.
+//   * **progressive** (`/stream`) — live fragmented MP4 pipe for Cast.
+//     ffmpeg outputs frag_keyframe+empty_moov+default_base_moof on stdout,
+//     no byte ranges (Accept-Ranges: none), so Cast progressive LOAD works.
+//   * **VOD** (`/vod.mp4`) — finished faststart MP4 for AirPlay URL play.
+//     ffmpeg writes a seekable file (+faststart), cached, with byte ranges
+//     and CORS for AirPlay seek support.
+//   * **HLS** (`/master.m3u8`) — VOD presentation, one variant per rung, every
+//     segment addressable. The receiver chooses quality and seeks itself.
 //
-// Serving both costs almost nothing: the segments do not exist until they are
-// requested, so an unused HLS surface encodes nothing at all.
+// Cast progressive (--progressive) uses /stream. Cast default uses HLS.
+// AirPlay uses /vod.mp4.
 
 import { Console, Effect, Match, Option, Ref, Schema, Stream } from "effect"
 import { FileSystem } from "effect/FileSystem"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { Ffmpeg, FfmpegArgs, Hls } from "@castcli/media"
+import { Ffmpeg, Hls } from "@castcli/media"
 import type { Rung } from "@castcli/domain"
 import { Brands, Seconds } from "@castcli/domain"
 import { Srt, Vtt } from "@castcli/media"
-import * as os from "node:os"
-import * as path from "node:path"
 
 export interface SessionState {
   readonly offsetSeconds: Brands.Seconds
@@ -35,6 +34,7 @@ export interface SessionState {
 
 interface MediaServerOptions {
   readonly file: Brands.FilePath
+  readonly vodCachePath: Brands.FilePath
   readonly durationSeconds: Brands.Seconds
   readonly videoIndex: Brands.StreamIndex
   readonly audioIndex: Option.Option<Brands.StreamIndex>
@@ -114,172 +114,134 @@ const notFound = HttpServerResponse.empty({ status: 404 })
 
 // The requirement type is inferred: v4 tracks each handler's error and service
 // requirements in the Layer's context, so pinning it by hand fights the router.
-type ByteRange =
-  | { readonly _tag: "All" }
-  | { readonly _tag: "Slice"; readonly start: number; readonly end: number }
-  | { readonly _tag: "Unsatisfiable" }
-
-/**
- * RFC 7233 `bytes=` ranges: `START-END`, `START-`, or `-SUFFIX`.
- * Anything else, including a range past EOF, is unsatisfiable (416).
- */
-const parseByteRange = (header: string, total: number): ByteRange => {
-  const raw = String(header).trim()
-  return raw.length === 0
-    ? { _tag: "All" }
-    : Option.match(Option.fromNullishOr(/^bytes=(?:(\d+)-(\d*)|-(\d+))$/.exec(raw)), {
-      onNone: (): ByteRange => ({ _tag: "Unsatisfiable" }),
-      onSome: (match): ByteRange => {
-        const suffixText = match[3]
-        const startText = match[1]
-        const endText = match[2]
-        return suffixText !== undefined
-          ? Number(suffixText) === 0 || total === 0
-            ? { _tag: "Unsatisfiable" }
-            : {
-              _tag: "Slice",
-              start: Math.max(0, total - Number(suffixText)),
-              end: total - 1
-            }
-          : (() => {
-            const start = Number(startText)
-            const end = endText !== undefined && endText.length > 0 ? Number(endText) : total - 1
-            return Number.isFinite(start) && Number.isFinite(end) && total > 0 && start < total &&
-                start <= end
-              ? { _tag: "Slice", start, end: Math.min(end, total - 1) }
-              : { _tag: "Unsatisfiable" }
-          })()
-      }
-    })
-}
-
-const streamCors = {
-  "cache-control": "no-store",
-  "access-control-allow-origin": "*",
-  "accept-ranges": "bytes"
-} as const
-
 export const routes = (options: MediaServerOptions) => {
-  const progressiveCache = new Map<string, Uint8Array>()
-
-  const loadProgressive = Effect.fn("MediaServer.progressiveMp4")(function*(
-    offsetSeconds: Brands.Seconds,
-    rung: Rung
-  ) {
-    const key = `${options.file}|${offsetSeconds}|${rung.height}`
-    return yield* Option.match(Option.fromNullishOr(progressiveCache.get(key)), {
-      onSome: (bytes) => Effect.succeed(bytes),
-      onNone: () =>
-        Effect.gen(function*() {
-          const ffmpeg = yield* Ffmpeg
-          const fs = yield* FileSystem
-          const outPath = path.join(
-            os.tmpdir(),
-            `castcli-stream-${globalThis.crypto.randomUUID()}.mp4`
-          )
-          const transcodeOptions = {
-            file: options.file,
-            offsetSeconds,
-            videoIndex: options.videoIndex,
-            audioIndex: options.audioIndex,
-            rung,
-            audioBitrate: options.audioBitrate,
-            outPath
-          }
-          yield* Console.log(`ffmpeg transcodeFile ${FfmpegArgs.transcodeFile(transcodeOptions).join(" ")}`)
-          yield* ffmpeg.transcodeFile(transcodeOptions).pipe(
-            Effect.tapError((error) => Console.log(`transcodeFile failed ${error}`))
-          )
-          const bytes = yield* fs.readFile(outPath)
-          yield* fs.remove(outPath).pipe(Effect.ignore)
-          progressiveCache.set(key, bytes)
-          yield* options.onBytes(bytes.byteLength)
-          yield* Console.log(`transcodeFile done bytes=${bytes.byteLength} key=${key}`)
-          return bytes
-        })
-    })
-  })
 
   const handleStream = Effect.fn("MediaServer.stream")(function*(
     request: HttpServerRequest.HttpServerRequest
   ) {
+    const ffmpeg = yield* Ffmpeg
     const current = yield* Ref.get(options.state)
     const offsetSeconds = Option.getOrElse(queryOffset(request), () => current.offsetSeconds)
-    const remote = Option.getOrElse(request.remoteAddress, () => "?")
-    const rangeHeader = String(request.headers["range"] ?? "")
 
     yield* Effect.logInfo(
       `stream requested from ${offsetSeconds}s at ${current.rung.height}p`
     )
-    yield* Console.log(
-      `stream requested from ${offsetSeconds}s at ${current.rung.height}p from ${remote} url=${request.originalUrl}`
+
+    const source = yield* ffmpeg.transcode({
+      file: options.file,
+      offsetSeconds,
+      videoIndex: options.videoIndex,
+      audioIndex: options.audioIndex,
+      rung: current.rung,
+      audioBitrate: options.audioBitrate
+    })
+
+    const counted = source.pipe(
+      Stream.tap((chunk) => options.onBytes(chunk.length))
     )
 
-    const bytes = yield* loadProgressive(offsetSeconds, current.rung)
-    const total = bytes.byteLength
-    const range = parseByteRange(rangeHeader, total)
-    const head = request.method === "HEAD"
-
-    const response = Match.value(range).pipe(
-      Match.when({ _tag: "All" }, () =>
-        head
-          ? HttpServerResponse.empty({
-            status: 200,
-            headers: {
-              ...streamCors,
-              "content-type": "video/mp4",
-              "content-length": String(total)
-            }
-          })
-          : HttpServerResponse.uint8Array(bytes, {
-            status: 200,
-            contentType: "video/mp4",
-            headers: streamCors
-          })),
-      Match.when({ _tag: "Slice" }, ({ start, end }) => {
-        const slice = bytes.subarray(start, end + 1)
-        const headers = {
-          ...streamCors,
-          "content-range": `bytes ${start}-${end}/${total}`
-        }
-        return head
-          ? HttpServerResponse.empty({
-            status: 206,
-            headers: {
-              ...headers,
-              "content-type": "video/mp4",
-              "content-length": String(slice.byteLength)
-            }
-          })
-          : HttpServerResponse.uint8Array(slice, {
-            status: 206,
-            contentType: "video/mp4",
-            headers
-          })
-      }),
-      Match.when({ _tag: "Unsatisfiable" }, () =>
-        HttpServerResponse.empty({
-          status: 416,
-          headers: {
-            ...streamCors,
-            "content-type": "video/mp4",
-            "content-range": `bytes */${total}`
-          }
-        })),
-      Match.exhaustive
-    )
-
-    yield* Console.log(
-      `stream range=${rangeHeader.length > 0 ? rangeHeader : "-"} bytes=${total} status=${response.status} method=${request.method} from ${remote}`
-    )
-    return response
+    return HttpServerResponse.stream(counted, {
+      contentType: "video/mp4",
+      headers: {
+        "accept-ranges": "none",
+        "cache-control": "no-store"
+      }
+    })
   })
 
   return HttpRouter.addAll([
     // --- progressive ---------------------------------------------------------
 
     HttpRouter.route("GET", "/stream", handleStream),
-    HttpRouter.route("HEAD", "/stream", handleStream),
+
+    HttpRouter.route(
+      "GET",
+      "/vod.mp4",
+      Effect.fn("MediaServer.vod")(function*(request: HttpServerRequest.HttpServerRequest) {
+        const fs = yield* FileSystem
+        const ffmpeg = yield* Ffmpeg
+
+        const vodExists = yield* fs.exists(options.vodCachePath)
+
+        yield* Effect.when(
+          Effect.gen(function*() {
+            yield* Effect.logInfo("creating VOD cache file with faststart")
+            const current = yield* Ref.get(options.state)
+            yield* ffmpeg.transcodeFile({
+              file: options.file,
+              offsetSeconds: Seconds.make(0),
+              videoIndex: options.videoIndex,
+              audioIndex: options.audioIndex,
+              rung: current.rung,
+              audioBitrate: options.audioBitrate,
+              outPath: options.vodCachePath
+            })
+          }),
+          Effect.succeed(!vodExists)
+        )
+
+        const stat = yield* fs.stat(options.vodCachePath)
+        const fileSize = Number(stat.size)
+
+        const rangeHeader = request.headers["range"]
+
+        return yield* Option.match(Option.fromNullishOr(rangeHeader), {
+          onNone: () =>
+            Effect.succeed(
+              HttpServerResponse.stream(fs.stream(options.vodCachePath), {
+                contentType: "video/mp4",
+                headers: {
+                  "accept-ranges": "bytes",
+                  "content-length": String(fileSize),
+                  "access-control-allow-origin": "*",
+                  "cache-control": "public, max-age=3600"
+                }
+              })
+            ),
+          onSome: (range) =>
+            Effect.gen(function*() {
+              const rangeMatch = /bytes=(\d+)-(\d*)/.exec(range)
+
+              return yield* Option.match(Option.fromNullishOr(rangeMatch), {
+                onNone: () => Effect.succeed(HttpServerResponse.empty({ status: 416 })),
+                onSome: (match) =>
+                  Effect.gen(function*() {
+                    const start = Number(match[1])
+                    const end =
+                      match[2] !== undefined && match[2] !== "" ? Number(match[2]) : fileSize - 1
+
+                    const isInvalidRange = start >= fileSize || end >= fileSize
+
+                    return yield* Match.value(isInvalidRange).pipe(
+                      Match.when(true, () => Effect.succeed(HttpServerResponse.empty({ status: 416 }))),
+                      Match.when(false, () =>
+                        Effect.succeed(
+                          HttpServerResponse.stream(
+                            fs.stream(options.vodCachePath, {
+                              offset: start,
+                              bytesToRead: end - start + 1
+                            }),
+                            {
+                              status: 206,
+                              contentType: "video/mp4",
+                              headers: {
+                                "accept-ranges": "bytes",
+                                "content-range": `bytes ${start}-${end}/${fileSize}`,
+                                "content-length": String(end - start + 1),
+                                "access-control-allow-origin": "*",
+                                "cache-control": "public, max-age=3600"
+                              }
+                            }
+                          )
+                        )),
+                      Match.exhaustive
+                    )
+                  })
+              })
+            })
+        })
+      })
+    ),
 
     // --- HLS -----------------------------------------------------------------
 
