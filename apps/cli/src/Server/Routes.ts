@@ -208,8 +208,8 @@ export const routes = (options: MediaServerOptions) =>
             Option.match(Option.fromNullishOr(options.ladder[variant]), {
               onNone: () => Effect.succeed(notFound),
               onSome: (rung) =>
-                Effect.map(
-                  ffmpeg.segment({
+                Effect.gen(function*() {
+                  const source = yield* ffmpeg.segment({
                     file: options.file,
                     startSeconds: Hls.segmentStart(segment),
                     durationSeconds: Hls.segmentLength(segment, options.durationSeconds),
@@ -217,16 +217,25 @@ export const routes = (options: MediaServerOptions) =>
                     audioIndex: options.audioIndex,
                     rung,
                     audioBitrate: options.audioBitrate
-                  }),
-                  (source) =>
-                    HttpServerResponse.stream(
-                      source.pipe(Stream.tap((chunk) => options.onBytes(chunk.length))),
-                      {
-                        contentType: Hls.SEGMENT_CONTENT_TYPE,
-                        headers: { "cache-control": "no-store" }
-                      }
-                    )
-                )
+                  })
+
+                  const chunks = yield* Stream.runCollect(
+                    source.pipe(Stream.tap((chunk) => options.onBytes(chunk.length)))
+                  )
+
+                  const totalLength = chunks.reduce((sum: number, chunk) => sum + chunk.length, 0)
+                  const buffer = new Uint8Array(totalLength)
+                  let offset = 0
+                  for (const chunk of chunks) {
+                    buffer.set(chunk, offset)
+                    offset += chunk.length
+                  }
+
+                  return HttpServerResponse.uint8Array(buffer, {
+                    contentType: Hls.SEGMENT_CONTENT_TYPE,
+                    headers: { "cache-control": "no-store" }
+                  })
+                })
             })
         })
       })
