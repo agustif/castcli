@@ -324,7 +324,7 @@ const volume = Command.make(
     yield* onTarget({ device, ip }, {
       onCast: (session) => session.setVolume(wanted),
       onDlna: (renderer) => renderer.setVolume(wanted),
-      onAirPlay: () => Effect.void
+      onAirPlay: (airplayDevice) => AirPlaySession.setVolume(airplayDevice, wanted)
     })
     yield* Console.log(`volume set to ${level}%`)
   })
