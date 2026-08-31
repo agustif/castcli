@@ -105,8 +105,6 @@ describe("cast play, against an emulated AirPlay device", () => {
               requirePairing: false
             })
 
-            yield* Effect.sleep(Duration.seconds(1))
-
             yield* play(device, file, directory, ["--device", name], true)
 
             const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(90))
