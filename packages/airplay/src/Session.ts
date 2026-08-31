@@ -37,6 +37,44 @@ export interface PairVerifyResult {
 }
 
 /**
+ * POST /auth-setup - MFi authentication challenge.
+ *
+ * Some AirPlay 2 receivers (third-party TVs, speakers with MFi coprocessor)
+ * refuse SETUP/play until the sender has POSTed /auth-setup with a Curve25519
+ * public key, even if the sender does not verify the receiver's certificate.
+ *
+ * This is sender-side only: we POST the required request but do not verify
+ * the MFi signature. The receiver returns its public key + encrypted signature
+ * + certificate; we accept any 200 response.
+ *
+ * Request format:
+ *   <1:encryption type (0x01 = unencrypted)>
+ *   <32:client Curve25519 public key>
+ */
+const runAuthSetup = (
+  device: AirPlayDevice
+): Effect.Effect<void, unknown, HttpClient.HttpClient | EncryptedSession.Suite> =>
+  Effect.gen(function*() {
+    const client = yield* HttpClient.HttpClient
+    const url = `http://${device.ip}:${device.port}/auth-setup`
+
+    const suite = yield* EncryptedSession.Suite
+    const ephemeralKeys = yield* suite.x25519KeyPair
+
+    const publicKey = yield* suite.x25519PublicKey(ephemeralKeys.privateKey)
+
+    const request = new Uint8Array(1 + 32)
+    request[0] = 0x01
+    request.set(publicKey, 1)
+
+    yield* client.execute(
+      HttpClientRequest.post(url, {
+        body: HttpBody.uint8Array(request, "application/octet-stream")
+      })
+    )
+  })
+
+/**
  * Run pair-verify exchange with the device and derive encrypted session.
  *
  * REQUIRED before any /command or /play requests on devices that require pairing.
@@ -113,14 +151,20 @@ const runPairVerify = (
 /**
  * POST /command insertPlayQueueItem - AirPlay 2 play-queue (feature bit 33).
  *
- * Runs pair-verify first if pairing credentials are provided, then sends
- * the play command with encrypted framing. This is the modern AirPlay 2 path;
+ * Runs auth-setup (if device requires MFi), then pair-verify (if pairing provided),
+ * then sends the play command with encrypted framing. This is the modern AirPlay 2 path;
  * query-string /play (AirPlay 1) is not supported.
  * 
  * Fails closed: if pairing is provided but encryption fails, the request is not sent.
+ * Also fails closed if MFi auth-setup is required but returns 403/4xx.
  */
 export const play = (device: AirPlayDevice, options: PlayOptions) =>
   Effect.gen(function*() {
+    yield* Effect.when(
+      runAuthSetup(device),
+      Effect.succeed(device.requiresMFiAuth)
+    )
+
     const maybeResult = yield* Option.match(Option.fromUndefinedOr(options.pairing), {
       onNone: () => Effect.succeed(Option.none<PairVerifyResult>()),
       onSome: (pairing) => Effect.map(runPairVerify(device, pairing), Option.some)

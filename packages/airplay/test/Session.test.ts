@@ -2,13 +2,16 @@ import { assert, describe, it } from "@effect/vitest"
 import { Effect, Layer, Option } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { NodeServices } from "@effect/platform-node"
+import { NodeCrypto } from "@effect/platform-node"
 import { AirPlayDevice, Brands } from "@castcli/domain"
 import * as Emulator from "@castcli/emulator"
 import * as Session from "../src/Session.ts"
+import { NodeSuite } from "../src/index.ts"
 
 const TestLayer = Layer.mergeAll(
   FetchHttpClient.layer,
-  NodeServices.layer
+  NodeServices.layer,
+  Layer.provide(NodeSuite, NodeCrypto.layer)
 )
 
 describe("AirPlay Session", () => {
@@ -115,5 +118,83 @@ describe("AirPlay Session", () => {
         const value = Option.getOrThrow(info)
         assert.strictEqual(value.rate, 0)
       }).pipe(Effect.provide(TestLayer), Effect.scoped))
+  })
+
+  describe("auth-setup", () => {
+    it.effect("device with requireAuthSetup rejects /command when auth-setup not posted", () =>
+      Effect.gen(function*() {
+        const device = yield* Emulator.AirPlayDevice.make({
+          requireAuthSetup: true,
+          requirePairing: false
+        })
+
+        const { HttpClientRequest, HttpBody, HttpClient } = yield* Effect.promise(() => import("effect/unstable/http"))
+        const client = yield* HttpClient.HttpClient
+
+        const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>type</key><string>insertPlayQueueItem</string>
+  <key>Content-Location</key><string>http://example.com/test.mp4</string>
+  <key>Start-Position</key><real>0</real>
+</dict>
+</plist>`
+
+        const commandUrl = `http://127.0.0.1:${device.port}/command`
+
+        const commandResponse = yield* client.execute(
+          HttpClientRequest.post(commandUrl, {
+            body: HttpBody.text(plist, "application/x-apple-plist")
+          })
+        )
+
+        assert.strictEqual(commandResponse.status, 403)
+      }).pipe(Effect.provide(TestLayer), Effect.scoped))
+
+    it.effect("requiresMFiAuth detects bit 26", () =>
+      Effect.succeed(undefined).pipe(
+        Effect.map(() => {
+          const airplayDevice = new AirPlayDevice({
+            name: "test",
+            ip: Brands.Ipv4.make("127.0.0.1"),
+            port: Brands.Port.make(7000),
+            features: (1n << 26n)
+          })
+
+          assert.strictEqual(airplayDevice.requiresMFiAuth, true)
+        }),
+        Effect.provide(TestLayer)
+      ))
+
+    it.effect("requiresMFiAuth detects bit 51", () =>
+      Effect.succeed(undefined).pipe(
+        Effect.map(() => {
+          const airplayDevice = new AirPlayDevice({
+            name: "test",
+            ip: Brands.Ipv4.make("127.0.0.1"),
+            port: Brands.Port.make(7000),
+            features: (1n << 51n)
+          })
+
+          assert.strictEqual(airplayDevice.requiresMFiAuth, true)
+        }),
+        Effect.provide(TestLayer)
+      ))
+
+    it.effect("requiresMFiAuth is false when bits not set", () =>
+      Effect.succeed(undefined).pipe(
+        Effect.map(() => {
+          const airplayDevice = new AirPlayDevice({
+            name: "test",
+            ip: Brands.Ipv4.make("127.0.0.1"),
+            port: Brands.Port.make(7000),
+            features: 0n
+          })
+
+          assert.strictEqual(airplayDevice.requiresMFiAuth, false)
+        }),
+        Effect.provide(TestLayer)
+      ))
   })
 })
