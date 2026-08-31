@@ -140,4 +140,29 @@ describe("State", () => {
         assert.isTrue(Option.isNone(yield* State.cachedCueCounts(OTHER, "1234:5678")))
       })
     ))
+
+  it.effect("round-trips an AirPlay pairing as base64, not index objects", () =>
+    withStore((directory) =>
+      Effect.gen(function*() {
+        const pairing = new State.AirPlayPairing({
+          deviceIp: TV,
+          deviceId: "62:8A:09:C1:74:B7",
+          controllerIdentifier: "test-controller",
+          controllerPublicKey: new Uint8Array(32).fill(1),
+          controllerPrivateKey: new Uint8Array(32).fill(2),
+          accessoryIdentifier: new TextEncoder().encode("62:8A:09:C1:74:B7"),
+          accessoryPublicKey: new Uint8Array(32).fill(3)
+        })
+        yield* State.storeAirPlayPairing(pairing)
+        const loaded = yield* State.getAirPlayPairing(TV, Option.some("62:8A:09:C1:74:B7"))
+        assert.isTrue(Option.isSome(loaded))
+        const value = Option.getOrThrow(loaded)
+        assert.deepStrictEqual(Array.from(value.controllerPublicKey), Array.from(pairing.controllerPublicKey))
+        assert.deepStrictEqual(Array.from(value.controllerPrivateKey), Array.from(pairing.controllerPrivateKey))
+        const fs = yield* FileSystem
+        const raw = yield* fs.readFileString(`${directory}/castcli/state.json`)
+        assert.isFalse(raw.includes('"0":'))
+        assert.isTrue(raw.includes("controllerPublicKey"))
+      }).pipe(Effect.provide(NodeServices.layer))
+    ))
 })

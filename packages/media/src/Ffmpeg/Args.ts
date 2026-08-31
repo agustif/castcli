@@ -56,6 +56,8 @@ export type Arg = Data.TaggedEnum<{
   readonly Banner: { readonly hidden: boolean }
   readonly Log: { readonly level: LogLevel }
   readonly NoStdin: {}
+  /** Overwrite the output file without prompting. Needed by transcodeFile. */
+  readonly Overwrite: {}
   /** Input seeking. Must come before `Input` to be fast and to rebase timestamps. */
   readonly SeekInput: { readonly at: Seconds }
   readonly Input: { readonly path: FilePath }
@@ -93,6 +95,7 @@ const render: (arg: Arg) => ReadonlyArray<string> = Match.type<Arg>().pipe(
   Match.tag("Banner", ({ hidden }) => hidden ? ["-hide_banner"] : []),
   Match.tag("Log", ({ level }) => ["-loglevel", level]),
   Match.tag("NoStdin", () => ["-nostdin"]),
+  Match.tag("Overwrite", () => ["-y"]),
   Match.tag("SeekInput", ({ at }) => at > 0 ? ["-ss", String(at)] : []),
   Match.tag("Input", ({ path }) => ["-i", path]),
   Match.tag("Map", ({ stream }) => ["-map", `0:${stream}`]),
@@ -184,6 +187,35 @@ export const transcode = (options: TranscodeOptions): ReadonlyArray<string> =>
     Arg.Format({ muxer: "mp4" }),
     Arg.MovFlags({ flags: ["frag_keyframe", "empty_moov", "default_base_moof"] }),
     Arg.Output({ target: "pipe:1" })
+  ])
+
+export interface TranscodeFileOptions extends TranscodeOptions {
+  readonly outPath: string
+}
+
+/**
+ * Finished MP4 on disk with the moov atom first. AirPlay URL playback (and any
+ * client that sends Range) cannot play a live pipe: there is no Content-Length
+ * and no moov until EOF. `+faststart` requires a seekable file, not stdout.
+ */
+export const transcodeFile = (options: TranscodeFileOptions): ReadonlyArray<string> =>
+  renderAll([
+    ...preamble,
+    Arg.Overwrite(),
+    Arg.SeekInput({ at: options.offsetSeconds }),
+    Arg.Input({ path: options.file }),
+    Arg.Map({ stream: options.videoIndex }),
+    ...Option.match(options.audioIndex, {
+      onNone: () => [],
+      onSome: (stream) => [Arg.Map({ stream })]
+    }),
+    ...videoFor(options.rung),
+    Arg.Audio({ codec: "aac" }),
+    Arg.AudioChannels({ count: 2 }),
+    Arg.AudioBitrate({ rate: options.audioBitrate }),
+    Arg.Format({ muxer: "mp4" }),
+    Arg.MovFlags({ flags: ["faststart"] }),
+    Arg.Output({ target: options.outPath })
   ])
 
 export interface SegmentOptions {

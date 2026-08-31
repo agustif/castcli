@@ -25,22 +25,25 @@ const STATE = 3
 const SIGNATURE_BYTES = 64
 
 /**
- * The message signed in pair-verify: shared secret || controller ID || accessory key.
+ * Pair-verify Ed25519 message: signer X25519 PK || pairing ID || peer X25519 PK.
  *
- * Same construction as PairSetup's deviceInfo but using X25519 shared secret
- * instead of SRP session key.
+ * HAPPairingPairVerify.c:
+ *   AccessoryInfo  = AccessoryCvPK || AccessoryPairingID || iOSDeviceCvPK
+ *   iOSDeviceInfo  = iOSDeviceCvPK || iOSDevicePairingID || AccessoryCvPK
+ * Those are the ephemeral Curve25519 public keys, not the shared secret and
+ * not the long-term Ed25519 keys. Signing still uses the long-term Ed25519 key.
  */
-const verifyInfo = (options: {
-  readonly sharedSecret: Uint8Array
+const pairVerifyInfo = (options: {
+  readonly signerCvPK: Uint8Array
   readonly identifier: Uint8Array
-  readonly publicKey: Uint8Array
+  readonly peerCvPK: Uint8Array
 }): Uint8Array => {
   const info = new Uint8Array(
-    options.sharedSecret.length + options.identifier.length + options.publicKey.length
+    options.signerCvPK.length + options.identifier.length + options.peerCvPK.length
   )
-  info.set(options.sharedSecret)
-  info.set(options.identifier, options.sharedSecret.length)
-  info.set(options.publicKey, options.sharedSecret.length + options.identifier.length)
+  info.set(options.signerCvPK)
+  info.set(options.identifier, options.signerCvPK.length)
+  info.set(options.peerCvPK, options.signerCvPK.length + options.identifier.length)
   return info
 }
 
@@ -175,10 +178,10 @@ export const m3 = (
       SIGNATURE_BYTES
     )
 
-    const accessoryInfo = verifyInfo({
-      sharedSecret: Redacted.value(sharedSecret),
+    const accessoryInfo = pairVerifyInfo({
+      signerCvPK: accessoryEphemeralPublic,
       identifier: accessoryIdentifier,
-      publicKey: options.pairing.accessory.publicKey
+      peerCvPK: options.ephemeralKeys.publicKey
     })
 
     const signatureValid = yield* suite.ed25519Verify({
@@ -193,10 +196,10 @@ export const m3 = (
     )
 
     const controllerIdentifier = new TextEncoder().encode(options.controllerIdentity.identifier)
-    const controllerInfo = verifyInfo({
-      sharedSecret: Redacted.value(sharedSecret),
+    const controllerInfo = pairVerifyInfo({
+      signerCvPK: options.ephemeralKeys.publicKey,
       identifier: controllerIdentifier,
-      publicKey: options.controllerIdentity.keys.publicKey
+      peerCvPK: accessoryEphemeralPublic
     })
 
     const controllerSignature = yield* suite.ed25519Sign({

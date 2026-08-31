@@ -18,7 +18,7 @@ export class DeviceNotFoundError extends Schema.TaggedError<DeviceNotFoundError>
 ) {
   override get message(): string {
     return this.found.length === 0
-      ? `no Cast devices answered; wanted "${this.query}"`
+      ? `no devices answered; wanted "${this.query}"`
       : `no device matching "${this.query}" — found: ${this.found.join(", ")}`
   }
 }

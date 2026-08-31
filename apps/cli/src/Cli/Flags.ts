@@ -16,10 +16,6 @@ import { Schema } from "effect"
 import { Ipv4, StreamIndex } from "@castcli/domain"
 import { TimeCode } from "./TimeCode.ts"
 
-export type Protocol = "cast" | "airplay" | "dlna"
-
-const ProtocolSchema = Schema.Literals(["cast", "airplay", "dlna"])
-
 /** The media file. `mustExist` turns a typo into a parse error, not a probe failure. */
 export const mediaFile = Argument.file("file", { mustExist: true }).pipe(
   Argument.withDescription("Path to the media file")
@@ -38,6 +34,18 @@ export const deviceIp = Flag.string("ip").pipe(
 export const deviceName = Flag.string("device").pipe(
   Flag.withDescription("Pick a device by name substring"),
   Flag.optional
+)
+
+/** When a television speaks more than one protocol, this is how you pick. */
+export const ProtocolName = Schema.Literals(["cast", "airplay", "dlna"])
+export type ProtocolName = typeof ProtocolName.Type
+export type Protocol = ProtocolName
+
+export const protocol = Flag.optional(
+  Flag.withSchema(
+    Flag.withDescription(Flag.string("protocol"), "Cast, AirPlay, or DLNA when a device speaks more than one"),
+    ProtocolName
+  )
 )
 
 export const audioStream = Flag.integer("audio").pipe(
@@ -84,9 +92,3 @@ export const logLevel = Flag.string("log-level").pipe(
   Flag.optional
 )
 
-export const protocol = Flag.optional(
-  Flag.withSchema(
-    Flag.withDescription(Flag.string("protocol"), "Force a protocol: cast, airplay or dlna"),
-    ProtocolSchema
-  )
-)

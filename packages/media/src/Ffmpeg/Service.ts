@@ -47,6 +47,9 @@ export class Ffmpeg extends Context.Service<Ffmpeg, {
   readonly transcode: (
     options: TranscodeOptions
   ) => Effect.Effect<Stream.Stream<Uint8Array, TranscodeError>, TranscodeError, Scope.Scope>
+  readonly transcodeFile: (
+    options: Args.TranscodeFileOptions
+  ) => Effect.Effect<void, TranscodeError>
   readonly segment: (
     options: SegmentOptions
   ) => Effect.Effect<Stream.Stream<Uint8Array, TranscodeError>, TranscodeError, Scope.Scope>
@@ -107,6 +110,12 @@ export class Ffmpeg extends Context.Service<Ffmpeg, {
       )
     })
 
+    const transcodeFile = Effect.fn("Ffmpeg.transcodeFile")(function*(options: Args.TranscodeFileOptions) {
+      yield* spawner.string(
+        ChildProcess.make("ffmpeg", Args.transcodeFile(options))
+      ).pipe(Effect.mapError((cause) => new TranscodeError({ cause })))
+    })
+
     /**
      * One HLS segment. Scoped like the transcode, so a receiver that abandons
      * a request — which it does constantly while switching variants — takes
@@ -121,7 +130,7 @@ export class Ffmpeg extends Context.Service<Ffmpeg, {
       )
     })
 
-      return { probe, extractCues, transcode, segment } as const
+      return { probe, extractCues, transcode, transcodeFile, segment } as const
     })
   )
 }

@@ -10,6 +10,7 @@
 import {
   Array,
   Console,
+  Data,
   Match,
   Duration,
   Effect,
@@ -24,10 +25,10 @@ import { Argument, Command } from "effect/unstable/cli"
 import * as Flags from "../Cli/Flags.ts"
 import * as Control from "../Cli/Control.ts"
 import * as TimeCode from "../Cli/TimeCode.ts"
-import * as Target from "../Cli/Target.ts"
-import { FetchHttpClient, HttpClient, HttpClientRequest, HttpBody, HttpRouter } from "effect/unstable/http"
+import { FetchHttpClient, HttpClient, HttpRouter } from "effect/unstable/http"
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { NodeCrypto } from "@effect/platform-node"
+import { NodeSuite } from "@castcli/airplay"
 import { FileSystem } from "effect/FileSystem"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -41,6 +42,7 @@ import {
   type MediaStream,
   Height,
   Ipv4,
+  Port,
   type Rung,
   Seconds,
   StreamIndex,
@@ -55,11 +57,13 @@ import {
   ServerBindError,
   AirPlayPinRequiredError
 } from "@castcli/domain"
-import { CastDevice } from "@castcli/domain"
+import { CastDevice, AirPlayDevice } from "@castcli/domain"
 import { Mdns } from "@castcli/platform"
 import {
   Description as DlnaDescription,
-  Renderer as DlnaRenderer
+  Discovery as Ssdp,
+  Renderer as DlnaRenderer,
+  Ssdp as DlnaSsdp
 } from "@castcli/dlna"
 import { Controller as Quality } from "@castcli/quality"
 import { Ladder } from "@castcli/quality"
@@ -69,9 +73,12 @@ import { HttpServer as HttpServerPlatform } from "@castcli/platform"
 import { routes, type SessionState } from "../Server/Routes.ts"
 import * as State from "../State.ts"
 import * as ControlChannel from "../ControlChannel.ts"
+import * as AirPlayPairHttp from "../AirPlayPairHttp.ts"
+import * as AirPlayPlay from "../AirPlayPlay.ts"
 import * as ErrorFormatter from "../ErrorFormatter.ts"
 
 const CAST_SERVICE = "_googlecast._tcp.local"
+const AIRPLAY_SERVICE = "_airplay._tcp.local"
 
 /** Unique only within one MediaInformation, so a constant is enough. */
 const SUBTITLE_TRACK_ID = TrackId.make(1)
@@ -149,6 +156,71 @@ const localAddress = (override: Option.Option<string>) =>
 
 // ------------------------------------------------------------------- scan
 
+/**
+ * A device we could play to, whichever protocol it speaks.
+ *
+ * A tagged union rather than an interface with three implementations. The three
+ * protocols agree on almost nothing — Cast launches an application over TLS,
+ * DLNA posts SOAP, AirPlay speaks HTTP — and the single thing they share, that
+ * the *device* fetches the media from us, is a property of the media server
+ * rather than of any object. A union makes every site that acts on a target
+ * handle all three, and `Match.exhaustive` says so at compile time.
+ */
+type Target = Data.TaggedEnum<{
+  readonly Cast: { readonly device: CastDevice }
+  readonly Dlna: { readonly renderer: DlnaDescription.Renderer; readonly location: string }
+  readonly AirPlay: { readonly device: AirPlayDevice }
+}>
+
+const Target = Data.taggedEnum<Target>()
+
+const describeTarget: (target: Target) => string = Match.type<Target>().pipe(
+  Match.tag("Cast", ({ device }) => `${device.name} — Cast at ${device.ip}:${device.port}`),
+  Match.tag("Dlna", ({ renderer }) => `${renderer.friendlyName} — DLNA`),
+  Match.tag("AirPlay", ({ device }) => `${device.name} — AirPlay at ${device.ip}:${device.port}`),
+  Match.exhaustive
+)
+
+/**
+ * Fetch a renderer's description and read it.
+ *
+ * An SSDP advertisement is only a pointer: it says a device exists and where
+ * its description lives, and nothing about whether it can play video. A media
+ * *server* on a NAS answers the same search, so the description is what tells
+ * a television apart from a filing cabinet.
+ *
+ * A device that fails to answer is dropped rather than reported: it was found
+ * by a broadcast we sent to the whole network, and something on it being
+ * unreachable is not an error in what the person asked for.
+ */
+const describeRenderer = (client: HttpClient.HttpClient, location: string) =>
+  client.get(location).pipe(
+    Effect.flatMap((response) => response.text),
+    Effect.map((xml) => DlnaDescription.parseRenderer(xml, location)),
+    Effect.orElseSucceed(() => Option.none<DlnaDescription.Renderer>())
+  )
+
+/**
+ * Everything on the network we could play to.
+ *
+ * All three sweeps run at once because they are independent waits on different
+ * sockets, and running them sequentially would triple the time.
+ */
+const discoverTargets = (timeout: Duration.Duration) =>
+  Effect.map(
+    Effect.all(
+      [
+        Effect.orElseSucceed(Mdns.discoverWithRetry(CAST_SERVICE, timeout), () => []),
+        Effect.orElseSucceed(
+          Effect.scoped(Ssdp.search(DlnaSsdp.MEDIA_RENDERER, timeout)),
+          () => []
+        ),
+        Effect.orElseSucceed(Mdns.discoverAirPlayWithRetry(AIRPLAY_SERVICE, timeout), () => [])
+      ],
+      { concurrency: 3 }
+    ),
+    ([cast, upnp, airplay]) => ({ cast, upnp, airplay })
+  )
 
 const scan = Command.make(
   "scan",
@@ -158,7 +230,7 @@ const scan = Command.make(
     const client = yield* HttpClient.HttpClient
     yield* Console.log("scanning…")
 
-    const found = yield* Target.discover(config.discoveryTimeout)
+    const found = yield* discoverTargets(config.discoveryTimeout)
 
     yield* Effect.forEach(found.cast, (device) =>
       Console.log(
@@ -180,7 +252,7 @@ const scan = Command.make(
     // whether it can play video at all, live in the description at that URL.
     yield* Effect.forEach(found.upnp, (device) =>
       Effect.flatMap(
-        Target.describeRenderer(client, device.location),
+        describeRenderer(client, device.location),
         Option.match({
           onNone: () => Effect.void,
           onSome: (renderer) =>
@@ -232,8 +304,198 @@ const discoverDevice = Effect.fn("cast.discoverDevice")(function*(
   })
 })
 
+/**
+ * mDNS unicast replies get dropped often enough on a congested network that an
+ * explicit `--ip` is worth having: it skips discovery entirely.
+ */
+const deviceAt = (address: Ipv4, devicePort: number) =>
+  new CastDevice({ name: address, ip: address, port: Port.make(devicePort) })
 
 /**
+ * Find something to play to.
+ *
+ * An explicit address is obeyed exactly and is always Cast — nothing else
+ * listens on a bare address without a description to fetch first. Otherwise the
+ * name decides, and both networks are searched at once, because a person naming
+ * their television does not know or care which protocol it speaks.
+ *
+ * With no name at all the last Cast device is used, which keeps the common case
+ * free of a four second sweep. DLNA has no equivalent shortcut on purpose: its
+ * description URL carries a port the device may change when it reboots, so a
+ * remembered one would be a stale answer rather than a fast one.
+ */
+const labelledDevices = (bag: {
+  readonly cast: ReadonlyArray<CastDevice>
+  readonly airplay: ReadonlyArray<AirPlayDevice>
+  readonly dlna: ReadonlyArray<string>
+}) => [
+  ...bag.cast.map((device) => `${device.name} (Cast)`),
+  ...bag.airplay.map((device) => `${device.name} (AirPlay)`),
+  ...bag.dlna.map((name) => `${name} (DLNA)`)
+]
+
+const resolveTarget = Effect.fn("cast.resolveTarget")(function*(options: {
+  readonly ip: Option.Option<Ipv4>
+  readonly name: Option.Option<string>
+  readonly protocol: Option.Option<Flags.ProtocolName>
+  readonly devicePort: number
+  readonly airplayPort: number
+  readonly timeout: Duration.Duration
+}) {
+  const client = yield* HttpClient.HttpClient
+
+  const remembered = Option.isSome(options.name)
+    ? Option.none<Ipv4>()
+    : yield* State.rememberedDevice
+
+  const shortcut = Option.orElse(options.ip, () => remembered)
+
+  const airPlayAtIp = (address: Ipv4) =>
+    new AirPlayDevice({
+      name: address,
+      ip: address,
+      port: Port.make(options.airplayPort)
+    })
+
+  const fail = (
+    query: string,
+    bag: {
+      readonly cast: ReadonlyArray<CastDevice>
+      readonly airplay: ReadonlyArray<AirPlayDevice>
+      readonly dlna: ReadonlyArray<string>
+    }
+  ) =>
+    Effect.fail(
+      new DeviceNotFoundError({
+        query,
+        found: labelledDevices(bag)
+      })
+    )
+
+  const byIp = (address: Ipv4) =>
+    Option.match(options.protocol, {
+      onSome: (protocol) =>
+        Match.value(protocol).pipe(
+          Match.when(
+            "airplay",
+            () => Effect.succeed(Target.AirPlay({ device: airPlayAtIp(address) }))
+          ),
+          Match.when(
+            "cast",
+            () => Effect.succeed(Target.Cast({ device: deviceAt(address, options.devicePort) }))
+          ),
+          Match.when(
+            "dlna",
+            () =>
+              Effect.fail(
+                new DeviceNotFoundError({
+                  query: `${address} (DLNA)`,
+                  found: []
+                })
+              )
+          ),
+          Match.exhaustive
+        ),
+      onNone: () =>
+        // Bare --ip stays Cast. Dual-stack TVs (this Xiaomi) already play
+        // HLS that way. AirPlay is --protocol airplay, which skips this.
+        Effect.succeed(Target.Cast({ device: deviceAt(address, options.devicePort) }))
+    })
+
+  const byName = Effect.gen(function*() {
+    yield* Console.log("scanning…")
+    const found = yield* discoverTargets(options.timeout)
+    const wanted = Option.map(options.name, (name) => name.toLowerCase())
+    const matches = (candidate: string) =>
+      Option.match(wanted, {
+        onNone: () => true,
+        onSome: (name) => candidate.toLowerCase().includes(name)
+      })
+    const query = Option.getOrElse(options.name, () => "(first available)")
+
+    const described = yield* Effect.forEach(
+      found.upnp,
+      (device) =>
+        Effect.map(describeRenderer(client, device.location), (one) =>
+          Option.map(one, (renderer) => ({
+            renderer,
+            location: device.location
+          }))),
+      { concurrency: 4 }
+    )
+    const dlna = Array.getSomes(described)
+    const bag = {
+      cast: found.cast,
+      airplay: found.airplay,
+      dlna: dlna.map((one) => one.renderer.friendlyName)
+    }
+
+    const pickCast = () =>
+      Option.match(Array.findFirst(found.cast, (candidate) => matches(candidate.name)), {
+        onSome: (device) => Effect.succeed(Target.Cast({ device })),
+        onNone: () => fail(`${query} (Cast)`, bag)
+      })
+
+    const pickAirPlay = () =>
+      Option.match(
+        Array.findFirst(found.airplay, (candidate) => matches(candidate.name)),
+        {
+          onSome: (device) => Effect.succeed(Target.AirPlay({ device })),
+          onNone: () => fail(`${query} (AirPlay)`, bag)
+        }
+      )
+
+    const pickDlna = () =>
+      Option.match(
+        Array.findFirst(dlna, (candidate) => matches(candidate.renderer.friendlyName)),
+        {
+          onSome: (candidate) => Effect.succeed(Target.Dlna(candidate)),
+          onNone: () => fail(`${query} (DLNA)`, bag)
+        }
+      )
+
+    const pickDefault = () =>
+      Option.match(Array.findFirst(found.cast, (candidate) => matches(candidate.name)), {
+        onSome: (device) => Effect.succeed(Target.Cast({ device })),
+        onNone: () =>
+          Option.match(
+            Array.findFirst(
+              found.airplay,
+              (candidate) => matches(candidate.name) && candidate.supportsVideo
+            ),
+            {
+              onSome: (device) => Effect.succeed(Target.AirPlay({ device })),
+              onNone: () =>
+                Option.match(
+                  Array.findFirst(dlna, (candidate) => matches(candidate.renderer.friendlyName)),
+                  {
+                    onSome: (candidate) => Effect.succeed(Target.Dlna(candidate)),
+                    onNone: () => fail(query, bag)
+                  }
+                )
+            }
+          )
+      })
+
+    return yield* Option.match(options.protocol, {
+      onSome: (protocol) =>
+        Match.value(protocol).pipe(
+          Match.when("cast", pickCast),
+          Match.when("airplay", pickAirPlay),
+          Match.when("dlna", pickDlna),
+          Match.exhaustive
+        ),
+      onNone: pickDefault
+    })
+  })
+
+  return yield* Option.match(shortcut, {
+    onSome: byIp,
+    onNone: () => byName
+  })
+})
+
+
 /**
  * Play to a DLNA renderer and follow it until it stops.
  *
@@ -401,11 +663,9 @@ const play = Command.make(
     logLevel: Flags.logLevel
   },
   Effect.fn(function*({ audio, device, file, progressive, ip, seek, subs, pin, protocol, logLevel }) {
-    // Apply log level if provided
     const levelString = Option.getOrElse(logLevel, () => "info")
     yield* Effect.logDebug(`Log level: ${levelString}`)
-    
-    
+
     const config = yield* AppConfig
     const ffmpeg = yield* Ffmpeg
     // `Argument.file({ mustExist: true })` already proved it is there.
@@ -535,13 +795,13 @@ const play = Command.make(
       cues
     })
 
-    const target = yield* Target.resolve({
+    const target = yield* resolveTarget({
       ip,
       name: device,
+      protocol,
       devicePort: config.devicePort,
       airplayPort: config.airplayPort,
-      timeout: config.discoveryTimeout,
-      protocol
+      timeout: config.discoveryTimeout
     })
 
     // Only a Cast address is worth remembering. A DLNA renderer is reached
@@ -721,7 +981,7 @@ const play = Command.make(
         `\n  audio    ${describeAudio(chosenAudio)}` +
         `\n  quality  adaptive — ${ladder.map(describeRung).join(" | ")}` +
         `\n  serving  ${baseUrl}/stream` +
-        `\n  device   ${Target.describe(target)}\n`
+        `\n  device   ${describeTarget(target)}\n`
     )
 
     // One attempt at a session: connect, load, and pump status until the socket
@@ -910,9 +1170,9 @@ const play = Command.make(
       )
       )
 
-    // The one place the three protocols diverge. Everything above — probing the
+    // The one place the two protocols diverge. Everything above — probing the
     // file, choosing the tracks, extracting the subtitles, serving the media —
-    // is the same work, because all three are pull models and the device does the
+    // is the same work, because both are pull models and the device does the
     // fetching either way.
     yield* Match.value(target).pipe(
       Match.tag("Cast", ({ device: castDevice }) =>
@@ -982,19 +1242,16 @@ const play = Command.make(
           Effect.gen(function*() {
             const AirPlay = yield* Effect.promise(() => import("@castcli/airplay"))
             const { Redacted } = yield* Effect.promise(() => import("effect"))
-            const { Session: AirPlaySession, PairSetup, Suite, NodeSuite } = AirPlay
+            const { PairSetup, Suite } = AirPlay
             const deviceIp = Ipv4.make(airplayDevice.ip)
             const deviceId = Option.fromNullishOr(airplayDevice.deviceId)
 
             const storedPairing = yield* State.getAirPlayPairing(deviceIp, deviceId)
+            const wire = AirPlayPairHttp.connect(airplayDevice.ip, airplayDevice.port)
 
             const pairing = yield* Option.match(storedPairing, {
               onNone: () => Effect.gen(function*() {
                 yield* Effect.logInfo(`Starting AirPlay pair-setup for ${airplayDevice.ip}`)
-                
-                const airplayPin = yield* resolveAirPlayPin(pin, config.airplayPin)
-                yield* Effect.logDebug(`AirPlay PIN resolved: ${airplayPin.replace(/./g, "*")}`)
-
                 const suite = yield* Effect.provide(Suite.Suite, Layer.provide(NodeSuite, NodeCrypto.layer))
                 const identity = yield* Effect.gen(function*() {
                   const keys = yield* suite.ed25519KeyPair
@@ -1003,123 +1260,65 @@ const play = Command.make(
                   return { identifier: id, keys }
                 }).pipe(Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer)))
 
-                const m1Bytes = yield* PairSetup.m1({ flags: [] }).pipe(
-                  Effect.tap((bytes) => Effect.logDebug(`Pair-setup M1: ${bytes.length}B`)),
-                  Effect.withSpan("airplay.pair-setup.m1")
-                )
-                
-                const client = yield* HttpClient.HttpClient
-                const pairSetupUrl = `http://${airplayDevice.ip}:${airplayDevice.port}/pair-setup`
+                const pairSetupPath = "/pair-setup"
 
-                const m2Response = yield* client.execute(
-                  HttpClientRequest.post(pairSetupUrl, { body: HttpBody.uint8Array(m1Bytes) })
-                ).pipe(
-                  Effect.flatMap((r) =>
-                    Effect.gen(function*() {
-                      const buf = yield* r.arrayBuffer
-                      yield* Effect.logDebug(
-                        `Pair-setup M2: HTTP ${r.status}, ${buf.byteLength}B`
-                      )
-                      return new Uint8Array(buf)
+                // Same TCP socket for /info, pin-start, and every pair-setup
+                // message. A new connection is HTTP 470 and an empty M2.
+                yield* wire.get("/info")
+                const pinStart = yield* wire.post("/pair-pin-start", new Uint8Array())
+                yield* Console.log(`pair-pin-start HTTP ${pinStart.status}`)
+
+                const m1Bytes = yield* PairSetup.m1({ flags: [] })
+                const m2Http = yield* wire.post(pairSetupPath, m1Bytes)
+                yield* Console.log(`pair-setup M2 HTTP ${m2Http.status} ${m2Http.body.byteLength} bytes`)
+                const m2Response = m2Http.body
+                yield* Effect.when(
+                  Effect.fail(
+                    new AirPlayPlay.AirPlayHttpError({
+                      message:
+                        `pair-setup M2 refused: HTTP ${m2Http.status}, ${m2Response.byteLength} bytes (need 200 and a HAP body on the pin-start socket)`
                     })
                   ),
-                  Effect.withSpan("airplay.pair-setup.m1-m2", {
-                    attributes: {
-                      "airplay.device.ip": airplayDevice.ip,
-                      "airplay.message": "M1-M2",
-                      "http.method": "POST",
-                      "http.url": pairSetupUrl
-                    }
-                  })
+                  Effect.succeed(m2Http.status !== 200 || m2Response.byteLength < 16)
                 )
+
+                yield* Console.log("AirPlay PIN should now be on the TV")
+                const airplayPin = yield* resolveAirPlayPin(pin, config.airplayPin)
 
                 const { request: m3Bytes, state: proved } = yield* PairSetup.m3(m2Response, { pin: airplayPin }).pipe(
-                  Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer)),
-                  Effect.tap(({ request }) =>
-                    Effect.logDebug(`Pair-setup M3: ${request.length}B (PIN verified)`)
-                  ),
-                  Effect.withSpan("airplay.pair-setup.m3")
+                  Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
                 )
-                
-                const m4Response = yield* client.execute(
-                  HttpClientRequest.post(pairSetupUrl, { body: HttpBody.uint8Array(m3Bytes) })
-                ).pipe(
-                  Effect.flatMap((r) =>
-                    Effect.gen(function*() {
-                      const buf = yield* r.arrayBuffer
-                      yield* Effect.logDebug(
-                        `Pair-setup M4: HTTP ${r.status}, ${buf.byteLength}B`
-                      )
-                      return new Uint8Array(buf)
-                    })
-                  ),
-                  Effect.withSpan("airplay.pair-setup.m3-m4", {
-                    attributes: {
-                      "airplay.device.ip": airplayDevice.ip,
-                      "airplay.message": "M3-M4",
-                      "http.method": "POST",
-                      "http.url": pairSetupUrl
-                    }
-                  })
-                )
+                    const m4Http = yield* wire.post(pairSetupPath, m3Bytes)
+                    yield* Console.log(`pair-setup M4 HTTP ${m4Http.status} ${m4Http.body.byteLength} bytes`)
+                    const m4Response = m4Http.body
 
-                const { request: m5Bytes, state: exchanged } = yield* PairSetup.m5(m4Response, { state: proved, identity }).pipe(
-                  Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer)),
-                  Effect.tap(({ request }) =>
-                    Effect.logDebug(`Pair-setup M5: ${request.length}B (identity exchanged)`)
-                  ),
-                  Effect.withSpan("airplay.pair-setup.m5")
-                )
-                
-                const m6Response = yield* client.execute(
-                  HttpClientRequest.post(pairSetupUrl, { body: HttpBody.uint8Array(m5Bytes) })
-                ).pipe(
-                  Effect.flatMap((r) =>
-                    Effect.gen(function*() {
-                      const buf = yield* r.arrayBuffer
-                      yield* Effect.logDebug(
-                        `Pair-setup M6: HTTP ${r.status}, ${buf.byteLength}B`
-                      )
-                      return new Uint8Array(buf)
-                    })
-                  ),
-                  Effect.withSpan("airplay.pair-setup.m5-m6", {
-                    attributes: {
-                      "airplay.device.ip": airplayDevice.ip,
-                      "airplay.message": "M5-M6",
-                      "http.method": "POST",
-                      "http.url": pairSetupUrl
-                    }
-                  })
-                )
-
-                const pairSetupResult = yield* PairSetup.finish(m6Response, exchanged).pipe(
-                  Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer)),
-                  Effect.tap((result) =>
-                    Effect.logInfo(
-                      `Pair-setup finished: accessory=${result.accessory.identifier.length}B id, ` +
-                        `publicKey=${result.accessory.publicKey.length}B`
+                    const { request: m5Bytes, state: exchanged } = yield* PairSetup.m5(m4Response, { state: proved, identity }).pipe(
+                      Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
                     )
-                  ),
-                  Effect.withSpan("airplay.pair-setup.finish")
-                )
+                    const m6Http = yield* wire.post(pairSetupPath, m5Bytes)
+                    yield* Console.log(`pair-setup M6 HTTP ${m6Http.status} ${m6Http.body.byteLength} bytes`)
+                    const m6Response = m6Http.body
 
-                const revealedValue = Redacted.value(identity.keys.privateKey)
-                const privateKeyBytes = new Uint8Array(revealedValue.buffer ?? revealedValue)
+                    const pairSetupResult = yield* PairSetup.finish(m6Response, exchanged).pipe(
+                      Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
+                    )
 
-                const newPairing = new State.AirPlayPairing({
-                  deviceIp,
-                  ...(Option.isSome(deviceId) ? { deviceId: Option.getOrThrow(deviceId) } : {}),
-                  controllerIdentifier: identity.identifier,
-                  controllerPublicKey: identity.keys.publicKey,
-                  controllerPrivateKey: privateKeyBytes,
-                  accessoryIdentifier: pairSetupResult.accessory.identifier,
-                  accessoryPublicKey: pairSetupResult.accessory.publicKey
-                })
+                    const revealedValue = Redacted.value(identity.keys.privateKey)
+                    const privateKeyBytes = Uint8Array.from(revealedValue)
 
-                yield* State.storeAirPlayPairing(newPairing)
-                yield* Effect.logInfo(`Pairing stored successfully for ${deviceIp}`)
-                return newPairing
+                    const newPairing = new State.AirPlayPairing({
+                      deviceIp,
+                      ...(Option.isSome(deviceId) ? { deviceId: Option.getOrThrow(deviceId) } : {}),
+                      controllerIdentifier: identity.identifier,
+                      controllerPublicKey: identity.keys.publicKey,
+                      controllerPrivateKey: privateKeyBytes,
+                      accessoryIdentifier: pairSetupResult.accessory.identifier,
+                      accessoryPublicKey: pairSetupResult.accessory.publicKey
+                    })
+
+                    yield* State.storeAirPlayPairing(newPairing)
+                    yield* Effect.logInfo(`Pairing stored successfully for ${deviceIp}`)
+                    return newPairing
               }).pipe(
                 Effect.withSpan("airplay.pair-setup", {
                   attributes: {
@@ -1128,33 +1327,23 @@ const play = Command.make(
                   }
                 })
               ),
-              onSome: (existing) => Effect.succeed(existing)
+              onSome: (existing) =>
+                Effect.gen(function*() {
+                  yield* Console.log(`reusing pairing ${existing.deviceId ?? existing.deviceIp}`)
+                  return existing
+                })
             })
 
-            const url = useHls ? `${baseUrl}/master.m3u8` : `${baseUrl}/stream?o=${resumed}`
-            yield* AirPlaySession.play(airplayDevice, {
-              contentLocation: url,
-              startPosition: useHls ? Seconds.make(0) : resumed,
-              pairing: {
-                record: {
-                  controller: {
-                    identifier: new TextEncoder().encode(pairing.controllerIdentifier),
-                    publicKey: pairing.controllerPublicKey
-                  },
-                  accessory: {
-                    identifier: pairing.accessoryIdentifier,
-                    publicKey: pairing.accessoryPublicKey
-                  }
-                },
-                controllerIdentity: {
-                  identifier: pairing.controllerIdentifier,
-                  keys: {
-                    publicKey: pairing.controllerPublicKey,
-                    privateKey: Redacted.make(pairing.controllerPrivateKey)
-                  }
-                }
-              }
-            }).pipe(Effect.provide(NodeSuite))
+            const progressiveUrl = `${baseUrl}/stream?o=${resumed}`
+            // const hlsUrl = `${baseUrl}/master.m3u8`
+            yield* Console.log(`airplay url QUEUE progressive ${progressiveUrl}`)
+            yield* AirPlayPlay.play({
+              wire,
+              device: airplayDevice,
+              pairing,
+              contentLocation: progressiveUrl,
+              startPosition: 0
+            })
             yield* Console.log(`playing on ${airplayDevice.name}`)
           })
         )),
@@ -1280,7 +1469,8 @@ const MainLayer = Layer.mergeAll(
   // DLNA is request-response over HTTP: fetching a device's description and
   // posting SOAP at it both need a client, where Cast needs only a socket.
   FetchHttpClient.layer,
-  NodeServices.layer
+  NodeServices.layer,
+  NodeSuite.pipe(Layer.provide(NodeCrypto.layer))
 )
 
 cast.pipe(
@@ -1292,7 +1482,9 @@ cast.pipe(
   // does not need thirty frames of Effect internals. The failure still
   // propagates, so the exit code stays non-zero.
   //
-  // Use the error formatter which handles Schema issues with their full path.
+  // Falling back to the tag matters: an Effect built-in error can carry an
+  // empty message, and `error:` followed by nothing tells a person less than no
+  // output at all would.
   Effect.tapError((error) =>
     Console.error(`error: ${ErrorFormatter.formatError(error)}`)
   ),
