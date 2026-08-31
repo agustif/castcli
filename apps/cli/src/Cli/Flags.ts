@@ -70,6 +70,6 @@ export const seek = Flag.string("seek").pipe(
 )
 
 export const airplayPin = Flag.string("pin").pipe(
-  Flag.withDescription("AirPlay pairing PIN (or AIRPLAY_PIN env)"),
+  Flag.withDescription("AirPlay pairing PIN (or set AIRPLAY_PIN; prompts if neither)"),
   Flag.optional
 )

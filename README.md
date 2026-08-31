@@ -55,7 +55,7 @@ Stream a file to your TV. The TV fetches the media from a local HTTP server.
 - `--subs <index>` — Subtitle stream index (default: preferred language, most cues)
 - `--seek <time>` — Start position as seconds, `mm:ss`, or `h:mm:ss` (default: resume where you stopped)
 - `--progressive` — Serve single-quality progressive stream instead of HLS (default: HLS)
-- `--pin <code>` — AirPlay pairing PIN (or set `AIRPLAY_PIN` environment variable)
+- `--pin <code>` — AirPlay pairing PIN (or set `AIRPLAY_PIN`; prompts if neither)
 
 **Examples:**
 
@@ -102,10 +102,13 @@ These attach to the running session without restarting playback.
 
 ## AirPlay
 
-AirPlay devices require pairing on first use. Provide a PIN with `--pin` or the `AIRPLAY_PIN` environment variable.
+AirPlay devices require pairing on first use. When run interactively, the CLI prompts for the PIN. You can also provide it via `--pin` flag or `AIRPLAY_PIN` environment variable.
 
 ```sh
-# Pair with an Apple TV (you'll see a PIN on screen)
+# Interactive: CLI prompts for the PIN shown on screen
+cast play movie.mkv --device "Apple TV"
+
+# Or provide the PIN directly
 cast play movie.mkv --device "Apple TV" --pin 1234
 
 # Or set AIRPLAY_PIN for subsequent plays

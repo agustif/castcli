@@ -240,18 +240,22 @@ export const play = (
                 ...extra
               ],
               {
-                // The player traps SIGTERM to close its scopes tidily, and a
-                // finalizer that hangs there leaves it alive — which then keeps
-                // answering discovery and breaks whichever test runs next.
-                // Politeness first, then force.
+                // The bundle, not the sources through tsx: it starts in 0.1s where
+                // tsx takes 0.7s, and it is what `npm i -g` installs — so this
+                // tests what people actually run. `npm run test:e2e` builds it.
+                //
+                // One process, too. `npx tsx` spawns tsx which spawns node, and
+                // killing the top of that tree orphans the bottom: nine stray
+                // players accumulated across runs before that was noticed, holding
+                // ports and CPU until the suite starved.
                 forceKillAfter: "2 seconds",
                 extendEnv: true,
                 env: {
                   CAST_DEVICE_PORT: String(device.port),
                   AIRPLAY_DEVICE_PORT: String(device.port),
+                  AIRPLAY_PIN: "3939",
                   CAST_ADVERTISE_HOST: "127.0.0.1",
                   XDG_STATE_HOME: stateDirectory,
-                  AIRPLAY_PIN: "3939",
                   ...(skipControlChannel ? { SKIP_CONTROL_CHANNEL: "1" } : {})
                 }
             }
