@@ -165,4 +165,61 @@ describe("State", () => {
         assert.isTrue(raw.includes("controllerPublicKey"))
       }).pipe(Effect.provide(NodeServices.layer))
     ))
+
+  it.effect("rejects IP fallback when deviceId does not match", () =>
+    withStore(() =>
+      Effect.gen(function*() {
+        const deviceA = new State.AirPlayPairing({
+          deviceIp: TV,
+          deviceId: "62:8A:09:C1:74:B7",
+          controllerIdentifier: "test-controller-a",
+          controllerPublicKey: new Uint8Array(32).fill(1),
+          controllerPrivateKey: new Uint8Array(32).fill(2),
+          accessoryIdentifier: new TextEncoder().encode("62:8A:09:C1:74:B7"),
+          accessoryPublicKey: new Uint8Array(32).fill(3)
+        })
+        yield* State.storeAirPlayPairing(deviceA)
+        const loaded = yield* State.getAirPlayPairing(TV, Option.some("62:AB:10:55:D7:24"))
+        assert.isTrue(Option.isNone(loaded))
+      })
+    ))
+
+  it.effect("allows IP fallback when IP record has no deviceId", () =>
+    withStore(() =>
+      Effect.gen(function*() {
+        const deviceNoId = new State.AirPlayPairing({
+          deviceIp: TV,
+          controllerIdentifier: "test-controller-legacy",
+          controllerPublicKey: new Uint8Array(32).fill(1),
+          controllerPrivateKey: new Uint8Array(32).fill(2),
+          accessoryIdentifier: new TextEncoder().encode("legacy-device"),
+          accessoryPublicKey: new Uint8Array(32).fill(3)
+        })
+        yield* State.storeAirPlayPairing(deviceNoId)
+        const loaded = yield* State.getAirPlayPairing(TV, Option.some("62:AB:10:55:D7:24"))
+        assert.isTrue(Option.isSome(loaded))
+        const value = Option.getOrThrow(loaded)
+        assert.strictEqual(value.controllerIdentifier, "test-controller-legacy")
+      })
+    ))
+
+  it.effect("allows IP fallback when deviceId matches", () =>
+    withStore(() =>
+      Effect.gen(function*() {
+        const device = new State.AirPlayPairing({
+          deviceIp: TV,
+          deviceId: "62:AB:10:55:D7:24",
+          controllerIdentifier: "test-controller-match",
+          controllerPublicKey: new Uint8Array(32).fill(1),
+          controllerPrivateKey: new Uint8Array(32).fill(2),
+          accessoryIdentifier: new TextEncoder().encode("62:AB:10:55:D7:24"),
+          accessoryPublicKey: new Uint8Array(32).fill(3)
+        })
+        yield* State.storeAirPlayPairing(device)
+        const loaded = yield* State.getAirPlayPairing(TV, Option.some("62:AB:10:55:D7:24"))
+        assert.isTrue(Option.isSome(loaded))
+        const value = Option.getOrThrow(loaded)
+        assert.strictEqual(value.controllerIdentifier, "test-controller-match")
+      })
+    ))
 })
