@@ -218,9 +218,6 @@ export const routes = (options: MediaServerOptions) =>
                     rung,
                     audioBitrate: options.audioBitrate
                   }),
-                  // Counted like the progressive stream: the numbers are not
-                  // used to choose quality here, but they are the same
-                  // measurement and the log is worth having.
                   (source) =>
                     HttpServerResponse.stream(
                       source.pipe(Stream.tap((chunk) => options.onBytes(chunk.length))),
