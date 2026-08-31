@@ -203,4 +203,99 @@ describe("PlaybackInfo parser", () => {
         assert.strictEqual(info.readyToPlay, false)
       }))
   })
+
+  describe("binary plist", () => {
+    it.effect("decodes complete binary playback-info", () =>
+      Effect.gen(function*() {
+        const binary = new Uint8Array([
+          98, 112, 108, 105, 115, 116, 48, 48, 212, 1, 2, 3, 4, 5, 6, 7, 8, 88,
+          100, 117, 114, 97, 116, 105, 111, 110, 88, 112, 111, 115, 105, 116,
+          105, 111, 110, 84, 114, 97, 116, 101, 91, 114, 101, 97, 100, 121, 84,
+          111, 80, 108, 97, 121, 35, 64, 94, 32, 0, 0, 0, 0, 0, 16, 42, 16, 1, 9,
+          8, 17, 26, 35, 40, 52, 61, 63, 65, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0,
+          0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 66
+        ])
+
+        const info = yield* PlaybackInfo.parse(binary)
+
+        assert.strictEqual(info.duration, 120.5)
+        assert.strictEqual(info.position, 42.0)
+        assert.strictEqual(info.rate, 1)
+        assert.strictEqual(info.readyToPlay, true)
+      }))
+
+    it.effect("decodes binary with false readyToPlay", () =>
+      Effect.gen(function*() {
+        const binary = new Uint8Array([
+          98, 112, 108, 105, 115, 116, 48, 48, 212, 1, 2, 3, 4, 5, 5, 5, 6, 88,
+          100, 117, 114, 97, 116, 105, 111, 110, 88, 112, 111, 115, 105, 116,
+          105, 111, 110, 84, 114, 97, 116, 101, 91, 114, 101, 97, 100, 121, 84,
+          111, 80, 108, 97, 121, 16, 0, 8, 8, 17, 26, 35, 40, 52, 54, 0, 0, 0, 0,
+          0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+          0, 0, 0, 55
+        ])
+
+        const info = yield* PlaybackInfo.parse(binary)
+
+        assert.strictEqual(info.duration, 0)
+        assert.strictEqual(info.position, 0)
+        assert.strictEqual(info.rate, 0)
+        assert.strictEqual(info.readyToPlay, false)
+      }))
+
+    it.effect("decodes binary with missing optional fields", () =>
+      Effect.gen(function*() {
+        const binary = new Uint8Array([
+          98, 112, 108, 105, 115, 116, 48, 48, 209, 1, 2, 84, 114, 97, 116, 101,
+          16, 1, 8, 11, 16, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0,
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 18
+        ])
+
+        const info = yield* PlaybackInfo.parse(binary)
+
+        assert.strictEqual(info.duration, undefined)
+        assert.strictEqual(info.position, undefined)
+        assert.strictEqual(info.rate, 1)
+        assert.strictEqual(info.readyToPlay, undefined)
+      }))
+
+    it.effect("decodes binary with decimal positions", () =>
+      Effect.gen(function*() {
+        const binary = new Uint8Array([
+          98, 112, 108, 105, 115, 116, 48, 48, 212, 1, 2, 3, 4, 5, 6, 7, 8, 88,
+          100, 117, 114, 97, 116, 105, 111, 110, 88, 112, 111, 115, 105, 116,
+          105, 111, 110, 84, 114, 97, 116, 101, 91, 114, 101, 97, 100, 121, 84,
+          111, 80, 108, 97, 121, 35, 64, 172, 32, 64, 0, 0, 0, 0, 35, 64, 147, 74,
+          68, 155, 165, 227, 84, 35, 63, 248, 0, 0, 0, 0, 0, 0, 9, 8, 17, 26, 35,
+          40, 52, 61, 70, 79, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 9, 0,
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 80
+        ])
+
+        const info = yield* PlaybackInfo.parse(binary)
+
+        assert.strictEqual(info.duration, 3600.125)
+        assert.strictEqual(info.position, 1234.567)
+        assert.strictEqual(info.rate, 1.5)
+        assert.strictEqual(info.readyToPlay, true)
+      }))
+
+    it.effect("fails on invalid binary plist", () =>
+      Effect.gen(function*() {
+        const binary = new Uint8Array([98, 112, 108, 105, 115, 116, 48, 48, 0, 0, 0])
+
+        const error = yield* Effect.flip(PlaybackInfo.parse(binary))
+
+        assert.instanceOf(error, PlaybackInfo.MalformedPlaybackInfo)
+        assert.include(error.message, "not a valid binary plist")
+      }))
+
+    it.effect("decodes binary plist string encoding", () =>
+      Effect.gen(function*() {
+        const binaryStr = "bplist00\xd4\x01\x02\x03\x04\x05\x06\x07\x08Xduration..."
+
+        const error = yield* Effect.flip(PlaybackInfo.parse(binaryStr))
+
+        assert.instanceOf(error, PlaybackInfo.MalformedPlaybackInfo)
+      }))
+  })
 })

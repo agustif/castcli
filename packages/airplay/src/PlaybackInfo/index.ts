@@ -1,10 +1,11 @@
 // PlaybackInfo plist parsing with Effect Schema and fast-xml-parser.
 //
-// Replaces regex scraping with proper XML decoding. Returns a typed result
-// or fails with a domain error on garbage input.
+// Replaces regex scraping with proper XML or binary plist decoding. Returns
+// a typed result or fails with a domain error on garbage input.
 
 import { Effect, Option, Schema } from "effect"
 import { XMLParser, XMLValidator } from "fast-xml-parser"
+import { parseBinary } from "plist"
 
 /**
  * Parse Error: the playback-info response is not valid XML plist.
@@ -139,11 +140,80 @@ export interface PlaybackInfo {
 }
 
 /**
- * Parse GET /playback-info XML plist response.
+ * Detect if input is binary plist (bplist00 magic header).
+ */
+const isBinaryPlist = (input: string | Uint8Array): boolean =>
+  typeof input === "string"
+    ? input.startsWith("bplist00")
+    : (() => {
+      const header = new Uint8Array(input.slice(0, 8))
+      return (
+        header[0] === 98 && // b
+        header[1] === 112 && // p
+        header[2] === 108 && // l
+        header[3] === 105 && // i
+        header[4] === 115 && // s
+        header[5] === 116 && // t
+        header[6] === 48 && // 0
+        header[7] === 48 // 0
+      )
+    })()
+
+/**
+ * Schema for binary plist dictionary result.
+ */
+const BinaryPlistDict = Schema.Record(Schema.String, Schema.Unknown)
+
+/**
+ * Parse binary plist to dict Effect.
+ */
+const parseBinaryPlistEffect = (
+  input: string | Uint8Array
+): Effect.Effect<Record<string, unknown>, MalformedPlaybackInfo> =>
+  Effect.gen(function* () {
+    const bytes = typeof input === "string" ? new TextEncoder().encode(input) : new Uint8Array(input)
+    const result = yield* Effect.try({
+      try: () => parseBinary(bytes),
+      catch: () => new MalformedPlaybackInfo({ reason: "not a valid binary plist" })
+    })
+    return yield* Option.match(Schema.decodeUnknownOption(BinaryPlistDict)(result), {
+      onNone: () => Effect.fail(new MalformedPlaybackInfo({ reason: "binary plist is not a dict" })),
+      onSome: (dict) => Effect.succeed(dict)
+    })
+  })
+
+/**
+ * Extract PlaybackInfo fields from a parsed plist dictionary.
  *
- * Decodes the response body with Effect Schema instead of regex. Returns
- * PlaybackInfo with defined fields for values present in the plist, or
- * fails with MalformedPlaybackInfo on malformed XML or unexpected structure.
+ * For binary plists, fields are directly accessed as native types.
+ * For XML plists, fields are extracted from the plist structure using
+ * the extractReal and extractBoolean helpers.
+ */
+const extractPlaybackInfo = (dict: Record<string, unknown>, isXml = false): PlaybackInfo =>
+  isXml
+    ? {
+      duration: Option.getOrUndefined(extractReal(dict, "duration")),
+      position: Option.getOrUndefined(extractReal(dict, "position")),
+      rate: Option.getOrUndefined(extractReal(dict, "rate")),
+      readyToPlay: Option.getOrUndefined(extractBoolean(dict, "readyToPlay"))
+    }
+    : {
+      duration: typeof dict["duration"] === "number" ? dict["duration"] : undefined,
+      position: typeof dict["position"] === "number" ? dict["position"] : undefined,
+      rate: typeof dict["rate"] === "number" ? dict["rate"] : undefined,
+      readyToPlay: typeof dict["readyToPlay"] === "boolean" ? dict["readyToPlay"] : undefined
+    }
+
+/**
+ * Parse GET /playback-info plist response (XML or binary).
+ *
+ * Decodes the response body with Effect Schema for XML or the plist library
+ * for binary plists. Returns PlaybackInfo with defined fields for values
+ * present in the plist, or fails with MalformedPlaybackInfo on malformed
+ * input or unexpected structure.
+ *
+ * Binary plists are auto-detected by the bplist00 magic header. XML plists
+ * are parsed with fast-xml-parser.
  *
  * @example
  * ```ts
@@ -161,20 +231,16 @@ export interface PlaybackInfo {
  * // => { duration: 120.5, position: 42.0, rate: 1, readyToPlay: true }
  * ```
  */
-export const parse = (xml: string): Effect.Effect<PlaybackInfo, MalformedPlaybackInfo> =>
-  Option.match(parseDocument(xml), {
-    onNone: () => Effect.fail(new MalformedPlaybackInfo({ reason: "not valid XML" })),
-    onSome: (document) =>
-      Option.match(decodePlistDict(document), {
-        onNone: () => Effect.fail(new MalformedPlaybackInfo({ reason: "not a plist dict" })),
-        onSome: (plist) => {
-          const dict = plist.plist.dict
-          return Effect.succeed({
-            duration: Option.getOrUndefined(extractReal(dict, "duration")),
-            position: Option.getOrUndefined(extractReal(dict, "position")),
-            rate: Option.getOrUndefined(extractReal(dict, "rate")),
-            readyToPlay: Option.getOrUndefined(extractBoolean(dict, "readyToPlay"))
+export const parse = (input: string | Uint8Array): Effect.Effect<PlaybackInfo, MalformedPlaybackInfo> =>
+  isBinaryPlist(input)
+    ? Effect.map(parseBinaryPlistEffect(input), (dict) => extractPlaybackInfo(dict, false))
+    : typeof input === "string"
+      ? Option.match(parseDocument(input), {
+        onNone: () => Effect.fail(new MalformedPlaybackInfo({ reason: "not valid XML" })),
+        onSome: (document) =>
+          Option.match(decodePlistDict(document), {
+            onNone: () => Effect.fail(new MalformedPlaybackInfo({ reason: "not a plist dict" })),
+            onSome: (plist) => Effect.succeed(extractPlaybackInfo(plist.plist.dict, true))
           })
-        }
       })
-  })
+      : Effect.fail(new MalformedPlaybackInfo({ reason: "input must be string or Uint8Array" }))
