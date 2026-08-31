@@ -12,7 +12,6 @@
 
 import { assert, describe, it } from "@effect/vitest"
 import {
-  controlCommand,
   eventually,
   makeSample,
   noStrayPlayers,

@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { Seconds } from "@castcli/domain"
 
 const ControlRequest = Schema.TaggedUnion({
