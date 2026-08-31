@@ -13,7 +13,7 @@
 // eslint-disable-next-line castcli/no-try-catch -- socket cleanup best-effort, no Effect needed
 // eslint-disable-next-line castcli/no-promise -- node:net callbacks require Promise wrapping
 
-import { Effect, Match, Option, Schema } from "effect"
+import { Duration, Effect, Match, Option, Schema } from "effect"
 import * as net from "node:net"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -86,12 +86,9 @@ export const startServer = (handlers: ControlHandlers) =>
   Effect.gen(function*() {
     const sockPath = socketPath()
 
-    // Remove stale socket - be more aggressive about cleanup
+    // Remove stale socket
     try {
-      const stats = fs.statSync(sockPath)
-      if (stats.isSocket()) {
-        fs.unlinkSync(sockPath)
-      }
+      fs.unlinkSync(sockPath)
     } catch {
       // fine if it doesn't exist
     }
@@ -159,12 +156,7 @@ export const startServer = (handlers: ControlHandlers) =>
 
     yield* Effect.promise(() =>
       new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error(`Control channel listen timeout after 5s on ${sockPath}`))
-        }, 5000)
-        
         const errorHandler = (err: Error) => {
-          clearTimeout(timeout)
           server.removeListener("error", errorHandler)
           reject(err)
         }
@@ -172,11 +164,15 @@ export const startServer = (handlers: ControlHandlers) =>
         server.on("error", errorHandler)
         
         server.listen(sockPath, () => {
-          clearTimeout(timeout)
           server.removeListener("error", errorHandler)
           resolve()
         })
       })
+    ).pipe(
+      Effect.timeout(Duration.seconds(5)),
+      Effect.catchTag("TimeoutException", () =>
+        Effect.fail(new Error(`Control channel listen timeout after 5s on ${sockPath}`))
+      )
     )
 
     const shutdown = Effect.promise(() =>

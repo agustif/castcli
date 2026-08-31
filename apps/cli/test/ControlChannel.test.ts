@@ -33,9 +33,7 @@ describe("ControlChannel request/response schemas", () => {
       const decoded = yield* decodeRequest(encoded)
 
       assert.strictEqual(decoded._tag, "Seek")
-      if (decoded._tag === "Seek") {
-        assert.strictEqual(decoded.toSeconds, 42)
-      }
+      assert.strictEqual(decoded._tag === "Seek" && decoded.toSeconds, 42)
     }))
 
   it.effect("encodes and decodes a Pause request", () =>
@@ -86,11 +84,9 @@ describe("ControlChannel request/response schemas", () => {
       const decoded = yield* decodeResponse(encoded)
 
       assert.strictEqual(decoded._tag, "Status")
-      if (decoded._tag === "Status") {
-        assert.strictEqual(decoded.file, "/path/to/file.mkv")
-        assert.strictEqual(decoded.offsetSeconds, 10)
-        assert.strictEqual(decoded.seekable, true)
-      }
+      assert.strictEqual(decoded._tag === "Status" && decoded.file, "/path/to/file.mkv")
+      assert.strictEqual(decoded._tag === "Status" && decoded.offsetSeconds, 10)
+      assert.strictEqual(decoded._tag === "Status" && decoded.seekable, true)
     }))
 
   it.effect("encodes and decodes an Error response", () =>
@@ -103,8 +99,6 @@ describe("ControlChannel request/response schemas", () => {
       const decoded = yield* decodeResponse(encoded)
 
       assert.strictEqual(decoded._tag, "Error")
-      if (decoded._tag === "Error") {
-        assert.strictEqual(decoded.message, "something went wrong")
-      }
+      assert.strictEqual(decoded._tag === "Error" && decoded.message, "something went wrong")
     }))
 })
