@@ -1,149 +1,164 @@
-# AirPlay: HAP pair-setup, pair-verify, then play-queue over HTTP
+# AirPlay
 
-The tool speaks Cast, DLNA, and AirPlay. This document explains what was built
-and what was deliberately left out.
+How to use AirPlay with this CLI, and what the `@castcli/airplay` package implements.
 
-Last updated: 2026-08-31. AirPlay 2 protocol implemented: HAP pair-setup (M1-M6),
-pair-verify (M1-M4), encrypted control channel (ChaCha20-Poly1305), MFi auth-setup
-(sender POST only), then play-queue (POST /command insertPlayQueueItem). Volume
-control implemented. CLI performs pair-setup with user-provided PIN, pair-verify,
-and auth-setup (when device requires MFi) automatically.
+## Using AirPlay from the CLI
 
-## What is built
+### Pairing
 
-AirPlay 2 video is a **pull model**, like the other two. The sender does not push
-pixels: after pair-setup (if needed) and pair-verify, it hands over a URL via
-play-queue, and the device fetches it. The control surface is plainer than DLNA
-— no SOAP, no DIDL:
+AirPlay devices require pairing before first use. You'll see a 4-digit PIN on the TV screen when pairing is needed.
 
-| | |
+```sh
+# Provide the PIN shown on your Apple TV
+cast play movie.mkv --device "Apple TV" --pin 1234
+
+# Or set it as an environment variable
+export AIRPLAY_PIN=1234
+cast play movie.mkv --device "Apple TV"
+```
+
+The emulator uses PIN `3939` for testing.
+
+### Pairing storage
+
+Pairing data is stored in `$XDG_STATE_HOME/castcli/state.json` (default: `~/.local/state/castcli/state.json`), keyed by device ID when available, with IP address as fallback.
+
+Once paired, you don't need the PIN again unless the device is reset or pairing data is deleted.
+
+### Fail-closed
+
+If pair-setup or pair-verify fails, playback fails with an error. This prevents unauthenticated playback to devices that require pairing.
+
+## What this sender implements
+
+AirPlay 2 video with HAP (HomeKit Accessory Protocol) pairing.
+
+### Discovery
+
+mDNS `_airplay._tcp` on port 7000. Device announces capabilities in its TXT record as a 64-bit `features` bitmask. Video capability is `bit 0 || bit 49`:
+
+- **Apple TVs** set bit 0 and clear 49
+- **Third-party sets** (Roku, Samsung, LG) set 49 and clear 0
+
+Both bits must be checked or half the devices are silently excluded.
+
+### Pairing and crypto
+
+- **HAP pair-setup** (M1-M6): establishes long-term Ed25519 keys with PIN code, using SRP-6a, Ed25519, X25519, ChaCha20-Poly1305, HKDF, TLV8
+- **HAP pair-verify** (M1-M4): runs before every play session, authenticates using stored long-term keys
+- **Encrypted control channel**: After pair-verify, control POSTs are encrypted with ChaCha20-Poly1305 framing (2-byte length + ciphertext + 16-byte tag). Session keys derived from pair-verify shared secret via HKDF. Nonce counter increments per frame.
+- **MFi auth-setup** (sender POST only): If the device advertises bit 26 (`HasUnifiedAdvertiserInfo`) or bit 51 (`SupportsUnifiedPairSetupAndMFi`), the sender POSTs a Curve25519 public key to `/auth-setup` before pair-verify. The receiver returns its public key + encrypted signature + MFi certificate. The sender accepts any 200 response without verifying the signature. This satisfies receivers that refuse play without the exchange, while not implementing full MFi accessory protocols.
+
+### Control surface
+
+| Endpoint | Purpose |
 |---|---|
 | `POST /pair-setup` | HAP pair-setup (M1-M6), establishes long-term keys with PIN |
 | `POST /pair-verify` | HAP pair-verify (M1-M4), runs before every play session |
 | `POST /command` | insertPlayQueueItem with Content-Location and Start-Position (XML plist) |
-| `POST /scrub?position=` | seek |
+| `POST /scrub?position=` | Seek |
 | `POST /rate?value=` | `0` pauses, `1` resumes |
-| `POST /stop` | stop |
-| `GET /playback-info` | duration, position, rate, buffering, seekable ranges (XML or binary plist) |
-| `POST /setproperty` | set volume (0.0 to 1.0, XML plist) |
+| `POST /stop` | Stop |
+| `GET /playback-info` | Duration, position, rate, buffering, seekable ranges (XML or binary plist) |
+| `POST /setproperty` | Set volume (0.0 to 1.0, XML plist) |
 
-Discovery is mDNS `_airplay._tcp` on port 7000 — the same machinery already
-written for Cast. A device announces its capabilities as a 64-bit `features`
-bitmask in its TXT record, and whether it will play video is `bit 0 || bit 49`.
+After pair-verify, all control POSTs (`/command`, `/scrub`, `/rate`, `/stop`, `/setproperty`) are encrypted.
 
-That disjunction is not pedantry. Decoding the TXT records of twelve real
-devices shows the two halves of the world use different bits: **every Apple TV
-sets bit 0 and clears 49; every third-party set — Roku, Samsung, LG — sets 49
-and clears 0.** Checking either alone silently excludes half of them.
+### Pull model
 
-### PIN and Pairing Identity
-
-Real AirPlay devices display a PIN during pair-setup. The CLI requires the PIN
-via `--pin` flag or `AIRPLAY_PIN` environment variable. If neither is provided
-when pair-setup is needed, the CLI fails with a clear error:
-
-```
-error: AirPlay pairing requires a PIN — provide --pin or set AIRPLAY_PIN environment variable
-```
-
-The emulator uses PIN **3939** for testing. E2E tests set `AIRPLAY_PIN=3939`.
-
-Pairing records are stored in `XDG_STATE_HOME/castcli/state.json` keyed by:
-1. **Device ID (preferred)**: TXT record `deviceid` from mDNS discovery
-2. **IP address (fallback)**: for backward compatibility with existing state
-
-This ensures pairings survive DHCP lease changes when the device ID is available
-from mDNS discovery. When playing via `--ip` without mDNS discovery, the pairing
-is looked up by IP for backward compatibility.
-
-### Implementation
-
-The sender implements **AirPlay 2 with HAP pair-setup, pair-verify, encrypted control channel, and play-queue**:
-
-- mDNS `_airplay._tcp` discovery with TXT record parsing for `features`, `flags`,
-  `model`, and `deviceid`
-- The `AirPlayDevice` domain model with video capability detection
-- **HAP pair-setup** (M1-M6): establishes long-term Ed25519 keys with user-provided PIN
-  via `--pin` flag or `AIRPLAY_PIN` environment variable
-- **HAP pair-verify** (M1-M4): runs before every play session, authenticates
-  using stored long-term keys, using PairVerify.Controller
-- **Encrypted control channel**: After pair-verify, control POSTs are encrypted with
-  ChaCha20-Poly1305 framing (2-byte length prefix + ciphertext + 16-byte tag). Session
-  keys derived from pair-verify shared secret via HKDF with `Control-Salt` and
-  `Control-Read-Encryption-Key` / `Control-Write-Encryption-Key` infos. Nonce counter
-  increments per frame.
-- **MFi auth-setup** (sender POST only): Before pair-verify, if the device advertises
-  bit 26 (HasUnifiedAdvertiserInfo) or bit 51 (SupportsUnifiedPairSetupAndMFi) in its
-  features bitmask, the sender POSTs a Curve25519 public key to `/auth-setup`. The
-  receiver returns its public key + encrypted signature + MFi certificate. The sender
-  accepts any 200 response and does not verify the signature. This satisfies receivers
-  that refuse SETUP/play without the auth-setup exchange, while not implementing full
-  MFi accessory protocols (no Apple Authentication IC).
-- **CLI pairing workflow**: retrieves stored pairing or runs pair-setup (requires PIN
-  via `--pin` flag or `AIRPLAY_PIN` env), always runs pair-verify before play, fails
-  closed if pairing/verify fails
-- **Pairing persistence**: stores controller and accessory keys in
-  `XDG_STATE_HOME/castcli/state.json` keyed by device ID (TXT `deviceid`) first,
-  falling back to IP for backward compatibility with existing state
-- HTTP-based session:
-  - `POST /command` insertPlayQueueItem (AirPlay 2 play-queue, feature bit 33)
-  - `POST /setproperty` for volume control (0.0 to 1.0)
-  - `POST /rate`, `/scrub`, `/stop`, `GET /playback-info`
-- Integration into all CLI commands: `scan`, `play`, `volume`, `status`, `pause`,
-  `resume`, `seek`, `stop`
-- An emulator device that:
-  - Advertises via mDNS
-  - Implements pair-setup (M1-M6) and pair-verify (M1-M4) with `requirePairing` mode
-  - **Decrypts encrypted control frames** after pair-verify when requirePairing=true
-  - Accepts POST /command after successful pair-verify (requirePairing=true)
-  - Rejects unauthenticated requests with 403 when requirePairing=true
-  - Actually HTTP-pulls the media URL handed to it
-- **E2E test** (`apps/cli/test/AirPlay.e2e.test.ts`) where the built CLI runs
-  pair-setup, pair-verify, and play-queue command to the emulated AirPlay device
-  with `requirePairing=true`, **encrypted framing**, and **asserts the device fetched the film**
-
-The same media server, quality ladder, segment encoder, and subtitle handling
-used for Cast and DLNA serve AirPlay — because all three are pull models and
-the device does the fetching.
+The sender does not push pixels. After pair-setup (if needed) and pair-verify, it hands over a URL via play-queue (`POST /command` with `insertPlayQueueItem`), and the device fetches it. This matches Cast and DLNA: all three are pull models.
 
 ### What is deliberately not built
 
-**FairPlay is not needed.** This is the one piece of good news and it is worth
-recording precisely: `/fp-setup` gates *mirroring* and the audio key, not URL
-handoff. pyatv's sender path contains no FairPlay at all; UxPlay's HTTP video
-path returns 421 to `/fp-setup2` and serves HLS anyway. Mirroring would have
-meant reverse-engineered white-box crypto or an MFi hardware module. Handing
-over a URL does not.
+- **Mirroring** (push-model H.264 encoding): would invert the pull model that Cast, DLNA, and AirPlay share
+- **FairPlay DRM**: `/fp-setup` gates mirroring and the audio key, not URL handoff. Open-source senders (pyatv, UxPlay) serve HLS video without FairPlay.
+- **RTSP audio** (SETUP/RECORD): no audio RTP path, HTTP video only
+- **Encrypted RTSP framing** (ChaCha20-Poly1305 encrypted RTP): not implemented
+- **MFi authentication chip**: sender POSTs the required Curve25519 public key but does not verify the returned MFi certificate or signature
 
-**Mirroring** (push-model H.264 encoding) is not implemented. The whole media
-path here is built on the pull model: the device fetches from us, not the other
-way around.
+## Using `@castcli/airplay` as a library
 
-**Encrypted RTSP framing** (ChaCha20-Poly1305 encrypted RTP audio) is not
-implemented. This implementation does HTTP video only with no audio RTP path.
+The `@castcli/airplay` package exports:
 
-## Known gaps
+- **`PairSetup`**: HAP pair-setup controller (M1-M6)
+- **`PairVerify`**: HAP pair-verify controller (M1-M4)
+- **`Suite`**: Cryptographic primitives (SRP-6a, Ed25519, X25519, ChaCha20-Poly1305, HKDF, TLV8)
+- **`Session`**: AirPlay session management (`play`, `rate`, `scrub`, `stop`, `playbackInfo`, `setVolume`)
+- **`AirPlayDevice`**: Device model with video capability detection from TXT record
 
-**mDNS discovery e2e** is not tested. The e2e test uses `--ip` to bypass
-discovery.
+### Example: pair and play
 
-**MFi /auth-setup signature verification** is not implemented. The sender POSTs
-the required Curve25519 public key to satisfy third-party receivers that require
-it (bit 26 or bit 51 in features), but does not verify the returned MFi certificate
-or signature. This is sender-side compliance only; the tool is not a licensed MFi
-accessory and does not implement Apple Authentication IC protocols.
+```typescript
+import { PairSetup, PairVerify, Session, Suite, NodeSuite } from "@castcli/airplay"
+import { Effect, Layer, Redacted } from "effect"
+import { NodeCrypto } from "@effect/platform-node"
 
-**RTSP audio** (SETUP/RECORD) is not implemented. This is HTTP video only.
+const program = Effect.gen(function*() {
+  const suite = yield* Suite.Suite.pipe(
+    Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
+  )
 
-## What would complete it
+  // Pair-setup (M1-M6)
+  const identity = yield* Effect.gen(function*() {
+    const keys = yield* suite.ed25519KeyPair
+    return { identifier: crypto.randomUUID(), keys }
+  })
 
-**Hardware to test against**: an Apple TV or third-party AirPlay TV to verify
-the implemented sender — pair-setup, pair-verify, encrypted control channel,
-play-queue, volume — works with that device. The software is complete and
-verified against an emulated device that requires pairing and decrypts encrypted
-control frames.
+  const m1 = yield* PairSetup.m1({ flags: [] })
+  const m2 = yield* postTo("http://device-ip:7000/pair-setup", m1)
 
-Additionally, one protocol improvement is in flight but not yet merged:
+  const { request: m3, state: proved } = yield* PairSetup.m3(m2, { pin: "1234" })
+  const m4 = yield* postTo("http://device-ip:7000/pair-setup", m3)
 
-- **mDNS discovery end-to-end** (draft PR): the e2e test currently uses `--ip`
-  to bypass discovery.
+  const { request: m5, state: exchanged } = yield* PairSetup.m5(m4, {
+    state: proved,
+    identity
+  })
+  const m6 = yield* postTo("http://device-ip:7000/pair-setup", m5)
+
+  const pairSetupResult = yield* PairSetup.finish(m6, exchanged)
+
+  // Pair-verify (M1-M4) - run before every play session
+  const pairing = {
+    record: {
+      controller: {
+        identifier: new TextEncoder().encode(identity.identifier),
+        publicKey: identity.keys.publicKey
+      },
+      accessory: {
+        identifier: pairSetupResult.accessory.identifier,
+        publicKey: pairSetupResult.accessory.publicKey
+      }
+    },
+    controllerIdentity: identity
+  }
+
+  // Play
+  yield* Session.play(device, {
+    contentLocation: "http://your-server:8021/master.m3u8",
+    startPosition: Seconds.make(0),
+    pairing
+  })
+})
+```
+
+### Schema-based plist decoding
+
+`GET /playback-info` can return XML or binary plist. The package decodes both with `@effect/schema`:
+
+```typescript
+import { PlaybackInfo } from "@castcli/airplay"
+
+const info = yield* Session.playbackInfo(device)
+// info: Option<{ duration: number, position: number, rate: number, ... }>
+```
+
+Binary plist support (`bplist00` format) is implemented for Apple TV compatibility.
+
+## Hardware testing
+
+Software is complete and verified against an emulated AirPlay device that requires pairing, decrypts encrypted control frames, and pulls the media URL. Hardware testing remains: an Apple TV or third-party AirPlay TV to confirm the implemented sender works end-to-end.
+
+One protocol improvement is in flight but not yet merged:
+
+- **mDNS discovery end-to-end** (draft PR #24): the e2e test currently uses `--ip` to bypass discovery
