@@ -115,3 +115,24 @@ export const playbackInfo = (device: AirPlayDevice) =>
       })
       : Option.none()
   })
+
+/** POST /setproperty - set device volume (0.0 to 1.0) */
+export const setVolume = (device: AirPlayDevice, level: import("@castcli/domain").VolumeLevel) =>
+  Effect.gen(function*() {
+    const client = yield* HttpClient.HttpClient
+    const url = `http://${device.ip}:${device.port}/setproperty`
+    
+    const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>volume</key><real>${level}</real>
+</dict>
+</plist>`
+
+    yield* client.execute(
+      HttpClientRequest.post(url, {
+        body: HttpBody.text(plist, "application/x-apple-plist")
+      })
+    )
+  })

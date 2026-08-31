@@ -17,6 +17,7 @@ export interface AirPlayDevice {
   readonly fetched: Effect.Effect<ReadonlyArray<string>>
   readonly rate: Effect.Effect<number>
   readonly position: Effect.Effect<number>
+  readonly volume: Effect.Effect<number>
 }
 
 const bodyOf = (request: http.IncomingMessage): Effect.Effect<Uint8Array> =>
@@ -49,6 +50,7 @@ export const make = (options: {
     const fetched = yield* Ref.make<ReadonlyArray<string>>([])
     const rateRef = yield* Ref.make(1)
     const position = yield* Ref.make(0)
+    const volume = yield* Ref.make(0.5)
     const pairVerified = yield* Ref.make(!requirePairing)
 
     const client = yield* HttpClient.HttpClient
@@ -278,6 +280,30 @@ export const make = (options: {
               return { status: 200, body: plist, contentType: "text/x-apple-plist+xml" }
             })),
 
+          Match.when({ path: "/setproperty", method: "POST" }, () =>
+            Effect.gen(function*() {
+              const bodyText = new TextDecoder().decode(body)
+              const volumeMatch = bodyText.match(/<key>volume<\/key>\s*<real>([\d.]+)<\/real>/)
+              
+              yield* Effect.when(
+                Effect.gen(function*() {
+                  const level = yield* Option.match(
+                    Option.fromNullishOr(volumeMatch).pipe(
+                      Option.flatMap((match) => Option.fromNullishOr(match[1]))
+                    ),
+                    {
+                      onNone: () => Effect.succeed(0),
+                      onSome: (levelStr) => Effect.succeed(Number(levelStr))
+                    }
+                  )
+                  yield* Ref.set(volume, level)
+                }),
+                Effect.succeed(volumeMatch !== null)
+              )
+              
+              return { status: 200, body: "" }
+            })),
+
           Match.orElse(() => Effect.succeed(NOT_FOUND))
         )
       })
@@ -307,6 +333,7 @@ export const make = (options: {
       loaded: Ref.get(loaded),
       fetched: Ref.get(fetched),
       rate: Ref.get(rateRef),
-      position: Ref.get(position)
+      position: Ref.get(position),
+      volume: Ref.get(volume)
     }
   })
