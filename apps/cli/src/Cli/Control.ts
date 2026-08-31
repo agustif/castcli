@@ -35,7 +35,7 @@ import * as ControlChannel from "../ControlChannel.ts"
 const Percentage = Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 100 })))
 
 /** Which device to act on. Shared by every command here, and by `play`. */
-const which = { ip: Flags.deviceIp, device: Flags.deviceName }
+const which = { ip: Flags.deviceIp, device: Flags.deviceName, protocol: Flags.protocol }
 
 /** Attach to the running receiver, read one status, and act on it. */
 const joinSession = <A, E, R>(
@@ -93,6 +93,7 @@ const onTarget = <A, E1, E2, E3, R1, R2, R3>(
   options: {
     readonly ip: Option.Option<Brands.Ipv4>
     readonly device: Option.Option<string>
+    readonly protocol: Option.Option<import("./Target.ts").Protocol>
   },
   handlers: {
     readonly onCast: (
@@ -126,7 +127,9 @@ const onTarget = <A, E1, E2, E3, R1, R2, R3>(
       ip: options.ip,
       name: options.device,
       devicePort: config.devicePort,
-      timeout: config.discoveryTimeout
+      airplayPort: config.airplayPort,
+      timeout: config.discoveryTimeout,
+      protocol: options.protocol
     })
 
     return yield* act(target).pipe(
@@ -138,7 +141,7 @@ const onTarget = <A, E1, E2, E3, R1, R2, R3>(
         ? (self) => self
         : Effect.catchTag("DeviceUnreachableError", () =>
           Effect.flatMap(
-            search({ name: options.device, timeout: config.discoveryTimeout }),
+            search({ name: options.device, timeout: config.discoveryTimeout, protocol: options.protocol }),
             act
           ))
     )
@@ -183,8 +186,8 @@ const report = (
 const status = Command.make(
   "status",
   which,
-  Effect.fn(function*({ device, ip }) {
-    yield* onTarget({ device, ip }, {
+  Effect.fn(function*({ device, ip, protocol }) {
+    yield* onTarget({ device, ip, protocol }, {
       onCast: (_, current) =>
         report(
           Option.map(current, (playing) => ({
@@ -215,8 +218,8 @@ const status = Command.make(
 const pause = Command.make(
   "pause",
   which,
-  Effect.fn(function*({ device, ip }) {
-    yield* onTarget({ device, ip }, {
+  Effect.fn(function*({ device, ip, protocol }) {
+    yield* onTarget({ device, ip, protocol }, {
       onCast: (session) => session.mediaCommand(Session.MediaCommand.PAUSE()),
       onDlna: (renderer) => renderer.pause,
       onAirPlay: (airplayDevice) => AirPlaySession.rate(airplayDevice, 0)
@@ -228,8 +231,8 @@ const pause = Command.make(
 const resume = Command.make(
   "resume",
   which,
-  Effect.fn(function*({ device, ip }) {
-    yield* onTarget({ device, ip }, {
+  Effect.fn(function*({ device, ip, protocol }) {
+    yield* onTarget({ device, ip, protocol }, {
       onCast: (session) => session.mediaCommand(Session.MediaCommand.PLAY()),
       onDlna: (renderer) => renderer.resume,
       onAirPlay: (airplayDevice) => AirPlaySession.rate(airplayDevice, 1)
@@ -241,8 +244,8 @@ const resume = Command.make(
 const toggle = Command.make(
   "toggle",
   which,
-  Effect.fn(function*({ device, ip }) {
-    yield* onTarget({ device, ip }, {
+  Effect.fn(function*({ device, ip, protocol }) {
+    yield* onTarget({ device, ip, protocol }, {
       // Exhaustive over the receiver's own state vocabulary, so a state added
       // upstream is a compile error rather than a toggle that silently does
       // nothing. BUFFERING and LOADING count as playing: receivers spend a lot
@@ -312,7 +315,7 @@ const volume = Command.make(
       Flag.withDescription("Volume percentage, 0-100")
     )
   },
-  Effect.fn(function*({ device, ip, level }) {
+  Effect.fn(function*({ device, ip, level, protocol }) {
     // Converted once, here, and never again. Three scales are in play — the
     // percentage a person types, the 0..1 a Cast receiver takes, and the whole
     // percent UPnP counts in — and the `VolumeLevel` brand is what stops the
@@ -321,7 +324,7 @@ const volume = Command.make(
     // lives at exactly one boundary per protocol rather than at this call site.
     const wanted = VolumeLevel.make(level / 100)
 
-    yield* onTarget({ device, ip }, {
+    yield* onTarget({ device, ip, protocol }, {
       onCast: (session) => session.setVolume(wanted),
       onDlna: (renderer) => renderer.setVolume(wanted),
       onAirPlay: (airplayDevice) => AirPlaySession.setVolume(airplayDevice, wanted)
@@ -333,8 +336,8 @@ const volume = Command.make(
 const stop = Command.make(
   "stop",
   which,
-  Effect.fn(function*({ device, ip }) {
-    yield* onTarget({ device, ip }, {
+  Effect.fn(function*({ device, ip, protocol }) {
+    yield* onTarget({ device, ip, protocol }, {
       onCast: (session) => session.stopReceiver,
       // A renderer has no receiver application to close, so `Stop` is the whole
       // of it: the transport goes to STOPPED and the device drops the pull.
@@ -423,7 +426,7 @@ const seek = Command.make(
       Flag.optional
     )
   },
-  Effect.fn(function*({ back, device, forward, ip, to }) {
+  Effect.fn(function*({ back, device, forward, ip, protocol, to }) {
     // Try to get status from the control channel first. This tells us if a
     // player is running and whether the stream is seekable (HLS vs progressive).
     const channelStatus = yield* ControlChannel.getStatus.pipe(
@@ -437,7 +440,7 @@ const seek = Command.make(
     })
     const flags = { to, forward, back }
 
-    yield* onTarget({ device, ip }, {
+    yield* onTarget({ device, ip, protocol }, {
       onCast: (session, currentStatus) =>
         Effect.gen(function*() {
           const within = Option.match(currentStatus, {
