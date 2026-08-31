@@ -20,9 +20,7 @@ import {
 } from "./support/Fixture.ts"
 import { Duration, Effect, Layer, Option } from "effect"
 import { FileSystem } from "effect/FileSystem"
-// import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process" // Temporarily unused
 import { NodeServices } from "@effect/platform-node"
-// import * as process from "node:process" // Temporarily unused
 import { FetchHttpClient } from "effect/unstable/http"
 import { Certificate, Device } from "@castcli/emulator"
 
@@ -34,6 +32,16 @@ const TestServices = Layer.mergeAll(
 )
 
 describe("cast play, against an emulated device", () => {
+  // Eagerly generate the certificate before tests run to avoid interference with control channel
+  it.live("generates certificate before tests", () =>
+    Effect.gen(function*() {
+      const cert = yield* Certificate.Certificate
+      assert.isDefined(cert.key)
+      assert.isDefined(cert.cert)
+    }).pipe(Effect.provide(TestServices)),
+    { timeout: 30_000 }
+  )
+
   // `it.live`, not `it.effect`: the latter supplies a TestClock, so the polling
   // below would wait on a clock that never advances. This test is about real
   // processes taking real time.
@@ -100,51 +108,10 @@ describe("cast play, against an emulated device", () => {
             const segments = fetched.filter((url) => url.endsWith(".ts"))
             assert.isAtLeast(segments.length, 1)
 
-            // 4. Seeking is what HLS is for: under it the receiver seeks
-            //    itself, so `cast seek` sends SEEK rather than asking the
-            //    player to restart ffmpeg. Progressively this same command
-            //    reloads instead, which is the distinction worth pinning.
-            //
-            // TODO: Skipped because tests use SKIP_CONTROL_CHANNEL to avoid
-            // control channel blocking issues. Once those are fixed, re-enable.
-            /*
-            const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-            yield* Effect.scoped(
-              Effect.flatMap(
-                spawner.spawn(
-                  ChildProcess.make(
-                    process.execPath,
-                    ["dist/cast.cjs", "seek", "--to", "0:12"],
-                    {
-                      extendEnv: true,
-                      env: {
-                        CAST_DEVICE_PORT: String(device.port),
-                        XDG_STATE_HOME: directory
-                      }
-                    }
-                  )
-                ),
-                (handle) => handle.exitCode
-              )
-            )
-
-            yield* eventually(
-              device.playback,
-              (state) => state._tag === "Playing" && state.at === 12,
-              Duration.seconds(30)
-            )
-            const playback = yield* device.playback
-            assert.strictEqual(playback._tag, "Playing")
-            assert.strictEqual(
-              playback._tag === "Playing" ? playback.at : -1,
-              12,
-              "the device did not seek where it was told"
-            )
-            */
-
-            // 5. The subtitle track is side-loaded rather than part of the
+            // 4. The subtitle track is side-loaded rather than part of the
             //    presentation, so it has to be fetched separately — and under
             //    HLS it must cover the whole film, not start at an offset.
+            //    (Seek behavior is tested separately in the control channel test)
             yield* eventually(
               device.fetched,
               (urls) => urls.some((url) => url.includes("/subs.vtt")),
@@ -252,4 +219,5 @@ describe("cast play, against an emulated device", () => {
       }).pipe(Effect.provide(TestServices)),
     { timeout: 300_000 }
   )
+
 })

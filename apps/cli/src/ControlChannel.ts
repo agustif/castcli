@@ -13,7 +13,7 @@
 // eslint-disable-next-line castcli/no-try-catch -- socket cleanup best-effort, no Effect needed
 // eslint-disable-next-line castcli/no-promise -- node:net callbacks require Promise wrapping
 
-import { Effect, Match, Option, Schema } from "effect"
+import { Duration, Effect, Match, Option, Schema } from "effect"
 import * as net from "node:net"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -24,7 +24,7 @@ import { Seconds } from "@castcli/domain"
 /**
  * Request types that control commands send to the running player.
  */
-const ControlRequest = Schema.TaggedUnion({
+export const ControlRequest = Schema.TaggedUnion({
   Seek: { toSeconds: Seconds },
   Pause: {},
   Resume: {},
@@ -32,12 +32,12 @@ const ControlRequest = Schema.TaggedUnion({
   GetStatus: {}
 })
 
-type ControlRequest = typeof ControlRequest.Type
+export type ControlRequest = typeof ControlRequest.Type
 
 /**
  * Response the player sends back.
  */
-const ControlResponse = Schema.TaggedUnion({
+export const ControlResponse = Schema.TaggedUnion({
   Ok: {},
   Status: {
     file: Schema.String,
@@ -47,12 +47,12 @@ const ControlResponse = Schema.TaggedUnion({
   Error: { message: Schema.String }
 })
 
-type ControlResponse = typeof ControlResponse.Type
+export type ControlResponse = typeof ControlResponse.Type
 
-const encodeRequest = Schema.encodeEffect(Schema.fromJsonString(ControlRequest))
-const decodeRequest = Schema.decodeEffect(Schema.fromJsonString(ControlRequest))
-const encodeResponse = Schema.encodeEffect(Schema.fromJsonString(ControlResponse))
-const decodeResponse = Schema.decodeEffect(Schema.fromJsonString(ControlResponse))
+export const encodeRequest = Schema.encodeEffect(Schema.fromJsonString(ControlRequest))
+export const decodeRequest = Schema.decodeEffect(Schema.fromJsonString(ControlRequest))
+export const encodeResponse = Schema.encodeEffect(Schema.fromJsonString(ControlResponse))
+export const decodeResponse = Schema.decodeEffect(Schema.fromJsonString(ControlResponse))
 
 /**
  * The socket path where the running player listens.
@@ -156,9 +156,23 @@ export const startServer = (handlers: ControlHandlers) =>
 
     yield* Effect.promise(() =>
       new Promise<void>((resolve, reject) => {
-        server.listen(sockPath, () => resolve())
-        server.on("error", reject)
+        const errorHandler = (err: Error) => {
+          server.removeListener("error", errorHandler)
+          reject(err)
+        }
+        
+        server.on("error", errorHandler)
+        
+        server.listen(sockPath, () => {
+          server.removeListener("error", errorHandler)
+          resolve()
+        })
       })
+    ).pipe(
+      Effect.timeout(Duration.seconds(5)),
+      Effect.catchTag("TimeoutError", () =>
+        Effect.fail(new Error(`Control channel listen timeout after 5s on ${sockPath}`))
+      )
     )
 
     const shutdown = Effect.promise(() =>
