@@ -193,6 +193,8 @@ export const make = (options: {
                             ),
                             Match.orElse(() => Effect.fail(new Error("Missing public key value")))
                           )
+
+                          yield* Ref.set(controllerEphemeralPublicKey, Option.some(controllerEphemeralPublic))
                           const suite = yield* Effect.provide(AirPlay.Suite.Suite, Layer.provide(AirPlay.NodeSuite, NodeCrypto.layer))
                           
                           // Generate accessory ephemeral X25519 keys
@@ -278,27 +280,24 @@ export const make = (options: {
                     yield* Ref.set(pairVerified, true)
 
                     const storedAccessoryPrivateKey = yield* Ref.get(accessoryEphemeralPrivateKey)
+                    const storedControllerPublicKey = yield* Ref.get(controllerEphemeralPublicKey)
 
                     yield* Option.match(storedAccessoryPrivateKey, {
                       onNone: () => Effect.void,
                       onSome: (accessoryPrivKey) =>
-                        Effect.gen(function*() {
+                        Option.match(storedControllerPublicKey, {
+                          onNone: () => Effect.void,
+                          onSome: (controllerPubKey) =>
+                            Effect.gen(function*() {
                           const AirPlayForEncryption = yield* Effect.promise(() => import("@castcli/airplay"))
                           const suiteForEncryption = yield* Effect.provide(
                             AirPlayForEncryption.Suite.Suite,
                             Layer.provide(AirPlayForEncryption.NodeSuite, NodeCrypto.layer)
                           )
 
-                          const controllerEphemeralPublicFromM1 = items.find((item) => item.type === TlvType.PublicKey)?.value
-
-                          yield* Effect.when(
-                            Effect.fail(new Error("Cannot derive control keys without controller ephemeral public key")),
-                            Effect.succeed(controllerEphemeralPublicFromM1 === undefined)
-                          )
-
                           const sharedSecretForControl = yield* suiteForEncryption.x25519SharedSecret({
                             privateKey: accessoryPrivKey,
-                            publicKey: controllerEphemeralPublicFromM1 ?? new Uint8Array(32)
+                            publicKey: controllerPubKey
                           })
 
                           const { Info: GeneratedInfo, Salt: GeneratedSalt } = AirPlayForEncryption.GeneratedPairing
@@ -328,6 +327,7 @@ export const make = (options: {
                             })
                           )
                         })
+                      })
                     })
 
                     const m4 = [{ type: TlvType.State, value: new Uint8Array([4]) }]
