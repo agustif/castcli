@@ -58,6 +58,18 @@ export const make = (options: {
     const volume = yield* Ref.make(0.5)
     const pairVerified = yield* Ref.make(!requirePairing)
 
+    const accessoryEphemeralPrivateKey = yield* Ref.make(
+      Option.none<import("effect").Redacted.Redacted<Uint8Array>>()
+    )
+
+    const controllerEphemeralPublicKey = yield* Ref.make(
+      Option.none<Uint8Array>()
+    )
+
+    const encryptedSessionKeys = yield* Ref.make(
+      Option.none<{ readKey: import("effect").Redacted.Redacted<Uint8Array>; writeKey: import("effect").Redacted.Redacted<Uint8Array>; readNonce: import("effect").Ref.Ref<bigint>; writeNonce: import("effect").Ref.Ref<bigint> }>()
+    )
+
     // Generate accessory long-term Ed25519 keys for pair-verify and pair-setup
     const AirPlayForKeys = yield* Effect.promise(() => import("@castcli/airplay"))
     const suiteForKeys = yield* Effect.provide(AirPlayForKeys.Suite.Suite, Layer.provide(AirPlayForKeys.NodeSuite, NodeCrypto.layer))
@@ -181,6 +193,8 @@ export const make = (options: {
                             ),
                             Match.orElse(() => Effect.fail(new Error("Missing public key value")))
                           )
+
+                          yield* Ref.set(controllerEphemeralPublicKey, Option.some(controllerEphemeralPublic))
                           const suite = yield* Effect.provide(AirPlay.Suite.Suite, Layer.provide(AirPlay.NodeSuite, NodeCrypto.layer))
                           
                           // Generate accessory ephemeral X25519 keys
@@ -188,6 +202,8 @@ export const make = (options: {
                           const accessoryEphemeralPublic = yield* suite.x25519PublicKey(
                             accessoryEphemeral.privateKey
                           )
+
+                          yield* Ref.set(accessoryEphemeralPrivateKey, Option.some(accessoryEphemeral.privateKey))
 
                           // Derive shared secret and session key
                           const sharedSecret = yield* suite.x25519SharedSecret({
@@ -254,7 +270,65 @@ export const make = (options: {
                     )
                   })),
                   Match.when(3, () => Effect.gen(function*() {
+                    const controllerEncrypted = items.find((item) => item.type === TlvType.EncryptedData)?.value
+                    
+                    yield* Effect.when(
+                      Effect.fail(new Error("Missing encrypted data in M3")),
+                      Effect.succeed(controllerEncrypted === undefined)
+                    )
+
                     yield* Ref.set(pairVerified, true)
+
+                    const storedAccessoryPrivateKey = yield* Ref.get(accessoryEphemeralPrivateKey)
+                    const storedControllerPublicKey = yield* Ref.get(controllerEphemeralPublicKey)
+
+                    yield* Option.match(storedAccessoryPrivateKey, {
+                      onNone: () => Effect.void,
+                      onSome: (accessoryPrivKey) =>
+                        Option.match(storedControllerPublicKey, {
+                          onNone: () => Effect.void,
+                          onSome: (controllerPubKey) =>
+                            Effect.gen(function*() {
+                          const AirPlayForEncryption = yield* Effect.promise(() => import("@castcli/airplay"))
+                          const suiteForEncryption = yield* Effect.provide(
+                            AirPlayForEncryption.Suite.Suite,
+                            Layer.provide(AirPlayForEncryption.NodeSuite, NodeCrypto.layer)
+                          )
+
+                          const sharedSecretForControl = yield* suiteForEncryption.x25519SharedSecret({
+                            privateKey: accessoryPrivKey,
+                            publicKey: controllerPubKey
+                          })
+
+                          const { Info: GeneratedInfo, Salt: GeneratedSalt } = AirPlayForEncryption.GeneratedPairing
+
+                          const controlReadKey = yield* suiteForEncryption.hkdfSha512({
+                            key: sharedSecretForControl,
+                            salt: GeneratedSalt.Control,
+                            info: GeneratedInfo.ControlWrite
+                          })
+
+                          const controlWriteKey = yield* suiteForEncryption.hkdfSha512({
+                            key: sharedSecretForControl,
+                            salt: GeneratedSalt.Control,
+                            info: GeneratedInfo.ControlRead
+                          })
+
+                          const readNonceRef = yield* Ref.make(BigInt(0))
+                          const writeNonceRef = yield* Ref.make(BigInt(0))
+
+                          yield* Ref.set(
+                            encryptedSessionKeys,
+                            Option.some({
+                              readKey: controlReadKey,
+                              writeKey: controlWriteKey,
+                              readNonce: readNonceRef,
+                              writeNonce: writeNonceRef
+                            })
+                          )
+                        })
+                      })
+                    })
 
                     const m4 = [{ type: TlvType.State, value: new Uint8Array([4]) }]
                     const m4Bytes = yield* Schema.encodeEffect(Items)(m4).pipe(
@@ -310,9 +384,39 @@ export const make = (options: {
           Match.when({ path: "/command", method: "POST" }, () =>
             Effect.gen(function*() {
               const verified = yield* Ref.get(pairVerified)
+              const maybeEncryptedSession = yield* Ref.get(encryptedSessionKeys)
+
               return yield* (verified
                 ? Effect.gen(function*() {
-                  const bodyText = new TextDecoder().decode(body)
+                  const bodyText = yield* Option.match(maybeEncryptedSession, {
+                    onNone: () => Effect.succeed(new TextDecoder().decode(body)),
+                    onSome: (session) =>
+                      Effect.gen(function*() {
+                        const AirPlay = yield* Effect.promise(() => import("@castcli/airplay"))
+                        const suite = yield* Effect.provide(AirPlay.Suite.Suite, Layer.provide(AirPlay.NodeSuite, NodeCrypto.layer))
+                        
+                        const lengthHigh = body[0] ?? 0
+                        const lengthLow = body[1] ?? 0
+                        const length = (lengthHigh << 8) | lengthLow
+                        const payload = body.slice(2, 2 + length)
+                        
+                        const counter = yield* Ref.getAndUpdate(session.readNonce, (n) => n + BigInt(1))
+                        const nonce = yield* AirPlay.Suite.Nonce.counter(counter)
+                        
+                        const decrypted = yield* suite.open({
+                          key: session.readKey,
+                          nonce,
+                          ciphertextAndTag: payload,
+                          associatedData: new Uint8Array()
+                        })
+                        
+                        return new TextDecoder().decode(decrypted)
+                      }).pipe(
+                        Effect.catchTag("ForgedFrame", () => Effect.succeed(new TextDecoder().decode(body))),
+                        Effect.catchTag("PlatformError", () => Effect.succeed(new TextDecoder().decode(body)))
+                      )
+                  })
+
                   const urlMatch = bodyText.match(/Content-Location.*?<string>(.*?)<\/string>/s)
                   const posMatch = bodyText.match(/Start-Position.*?<real>([\d.]+)<\/real>/s)
 

@@ -3,10 +3,17 @@
 The tool speaks Cast, DLNA, and AirPlay. This document explains what was built
 and what was deliberately left out.
 
+<<<<<<< HEAD
 Last updated: 2026-08-31. AirPlay 2 protocol implemented: HAP pair-setup (M1-M6)
 and pair-verify (M1-M4), then play-queue (POST /command insertPlayQueueItem).
 Volume control implemented. CLI performs pair-setup (PIN 3939 for emulator) then
 pair-verify automatically.
+=======
+Last updated: 2026-08-31. AirPlay 2 protocol implemented: HAP pair-verify
+(optional), then play-queue (POST /command insertPlayQueueItem). Query-string
+/play (AirPlay 1) is no longer supported. Volume control implemented.
+**Encrypted control channel** (ChaCha20-Poly1305) implemented after pair-verify.
+>>>>>>> 43828c1 (docs: update airplay.md with encrypted control channel)
 
 ## What is built
 
@@ -37,7 +44,7 @@ and clears 0.** Checking either alone silently excludes half of them.
 
 ### Implementation
 
-The sender implements **AirPlay 2 with HAP pair-setup, pair-verify, and play-queue**:
+The sender implements **AirPlay 2 with HAP pair-setup, pair-verify, encrypted control channel, and play-queue**:
 
 - mDNS `_airplay._tcp` discovery with TXT record parsing for `features`, `flags`,
   `model`, and `deviceid`
@@ -47,6 +54,11 @@ The sender implements **AirPlay 2 with HAP pair-setup, pair-verify, and play-que
   primitives (SRP-6a, Ed25519, X25519, ChaCha20-Poly1305, HKDF)
 - **HAP pair-verify** (M1-M4): runs before every play session, authenticates
   using stored long-term keys, using PairVerify.Controller
+- **Encrypted control channel**: After pair-verify, control POSTs are encrypted with
+  ChaCha20-Poly1305 framing (2-byte length prefix + ciphertext + 16-byte tag). Session
+  keys derived from pair-verify shared secret via HKDF with `Control-Salt` and
+  `Control-Read-Encryption-Key` / `Control-Write-Encryption-Key` infos. Nonce counter
+  increments per frame.
 - **CLI pairing workflow**: retrieves stored pairing or runs pair-setup, always
   runs pair-verify before play, fails closed if pairing/verify fails
 - **Pairing persistence**: stores controller and accessory keys in
@@ -60,12 +72,13 @@ The sender implements **AirPlay 2 with HAP pair-setup, pair-verify, and play-que
 - An emulator device that:
   - Advertises via mDNS
   - Implements pair-setup (M1-M6) and pair-verify (M1-M4) with `requirePairing` mode
+  - **Decrypts encrypted control frames** after pair-verify when requirePairing=true
   - Accepts POST /command after successful pair-verify (requirePairing=true)
   - Rejects unauthenticated requests with 403 when requirePairing=true
   - Actually HTTP-pulls the media URL handed to it
 - **E2E test** (`apps/cli/test/AirPlay.e2e.test.ts`) where the built CLI runs
   pair-setup, pair-verify, and play-queue command to the emulated AirPlay device
-  with `requirePairing=true` and **asserts the device fetched the film**
+  with `requirePairing=true`, **encrypted framing**, and **asserts the device fetched the film**
 
 The same media server, quality ladder, segment encoder, and subtitle handling
 used for Cast and DLNA serve AirPlay — because all three are pull models and
@@ -86,10 +99,6 @@ way around.
 
 **Encrypted RTSP framing** (ChaCha20-Poly1305 encrypted RTP audio) is not
 implemented. This implementation does HTTP video only with no audio RTP path.
-
-**Encrypted control channel** (ChaCha20-Poly1305 framing of HTTP after
-pair-verify) is not implemented. The current implementation sends plaintext HTTP
-after pair-verify. Real devices may require encrypted framing for some commands.
 
 ## Known gaps
 
