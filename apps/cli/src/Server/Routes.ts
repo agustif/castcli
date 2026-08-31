@@ -104,6 +104,9 @@ const playlistHeaders = {
   "access-control-allow-origin": "*"
 } as const
 
+const mpegTsPid = (packet: Uint8Array): number =>
+  (((packet[1] ?? 0) & 0x1f) << 8) | (packet[2] ?? 0)
+
 const notFound = HttpServerResponse.empty({ status: 404 })
 
 // The requirement type is inferred: v4 tracks each handler's error and service
@@ -238,13 +241,11 @@ export const routes = (options: MediaServerOptions) =>
                   const packets = globalThis.Array.from({ length: packetCount }, (_, n) =>
                     buffer.subarray(n * TS, (n + 1) * TS)
                   )
-                  const pidOf = (packet: Uint8Array) =>
-                    (((packet[1] ?? 0) & 0x1f) << 8) | (packet[2] ?? 0)
-                  const kept = packets.filter((packet) => pidOf(packet) !== 0x11)
+                  const kept = packets.filter((packet) => mpegTsPid(packet) !== 0x11)
                   const patFirst = new Uint8Array(kept.reduce((sum, packet) => sum + packet.length, 0))
-                  kept.reduce((offset, packet) => {
-                    patFirst.set(packet, offset)
-                    return offset + packet.length
+                  kept.reduce((at, packet) => {
+                    patFirst.set(packet, at)
+                    return at + packet.length
                   }, 0)
 
                   return HttpServerResponse.uint8Array(patFirst, {
