@@ -445,40 +445,6 @@ export const discoverAirPlayWithRetry = Effect.fn("Mdns.discoverAirPlayWithRetry
   )
 })
 
-const readAirPlayQuestionName = (
-  packet: Buffer,
-  offset: number,
-  labels: ReadonlyArray<string>
-): readonly [name: string, next: number] => {
-  const length = packet[offset]
-
-  return length === undefined || length === 0
-    ? [labels.join("."), offset + 1]
-    : (length & 0xc0) === 0xc0
-    ? [labels.join("."), offset + 2]
-    : readAirPlayQuestionName(packet, offset + 1 + length, [
-      ...labels,
-      packet.subarray(offset + 1, offset + 1 + length).toString("utf8")
-    ])
-}
-
-const airPlayQuestionsIn = (packet: Buffer): ReadonlyArray<string> => {
-  const count = packet.length >= 12 ? packet.readUInt16BE(4) : 0
-
-  const take = (
-    index: number,
-    offset: number,
-    found: ReadonlyArray<string>
-  ): ReadonlyArray<string> => {
-    const [name, next] = readAirPlayQuestionName(packet, offset, [])
-    return index >= count || offset >= packet.length
-      ? found
-      : take(index + 1, next + 4, [...found, name])
-  }
-
-  return take(0, 12, [])
-}
-
 /**
  * Advertise an AirPlay device over mDNS.
  *
