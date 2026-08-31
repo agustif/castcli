@@ -32,6 +32,16 @@ const TestServices = Layer.mergeAll(
 )
 
 describe("cast play, against an emulated device", () => {
+  // Eagerly generate the certificate before tests run to avoid interference with control channel
+  it.live("generates certificate before tests", () =>
+    Effect.gen(function*() {
+      const cert = yield* Certificate.Certificate
+      assert.isDefined(cert.key)
+      assert.isDefined(cert.cert)
+    }).pipe(Effect.provide(TestServices)),
+    { timeout: 30_000 }
+  )
+
   // `it.live`, not `it.effect`: the latter supplies a TestClock, so the polling
   // below would wait on a clock that never advances. This test is about real
   // processes taking real time.
@@ -50,8 +60,7 @@ describe("cast play, against an emulated device", () => {
 
             const device = yield* Device.make({ segments: 2 })
 
-            // Skip control channel for HLS tests due to interaction with Certificate generation
-            yield* play(device, file, directory, [], false, true)
+            yield* play(device, file, directory, [])
 
             // 1. The device was handed an HLS presentation.
             const loaded = yield* eventually(
@@ -132,7 +141,7 @@ describe("cast play, against an emulated device", () => {
             const file = yield* makeSample()
 
             const device = yield* Device.make()
-            yield* play(device, file, directory, ["--progressive"], false, true)
+            yield* play(device, file, directory, ["--progressive"])
 
             const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(90))
 
@@ -188,7 +197,7 @@ describe("cast play, against an emulated device", () => {
               advertise: { friendlyName: name, model: "EmulatedForTests" }
             })
 
-            yield* play(device, file, directory, ["--device", name], true, true)
+            yield* play(device, file, directory, ["--device", name], true)
 
             const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(90))
             assert.isTrue(
