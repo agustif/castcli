@@ -25,7 +25,7 @@ import { PairingError, TlvType } from "../../src/Generated/index.ts"
 import { Nonce, Suite } from "../../src/Suite/index.ts"
 import { ADMIN } from "../../src/PairSetup/Accessory/Pairing.ts"
 import { finish, type Identity, m1, m3, m5 } from "../../src/PairSetup/Controller/index.ts"
-import * as Accessory from "./Accessory.ts"
+import * as Accessory from "../../src/PairSetup/Accessory.ts"
 import {
   ACCESSORY_PAIRING_ID,
   ACCESSORY_SEED,

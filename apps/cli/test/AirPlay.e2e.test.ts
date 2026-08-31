@@ -52,7 +52,8 @@ describe("cast play, against an emulated AirPlay device", () => {
             const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
             const process = yield* Effect.promise(() => import("node:process"))
 
-            // Run: cast play --ip 127.0.0.1:PORT FILE
+            // Run: cast play --ip 127.0.0.1 FILE with AIRPLAY_DEVICE_PORT env var
+            // The CLI forks, so we don't wait for its exit code (it's long-running)
             yield* Effect.scoped(
               Effect.flatMap(
                 spawner.spawn(
@@ -62,14 +63,14 @@ describe("cast play, against an emulated AirPlay device", () => {
                       "dist/cast.cjs",
                       "play",
                       "--ip",
-                      `127.0.0.1:${device.port}`,
+                      "127.0.0.1",
                       file
                     ],
                     {
                       extendEnv: true,
                       env: {
                         XDG_STATE_HOME: directory,
-                        SKIP_CONTROL_CHANNEL: "1"
+                        AIRPLAY_DEVICE_PORT: `${device.port}`
                       }
                     }
                   )
