@@ -306,6 +306,7 @@ export const resolve = Effect.fn("target.resolve")(function*(options: {
         onNone: () =>
           Effect.gen(function*() {
             const client = yield* HttpClient.HttpClient
+            
             const serverInfoResponse = yield* client
               .get(`http://${address}:${options.airplayPort}/server-info`)
               .pipe(
@@ -313,25 +314,49 @@ export const resolve = Effect.fn("target.resolve")(function*(options: {
                 Effect.orElseSucceed(() => "")
               )
 
-            const isAirPlay = serverInfoResponse.length > 0
+            const serverInfoHasContent = serverInfoResponse.length > 0
 
-            return yield* (isAirPlay
-              ? Effect.succeed(undefined).pipe(
-                  Effect.map(() => {
+            const probeResult = yield* (serverInfoHasContent
+              ? Effect.succeed({
+                  isAirPlay: true,
+                  features: (() => {
                     const featuresMatch = serverInfoResponse.match(
                       /<key>features<\/key>\s*<integer>(0x[0-9a-fA-F]+)<\/integer>/
                     )
-                    const features =
-                      featuresMatch && featuresMatch[1] !== undefined ? BigInt(featuresMatch[1]) : undefined
+                    return featuresMatch?.[1] !== undefined ? BigInt(featuresMatch[1]) : undefined
+                  })()
+                })
+              : Effect.gen(function*() {
+                  const infoResponse = yield* client
+                    .get(`http://${address}:${options.airplayPort}/info`)
+                    .pipe(
+                      Effect.flatMap((r) => r.arrayBuffer),
+                      Effect.map((buf) => new Uint8Array(buf)),
+                      Effect.orElseSucceed(() => new Uint8Array(0))
+                    )
 
-                    const airplayDevice = new AirPlayDevice({
+                  const hasInfo = infoResponse.length > 0
+                  return {
+                    isAirPlay: hasInfo,
+                    features: hasInfo
+                      ? (() => {
+                        const text = new TextDecoder().decode(infoResponse)
+                        const featuresMatch = text.match(/<key>features<\/key>\s*<integer>(\d+)<\/integer>/)
+                        return featuresMatch?.[1] !== undefined ? BigInt(featuresMatch[1]) : undefined
+                      })()
+                      : undefined
+                  }
+                }))
+
+            return yield* (probeResult.isAirPlay
+              ? Effect.succeed(
+                  Target.AirPlay({
+                    device: new AirPlayDevice({
                       name: address,
                       ip: address,
                       port: Port.make(options.airplayPort),
-                      features
+                      features: probeResult.features
                     })
-
-                    return Target.AirPlay({ device: airplayDevice })
                   })
                 )
               : Effect.succeed(Target.Cast({ device: castAt(address, options.devicePort) })))

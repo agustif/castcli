@@ -369,8 +369,17 @@ const toAirPlayDevices = (sweep: AirPlaySweep): ReadonlyArray<AirPlayDevice> =>
                   port: Port.make(port),
                   features: featuresHex !== undefined
                     ? Option.getOrUndefined(Option.fromNullishOr((() => {
-                      const firstValue = featuresHex.split(",")[0] ?? featuresHex
-                      return BigInt(firstValue.startsWith("0x") ? firstValue : `0x${firstValue}`)
+                      const parts = featuresHex.split(",")
+                      return parts.length === 2
+                        ? (() => {
+                          const low = BigInt(parts[0]?.startsWith("0x") ? parts[0] : `0x${parts[0]}`)
+                          const high = BigInt(parts[1]?.startsWith("0x") ? parts[1] : `0x${parts[1]}`)
+                          return (high << 32n) | low
+                        })()
+                        : (() => {
+                          const single = parts[0] ?? featuresHex
+                          return BigInt(single.startsWith("0x") ? single : `0x${single}`)
+                        })()
                     })()))
                     : undefined,
                   flags: flagsHex !== undefined
