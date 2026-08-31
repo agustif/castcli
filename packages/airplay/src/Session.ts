@@ -1,16 +1,28 @@
-// AirPlay sender session: URL handoff over HTTP.
+// AirPlay 2 sender session: HAP pair-verify then play-queue over HTTP.
 //
-// This is the pull-model path: POST /play hands the device a URL, and the
-// device fetches from us. Query-string parameters for Content-Location and
-// Start-Position (documented contract). No FairPlay, no mirroring.
+// This is the pull-model path: the sender runs pair-verify (if pairing provided),
+// then POST /command (insertPlayQueueItem) hands the device a URL, and the device
+// fetches from us. No FairPlay, no mirroring, no legacy AirPlay 1 query-string /play.
 
-import { Effect, Option } from "effect"
+import { Effect, Option, Redacted } from "effect"
 import { HttpBody, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { AirPlayDevice, Seconds } from "@castcli/domain"
+import * as PairVerify from "./PairVerify/index.ts"
+import type { Pairing } from "./PairSetup/Controller/Pairing.ts"
 
 export interface PlayOptions {
   readonly contentLocation: string
   readonly startPosition?: Seconds
+  readonly pairing?: {
+    readonly record: Pairing
+    readonly controllerIdentity: {
+      readonly identifier: string
+      readonly keys: {
+        readonly publicKey: Uint8Array
+        readonly privateKey: Redacted.Redacted<Uint8Array>
+      }
+    }
+  }
 }
 
 export interface PlaybackInfo {
@@ -21,33 +33,65 @@ export interface PlaybackInfo {
 }
 
 /**
- * POST /play - hand the device a URL to fetch.
+ * Run pair-verify exchange with the device.
  *
- * Query-string parameters (documented contract):
- * - Content-Location: URL to fetch
- * - Start-Position: optional starting position in seconds
+ * REQUIRED before any /command or /play requests on devices that require pairing.
+ * Fails on authentication errors.
  */
-export const play = (device: AirPlayDevice, options: PlayOptions) =>
+const runPairVerify = (
+  device: AirPlayDevice,
+  pairing: {
+    readonly record: Pairing
+    readonly controllerIdentity: {
+      readonly identifier: string
+      readonly keys: {
+        readonly publicKey: Uint8Array
+        readonly privateKey: Redacted.Redacted<Uint8Array>
+      }
+    }
+  }
+) =>
   Effect.gen(function*() {
     const client = yield* HttpClient.HttpClient
-    const url = `http://${device.ip}:${device.port}/play`
-    
-    const fullUrl = `${url}?Content-Location=${encodeURIComponent(options.contentLocation)}${
-      options.startPosition !== undefined
-        ? `&Start-Position=${options.startPosition}`
-        : ""
-    }`
+    const url = `http://${device.ip}:${device.port}/pair-verify`
 
-    yield* client.post(fullUrl)
+    const { request: m1Request, ephemeralKeys } = yield* PairVerify.Controller.m1({
+      ephemeral: Option.none()
+    })
+
+    const m2Response = yield* client.execute(
+      HttpClientRequest.post(url, {
+        body: HttpBody.uint8Array(m1Request, "application/octet-stream")
+      })
+    ).pipe(Effect.flatMap((response) => response.arrayBuffer))
+
+    const m3Request = yield* PairVerify.Controller.m3(new Uint8Array(m2Response), {
+      ephemeralKeys,
+      pairing: pairing.record,
+      controllerIdentity: pairing.controllerIdentity
+    })
+
+    yield* client.execute(
+      HttpClientRequest.post(url, {
+        body: HttpBody.uint8Array(m3Request, "application/octet-stream")
+      })
+    )
   })
 
 /**
- * POST /command - play-queue path (insertPlayQueueItem).
+ * POST /command insertPlayQueueItem - AirPlay 2 play-queue (feature bit 33).
  *
- * Binary plist body with Content-Location and Start-Position.
+ * Runs pair-verify first if pairing credentials are provided, then sends
+ * the play command. This is the modern AirPlay 2 path; query-string /play
+ * (AirPlay 1) is not supported.
  */
-export const playQueue = (device: AirPlayDevice, options: PlayOptions) =>
+export const play = (device: AirPlayDevice, options: PlayOptions) =>
   Effect.gen(function*() {
+    yield* Option.match(Option.fromUndefinedOr(options.pairing), {
+      onNone: () => Effect.void,
+      onSome: (pairing) => runPairVerify(device, pairing)
+    })
+
     const client = yield* HttpClient.HttpClient
     const url = `http://${device.ip}:${device.port}/command`
 

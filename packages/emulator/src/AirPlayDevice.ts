@@ -4,6 +4,7 @@
 // /play is rejected and pair-verify must complete first.
 
 import { Effect, Layer, Match, Option, Queue, Ref, Schema, Scope, Stream } from "effect"
+import type { PlatformError } from "effect/PlatformError"
 import { Brands } from "@castcli/domain"
 import { HttpClient } from "effect/unstable/http"
 import { Mdns } from "@castcli/platform"
@@ -18,6 +19,10 @@ export interface AirPlayDevice {
   readonly rate: Effect.Effect<number>
   readonly position: Effect.Effect<number>
   readonly volume: Effect.Effect<number>
+  readonly accessoryKeys?: {
+    readonly publicKey: Uint8Array
+    readonly identifier: Uint8Array
+  } | undefined
 }
 
 const bodyOf = (request: http.IncomingMessage): Effect.Effect<Uint8Array> =>
@@ -41,7 +46,7 @@ export const make = (options: {
   readonly name?: string
   readonly advertise?: boolean
   readonly requirePairing?: boolean
-} = {}): Effect.Effect<AirPlayDevice, never, Scope.Scope | HttpClient.HttpClient> =>
+} = {}): Effect.Effect<AirPlayDevice, PlatformError, Scope.Scope | HttpClient.HttpClient> =>
   Effect.gen(function*() {
     const name = options.name ?? "Emulated AirPlay"
     const requirePairing = options.requirePairing ?? false
@@ -52,6 +57,12 @@ export const make = (options: {
     const position = yield* Ref.make(0)
     const volume = yield* Ref.make(0.5)
     const pairVerified = yield* Ref.make(!requirePairing)
+
+    // Generate accessory long-term Ed25519 keys for pair-verify
+    const AirPlayForKeys = yield* Effect.promise(() => import("@castcli/airplay"))
+    const suiteForKeys = yield* Effect.provide(AirPlayForKeys.Suite.Suite, Layer.provide(AirPlayForKeys.NodeSuite, NodeCrypto.layer))
+    const accessoryLongtermKeys = yield* suiteForKeys.ed25519KeyPair
+    const accessoryIdentifier = new TextEncoder().encode("emulator-test")
 
     const client = yield* HttpClient.HttpClient
     const pulls = yield* Queue.unbounded<string>()
@@ -111,28 +122,90 @@ export const make = (options: {
 
                 return yield* Match.value(pairVerifyState).pipe(
                   Match.when(1, () => Effect.gen(function*() {
-                    const controllerPubKey = items.find((entry: unknown) =>
+                    const controllerPubKeyEntry = items.find((entry: unknown) =>
                       typeof entry === "object" &&
                       entry !== null &&
                       "type" in entry &&
                       typeof entry.type === "number" &&
-                      entry.type === TlvType.PublicKey
+                      entry.type === TlvType.PublicKey &&
+                      "value" in entry &&
+                      entry.value instanceof Uint8Array
                     )
 
                     return yield* Option.match(
-                      Option.fromNullishOr(controllerPubKey),
+                      Option.fromNullishOr(controllerPubKeyEntry),
                       {
                         onNone: () => Effect.succeed({ status: 400, body: "Missing public key" } satisfies Answer),
-                        onSome: () => Effect.gen(function*() {
+                        onSome: (pubKeyEntry) => Effect.gen(function*() {
+                          const controllerEphemeralPublic = yield* Match.value(pubKeyEntry).pipe(
+                            Match.when(
+                              { value: Match.instanceOf(Uint8Array) },
+                              (entry) => Effect.succeed(entry.value)
+                            ),
+                            Match.orElse(() => Effect.fail(new Error("Missing public key value")))
+                          )
                           const suite = yield* Effect.provide(AirPlay.Suite.Suite, Layer.provide(AirPlay.NodeSuite, NodeCrypto.layer))
+                          
+                          // Generate accessory ephemeral X25519 keys
                           const accessoryEphemeral = yield* suite.x25519KeyPair
                           const accessoryEphemeralPublic = yield* suite.x25519PublicKey(
                             accessoryEphemeral.privateKey
                           )
 
+                          // Derive shared secret and session key
+                          const sharedSecret = yield* suite.x25519SharedSecret({
+                            privateKey: accessoryEphemeral.privateKey,
+                            publicKey: controllerEphemeralPublic
+                          })
+
+                          const sessionKey = yield* suite.hkdfSha512({
+                            key: sharedSecret,
+                            salt: "Pair-Verify-Encrypt-Salt",
+                            info: "Pair-Verify-Encrypt-Info"
+                          })
+
+                          // Build verifyInfo for signing: sharedSecret + identifier + publicKey
+                          const { Redacted } = yield* Effect.promise(() => import("effect"))
+                          const sharedSecretBytes = Redacted.value(sharedSecret)
+                          
+                          const verifyInfo = new Uint8Array(
+                            sharedSecretBytes.length +
+                            accessoryIdentifier.length + 
+                            accessoryLongtermKeys.publicKey.length
+                          )
+                          verifyInfo.set(sharedSecretBytes, 0)
+                          verifyInfo.set(accessoryIdentifier, sharedSecretBytes.length)
+                          verifyInfo.set(accessoryLongtermKeys.publicKey, sharedSecretBytes.length + accessoryIdentifier.length)
+
+                          // Sign with accessory long-term key
+                          const signature = yield* suite.ed25519Sign({
+                            privateKey: accessoryLongtermKeys.privateKey,
+                            message: verifyInfo
+                          })
+
+                          // Build and encrypt sub-TLV
+                          const subTlv = yield* Schema.encodeEffect(Items)([
+                            { type: TlvType.Identifier, value: accessoryIdentifier },
+                            { type: TlvType.Signature, value: signature }
+                          ])
+
+                          const nonce = new Uint8Array(12)
+                          nonce.set(new TextEncoder().encode("PV-Msg02"))
+
+                          const { Nonce: VocabNonce } = AirPlay.PairVerifyVocabulary
+                          
+                          const encrypted = yield* suite.seal({
+                            key: sessionKey,
+                            nonce: yield* AirPlay.Suite.Nonce.label(VocabNonce.PVMsg02),
+                            plaintext: subTlv,
+                            associatedData: new Uint8Array()
+                          })
+
+                          // Send M2
                           const m2 = [
                             { type: TlvType.State, value: new Uint8Array([2]) },
-                            { type: TlvType.PublicKey, value: accessoryEphemeralPublic }
+                            { type: TlvType.PublicKey, value: accessoryEphemeralPublic },
+                            { type: TlvType.EncryptedData, value: encrypted }
                           ]
                           const m2Bytes = yield* Schema.encodeEffect(Items)(m2).pipe(
                             Effect.orElseSucceed(() => new Uint8Array(0))
@@ -327,13 +400,23 @@ export const make = (options: {
       Effect.succeed(options.advertise === true)
     )
 
-    return {
+    const deviceResult: AirPlayDevice = {
       port,
       name,
       loaded: Ref.get(loaded),
       fetched: Ref.get(fetched),
       rate: Ref.get(rateRef),
       position: Ref.get(position),
-      volume: Ref.get(volume)
+      volume: Ref.get(volume),
+      ...(requirePairing
+        ? {
+          accessoryKeys: {
+            publicKey: accessoryLongtermKeys.publicKey,
+            identifier: accessoryIdentifier
+          }
+        }
+        : {})
     }
+    
+    return deviceResult
   })

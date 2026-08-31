@@ -1110,12 +1110,12 @@ const play = Command.make(
             )
           ),
           Effect.gen(function*() {
-            const { Session: AirPlaySession } = yield* Effect.promise(() => import("@castcli/airplay"))
+            const { Session: AirPlaySession, NodeSuite } = yield* Effect.promise(() => import("@castcli/airplay"))
             const url = useHls ? `${baseUrl}/master.m3u8` : `${baseUrl}/stream?o=${resumed}`
             yield* AirPlaySession.play(airplayDevice, {
               contentLocation: url,
               startPosition: useHls ? Seconds.make(0) : resumed
-            })
+            }).pipe(Effect.provide(NodeSuite))
             yield* Console.log(`playing on ${airplayDevice.name}`)
           })
         )),
@@ -1257,7 +1257,13 @@ cast.pipe(
   // empty message, and `error:` followed by nothing tells a person less than no
   // output at all would.
   Effect.tapError((error) =>
-    Console.error(`error: ${error.message.length > 0 ? error.message : error._tag}`)
+    Console.error(
+      `error: ${Match.value(error).pipe(
+        Match.when(Match.string, (err) => (err.length > 0 ? err : error._tag)),
+        Match.when({ message: Match.string }, (err) => (err.message.length > 0 ? err.message : error._tag)),
+        Match.orElse(() => error._tag)
+      )}`
+    )
   ),
   NodeRuntime.runMain({ disableErrorReporting: true })
 )

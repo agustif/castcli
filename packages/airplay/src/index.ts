@@ -1,5 +1,6 @@
 // AirPlay: HomeKit pairing, and the sender protocol built on it.
 export * as GeneratedPairing from "./Generated/index.ts"
+export * as PairVerify from "./PairVerify/index.ts"
 export * as PairVerifyVocabulary from "./PairVerify/Vocabulary.ts"
 export * as Session from "./Session.ts"
 export * as Suite from "./Suite/index.ts"
