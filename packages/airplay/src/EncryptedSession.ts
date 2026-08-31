@@ -116,7 +116,7 @@ export const decryptFrame = (
     const suite = yield* SuiteService
     
     yield* Effect.when(
-      Effect.fail(new Error("Frame too short") as PlatformError),
+      Effect.fail({ _tag: "FrameTooShort" as const, message: "Frame too short" }),
       Effect.succeed(frame.length < 2)
     )
 
