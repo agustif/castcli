@@ -1,21 +1,24 @@
-# AirPlay: HAP pair-verify then play-queue over HTTP
+# AirPlay: HAP pair-setup, pair-verify, then play-queue over HTTP
 
 The tool speaks Cast, DLNA, and AirPlay. This document explains what was built
 and what was deliberately left out.
 
-Last updated: 2026-08-31. AirPlay 2 protocol implemented: HAP pair-verify
-(optional), then play-queue (POST /command insertPlayQueueItem). Query-string
-/play (AirPlay 1) is no longer supported. Volume control implemented.
+Last updated: 2026-08-31. AirPlay 2 protocol implemented: HAP pair-setup (M1-M6)
+and pair-verify (M1-M4), then play-queue (POST /command insertPlayQueueItem).
+Volume control implemented. CLI performs pair-setup (PIN 3939 for emulator) then
+pair-verify automatically.
 
 ## What is built
 
 AirPlay 2 video is a **pull model**, like the other two. The sender does not push
-pixels: after optional pair-verify, it hands over a URL via play-queue, and the
-device fetches it. The control surface is plainer than DLNA — no SOAP, no DIDL:
+pixels: after pair-setup (if needed) and pair-verify, it hands over a URL via
+play-queue, and the device fetches it. The control surface is plainer than DLNA
+— no SOAP, no DIDL:
 
 | | |
 |---|---|
-| `POST /pair-verify` | HAP pair-verify (M1-M4), optional for devices not requiring pairing |
+| `POST /pair-setup` | HAP pair-setup (M1-M6), establishes long-term keys with PIN |
+| `POST /pair-verify` | HAP pair-verify (M1-M4), runs before every play session |
 | `POST /command` | insertPlayQueueItem with Content-Location and Start-Position (XML plist) |
 | `POST /scrub?position=` | seek |
 | `POST /rate?value=` | `0` pauses, `1` resumes |
@@ -34,13 +37,20 @@ and clears 0.** Checking either alone silently excludes half of them.
 
 ### Implementation
 
-The sender implements **AirPlay 2 with optional HAP pair-verify and play-queue**:
+The sender implements **AirPlay 2 with HAP pair-setup, pair-verify, and play-queue**:
 
 - mDNS `_airplay._tcp` discovery with TXT record parsing for `features`, `flags`,
   `model`, and `deviceid`
 - The `AirPlayDevice` domain model with video capability detection
-- **HAP pair-verify** (M1-M4): optional, runs when pairing credentials provided,
-  using existing Suite primitives (X25519, Ed25519, ChaCha20-Poly1305, HKDF)
+- **HAP pair-setup** (M1-M6): establishes long-term Ed25519 keys with PIN code
+  (3939 for emulator testing), using existing PairSetup.Controller and Suite
+  primitives (SRP-6a, Ed25519, X25519, ChaCha20-Poly1305, HKDF)
+- **HAP pair-verify** (M1-M4): runs before every play session, authenticates
+  using stored long-term keys, using PairVerify.Controller
+- **CLI pairing workflow**: retrieves stored pairing or runs pair-setup, always
+  runs pair-verify before play, fails closed if pairing/verify fails
+- **Pairing persistence**: stores controller and accessory keys in
+  `XDG_STATE_HOME/castcli/state.json` keyed by device IP
 - HTTP-based session:
   - `POST /command` insertPlayQueueItem (AirPlay 2 play-queue, feature bit 33)
   - `POST /setproperty` for volume control (0.0 to 1.0)
@@ -49,27 +59,19 @@ The sender implements **AirPlay 2 with optional HAP pair-verify and play-queue**
   `resume`, `seek`, `stop`
 - An emulator device that:
   - Advertises via mDNS
-  - Implements mock pair-verify (M1-M4) with `requirePairing` mode
-  - Accepts POST /command without pairing (requirePairing=false)
+  - Implements pair-setup (M1-M6) and pair-verify (M1-M4) with `requirePairing` mode
+  - Accepts POST /command after successful pair-verify (requirePairing=true)
   - Rejects unauthenticated requests with 403 when requirePairing=true
   - Actually HTTP-pulls the media URL handed to it
-- **E2E test** (`apps/cli/test/AirPlay.e2e.test.ts`) where the built CLI sends
-  play-queue command to the emulated AirPlay device and **asserts the device
-  fetched the film**
+- **E2E test** (`apps/cli/test/AirPlay.e2e.test.ts`) where the built CLI runs
+  pair-setup, pair-verify, and play-queue command to the emulated AirPlay device
+  with `requirePairing=true` and **asserts the device fetched the film**
 
 The same media server, quality ladder, segment encoder, and subtitle handling
 used for Cast and DLNA serve AirPlay — because all three are pull models and
 the device does the fetching.
 
 ### What is deliberately not built
-
-**Pair-setup** (initial pairing with PIN exchange) is not implemented. The
-pair-verify flow is optional and only runs when pairing credentials are provided
-via `PlayOptions.pairing`.
-
-**Query-string POST /play** (AirPlay 1) is not supported. The implementation
-uses POST /command insertPlayQueueItem (AirPlay 2) exclusively. Legacy devices
-that only understand query-string /play will not work.
 
 **FairPlay is not needed.** This is the one piece of good news and it is worth
 recording precisely: `/fp-setup` gates *mirroring* and the audio key, not URL
@@ -82,14 +84,14 @@ over a URL does not.
 path here is built on the pull model: the device fetches from us, not the other
 way around.
 
-**Encrypted control channel** (ChaCha20-Poly1305 framing after pair-verify) is
-not implemented. The current implementation sends plaintext HTTP after
-pair-verify. Real devices may require encrypted framing.
+**Encrypted RTSP framing** (ChaCha20-Poly1305 encrypted RTP audio) is not
+implemented. This implementation does HTTP video only with no audio RTP path.
+
+**Encrypted control channel** (ChaCha20-Poly1305 framing of HTTP after
+pair-verify) is not implemented. The current implementation sends plaintext HTTP
+after pair-verify. Real devices may require encrypted framing for some commands.
 
 ## Known gaps
-
-**Pair-setup** (initial pairing with PIN) is not implemented. Pair-verify is
-optional and only runs when pairing credentials are provided.
 
 **Binary plist decoding** for playback-info is not implemented. The current
 implementation parses XML plists only.
@@ -101,17 +103,11 @@ discovery.
 
 **RTSP audio** (SETUP/RECORD) is not implemented. This is HTTP video only.
 
-**Full pair-verify e2e with requirePairing=true** is not tested. The emulator's
-mock pair-verify is a stub that doesn't send proper encrypted M2 responses.
-
 ## What would complete it
 
 - **An Apple TV to test against.** The cryptographic implementation is complete;
   hardware testing would reveal whether encrypted control-channel framing or
   other details are required.
   
-- **Pair-setup implementation** to establish pairing with PIN code. Currently
-  pair-verify is optional and only runs when pairing credentials are provided.
-
-- **Complete emulator pair-verify** to send proper encrypted M2 responses for
-  full crypto e2e testing with requirePairing=true.
+- **Encrypted control channel framing** if real devices require it after
+  pair-verify.

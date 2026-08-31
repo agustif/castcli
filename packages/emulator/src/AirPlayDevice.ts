@@ -58,19 +58,33 @@ export const make = (options: {
     const volume = yield* Ref.make(0.5)
     const pairVerified = yield* Ref.make(!requirePairing)
 
-    // Generate accessory long-term Ed25519 keys for pair-verify
+    // Generate accessory long-term Ed25519 keys for pair-verify and pair-setup
     const AirPlayForKeys = yield* Effect.promise(() => import("@castcli/airplay"))
     const suiteForKeys = yield* Effect.provide(AirPlayForKeys.Suite.Suite, Layer.provide(AirPlayForKeys.NodeSuite, NodeCrypto.layer))
     const accessoryLongtermKeys = yield* suiteForKeys.ed25519KeyPair
     const accessoryIdentifier = new TextEncoder().encode("emulator-test")
+
+    // Create real HAP pair-setup accessory (same long-term keys as pair-verify)
+    const pairSetupAccessory = yield* (requirePairing
+      ? Effect.map(
+          AirPlayForKeys.PairSetupAccessory.make({
+            setupCode: "3939",
+            pairingId: "emulator-test",
+            seed: accessoryLongtermKeys.privateKey,
+            attemptLimit: 100
+          }).pipe(Effect.provide(Layer.provide(AirPlayForKeys.NodeSuite, NodeCrypto.layer))),
+          Option.some
+        )
+      : Effect.succeed(Option.none())
+    )
 
     const client = yield* HttpClient.HttpClient
     const pulls = yield* Queue.unbounded<string>()
 
     const pull = (url: string) =>
       Effect.gen(function*() {
-        yield* client.get(url).pipe(Effect.flatMap((r) => r.arrayBuffer))
         yield* Ref.update(fetched, (all) => [...all, url])
+        yield* client.get(url).pipe(Effect.flatMap((r) => r.arrayBuffer))
       }).pipe(Effect.orElseSucceed(() => undefined))
 
     yield* Effect.forkScoped(Stream.runForEach(Stream.fromQueue(pulls), pull))
@@ -96,6 +110,29 @@ export const make = (options: {
     const port = Brands.Port.make(
       address !== null && typeof address === "object" ? address.port : 7000
     )
+
+    const handlePairSetup = (body: Uint8Array): Effect.Effect<Answer> =>
+      Option.match(pairSetupAccessory, {
+        onNone: () => Effect.succeed(NOT_FOUND),
+        onSome: (accessory) =>
+          Effect.match(
+            Effect.provide(
+              accessory.respond(body),
+              Layer.merge(Layer.provide(AirPlayForKeys.NodeSuite, NodeCrypto.layer), NodeCrypto.layer)
+            ),
+            {
+              onFailure: () => ({
+                status: 500,
+                body: "Pair-setup failed"
+              } satisfies Answer),
+              onSuccess: (response: Uint8Array) => ({
+                status: 200,
+                body: response,
+                contentType: "application/octet-stream"
+              } satisfies Answer)
+            }
+          )
+      })
 
     const handlePairVerify = (body: Uint8Array): Effect.Effect<Answer> =>
       requirePairing
@@ -242,6 +279,7 @@ export const make = (options: {
         const body = yield* bodyOf(request)
 
         return yield* Match.value({ path, method }).pipe(
+          Match.when({ path: "/pair-setup", method: "POST" }, () => handlePairSetup(body)),
           Match.when({ path: "/pair-verify", method: "POST" }, () => handlePairVerify(body)),
 
           Match.when({ path: "/play", method: "POST" }, () =>
@@ -351,6 +389,22 @@ export const make = (options: {
 </dict>
 </plist>`
               return { status: 200, body: plist, contentType: "text/x-apple-plist+xml" }
+            })),
+
+          Match.when({ path: "/server-info", method: "GET" }, () =>
+            Effect.succeed({
+              status: 200,
+              body: `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>model</key><string>Emulator</string>
+  <key>deviceid</key><string>AA:BB:CC:DD:EE:FF</string>
+  <key>features</key><integer>0x1</integer>
+  <key>srcvers</key><string>220.68</string>
+</dict>
+</plist>`,
+              contentType: "text/x-apple-plist+xml"
             })),
 
           Match.when({ path: "/setproperty", method: "POST" }, () =>
