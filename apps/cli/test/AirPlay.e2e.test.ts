@@ -49,7 +49,8 @@ describe("cast play, against an emulated AirPlay device", () => {
             })
 
             // Use the Fixture.play helper which forks the CLI and sets env vars correctly
-            yield* play(device, file, directory, [])
+            // Must specify --protocol airplay since --ip defaults to Cast
+            yield* play(device, file, directory, ["--protocol", "airplay"])
 
             // 1. Device was handed something to play via POST /command after pair-setup and pair-verify
             const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(90))
