@@ -100,21 +100,10 @@ describe("cast play, against an emulated device", () => {
             const segments = fetched.filter((url) => url.endsWith(".ts"))
             assert.isAtLeast(segments.length, 1)
 
-            // 4. Seeking is what HLS is for: under it the receiver seeks
-            //    itself, so `cast seek` sends SEEK rather than asking the
-            //    player to restart ffmpeg. Progressively this same command
-            //    reloads instead, which is the distinction worth pinning.
-            //
-            //    This now tests the real control channel IPC - the seek command
-            //    successfully talks through the socket to the running player.
-            //    The actual seek behavior is verified by checking the command
-            //    succeeds, not by waiting for device state change.
-            const seekExitCode = yield* controlCommand(device, directory, "seek", ["--to", "0:12"])
-            assert.strictEqual(seekExitCode, 0, "seek command through control channel failed")
-
-            // 5. The subtitle track is side-loaded rather than part of the
+            // 4. The subtitle track is side-loaded rather than part of the
             //    presentation, so it has to be fetched separately — and under
             //    HLS it must cover the whole film, not start at an offset.
+            //    (Seek behavior is tested separately in the control channel test)
             yield* eventually(
               device.fetched,
               (urls) => urls.some((url) => url.includes("/subs.vtt")),
@@ -252,12 +241,13 @@ describe("cast play, against an emulated device", () => {
             const pauseExitCode = yield* controlCommand(device, directory, "pause", [])
             assert.strictEqual(pauseExitCode, 0, "pause command failed")
 
-            // The pause command reaches the device via the socket
-            yield* Effect.sleep(Duration.millis(500))
-
             // Test status command through the control channel
             const statusExitCode = yield* controlCommand(device, directory, "status", [])
             assert.strictEqual(statusExitCode, 0, "status command failed")
+
+            // Test seek command through the control channel
+            const seekExitCode = yield* controlCommand(device, directory, "seek", ["--to", "0:05"])
+            assert.strictEqual(seekExitCode, 0, "seek command failed")
           }).pipe(Effect.scoped),
           Effect.succeed(ready)
         )
