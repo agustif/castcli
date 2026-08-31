@@ -222,7 +222,7 @@ const scan = Command.make(
       Effect.succeed(found.cast.length > 0 || found.upnp.length > 0 || found.airplay.length > 0)
     )
   })
-).pipe(Command.withDescription("List devices on this network, Cast and DLNA alike"))
+).pipe(Command.withDescription("List devices on this network (Cast, DLNA, and AirPlay)"))
 
 // ------------------------------------------------------------------- play
 
@@ -1224,7 +1224,7 @@ const play = Command.make(
       Match.exhaustive
     )
   })
-).pipe(Command.withDescription("Stream a file to a Cast device"))
+).pipe(Command.withDescription("Stream a file to a device (Cast, DLNA, or AirPlay)"))
 
 // ---------------------------------------------------------------- streams
 
@@ -1331,7 +1331,7 @@ const streams = Command.make(
 // ------------------------------------------------------------------- root
 
 const cast = Command.make("cast").pipe(
-  Command.withDescription("Stream local media to a Cast device"),
+  Command.withDescription("Stream local media to a device (Cast, DLNA, or AirPlay)"),
   Command.withSubcommands([play, scan, streams, ...Control.all])
 )
 

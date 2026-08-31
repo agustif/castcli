@@ -1,22 +1,46 @@
 # Architecture
 
-## Shape of the thing
+For contributors: how this codebase is organized and the patterns it uses.
+
+## Package layout
+
+```
+packages/
+  domain/       Branded scalars, domain errors, media and device models
+  protocol/     Cast v2 wire format (generated from cast_channel.proto)
+  media/        ffmpeg, HLS playlist generation, WebVTT codec
+  quality/      Adaptive quality ladder and controller (progressive mode)
+  dlna/         DLNA/UPnP: SSDP discovery, SOAP actions, renderer control
+  airplay/      AirPlay: HAP pairing, crypto primitives, session management
+  platform/     Node bridges (UDP for mDNS, HTTP server, subprocess spawner)
+  emulator/     Emulated Cast, DLNA, and AirPlay devices for testing
+
+apps/
+  cli/          CLI commands, flags, media server routes
+
+tools/
+  oxlint-plugin/ Custom lint rules for Effect patterns
+```
+
+`domain` is the base: it imports no other workspace package, enforced by a lint rule.
+
+## Dependency graph
 
 ```
                     ┌──────────────────────────────────────┐
-                    │              apps/cli                │  effect/unstable/cli
+                    │              apps/cli                │
                     │  play · scan · streams · status …    │
-                    └──────────────────┬───────────────────┘
-                                       │
-        ┌──────────────────────────────┼──────────────────────────────┐
-        │                              │                              │
-┌───────▼─────────┐          ┌─────────▼─────────┐          ┌─────────▼─────────┐
-│    protocol     │          │       media       │          │      quality      │
-│ Session · Frame │          │  Ffmpeg · Vtt     │          │ Controller        │
-│ CastSocket(tls) │          │                   │          │ Signals · Ladder  │
-└───────┬─────────┘          └─────────┬─────────┘          └─────────┬─────────┘
-        │                              │                              │
-        └──────────────┬───────────────┴──────────────────────────────┘
+                    └──────────────┬───────────────────────┘
+                                   │
+        ┌──────────────────────────┼──────────────────────────────┐
+        │                          │                              │
+┌───────▼─────────┐      ┌─────────▼─────────┐        ┌─────────▼─────────┐
+│    protocol     │      │       media       │        │      quality      │
+│    dlna         │      │  Ffmpeg · Hls     │        │ Controller        │
+│    airplay      │      │  Vtt · Tracks     │        │ Signals · Ladder  │
+└───────┬─────────┘      └─────────┬─────────┘        └─────────┬─────────┘
+        │                          │                            │
+        └──────────────┬───────────┴────────────────────────────┘
                        │
               ┌────────▼─────────┐        ┌──────────────────────┐
               │      domain      │        │       platform       │
@@ -25,192 +49,124 @@
               └──────────────────┘        └──────────────────────┘
 ```
 
-`domain` is the base: it imports no other workspace package, so nothing it
-depends on becomes a dependency of everything else.
+## The pull model
 
-Two independent channels to the device, which is the thing to hold in mind:
+Two independent channels to the device:
 
-- **control** — TLS 8009, we connect outward, length-prefixed protobuf;
-- **data** — HTTP 8021, *the device connects to us* and pulls.
+- **Control** — TLS 8009 (Cast), HTTP (DLNA/AirPlay), we connect outward
+- **Data** — HTTP 8021, **the device connects to us** and pulls
 
-Almost every failure in this project came from forgetting that the second one is
-inbound. The advertised URL has to be routable **from the TV**.
+The advertised URL must be routable from the TV. This is why the tool exists: VLC advertises a link-local IPv6 address with zone index (`%en0`) that's meaningless to the TV.
 
-## Module map
+## Tagged `Target`, not adapter interfaces
 
-| Package | Module | Responsibility |
-|---|---|---|
-| `domain` | `Brands` | Branded scalars, constructed through `.make`/`.makeOption`/`.makeEffect` |
-| `domain` | `Errors` | Every failure as a `Schema.TaggedError`, causes preserved |
-| `domain` | `Rung` | `Copy \| Encode` — a quality rung as a tagged union |
-| `domain` | `Media` | ffprobe output, decoded rather than trusted |
-| `domain` | `Device` | A discovered Cast device |
-| `protocol` | `Frame` | Protobuf framing, descriptors generated from the `.proto` |
-| `protocol` | `GeneratedVocabulary` | Literal sets generated from the framework devices run |
-| `protocol` | `Namespace` | Namespaces, message types, player states, media commands |
-| `protocol` | `Messages` | Payload schemas; only the decoders are exported |
-| `protocol` | `Media` | LOAD/track schemas, from the published Cast reference |
-| `protocol` | `CastSocket` | TLS transport, as an Effect `Socket` |
-| `protocol` | `Session` | Virtual connections, heartbeat, launch, media commands |
-| `media` | `Ffmpeg/Args` | ffmpeg invocations as typed values |
-| `media` | `Ffmpeg/Service` | probe, extract cues, transcode — all scoped |
-| `media` | `Vtt/Codec` | WebVTT as a `Schema` codec, plus `cutFrom` |
-| `media` | `Tracks/Select` | Which audio and subtitle track to play, and why |
-| `media` | `Hls/Playlist` | Master and media playlists as values |
-| `quality` | `Ladder` | Building the rung ladder |
-| `quality` | `Signals` | State, thresholds, and `phaseOf` — *what situation are we in* |
-| `quality` | `Controller` | *What to do about it* — one exhaustive match |
-| `platform` | `Mdns`, `HttpServer` | The generic Node bridges |
-| `emulator` | `Device`, `Certificate` | A Cast device to test against |
+Cast, DLNA, and AirPlay are represented as a tagged union:
 
-There is a second implementation of the same idea, in plain TypeScript, as
-`@emulators/cast` on the `devices-and-google-cast` branch of a fork of
-vercel-labs/emulate. The duplication is deliberate: this one is Effect-native
-and wired into this suite, that one belongs to a toolchain with no Effect in it
-and serves a different audience. The protocol both speak is the part that must
-not drift, and it is pinned by tests on both sides.
-| `cli` | `Server/Routes` | The two endpoints the device pulls |
-| `cli` | `Cli/*` | Schema-validated flags, time codes, control commands |
-| `cli` | `State` | What is remembered between invocations, and never load bearing |
+```typescript
+type Target = Data.TaggedEnum<{
+  readonly Cast: { readonly device: CastDevice }
+  readonly Dlna: { readonly renderer: DlnaDescription.Renderer; readonly location: string }
+  readonly AirPlay: { readonly device: AirPlayDevice }
+}>
+```
 
-## Decisions worth explaining
+Every site that acts on a device uses `Match.exhaustive`, so adding a fourth protocol is a compile error until every command handles it. No adapter interface to implement — the three protocols agree on almost nothing except the pull model, which belongs to the media server.
 
-### Signals and Controller are separate
+## Effect patterns
 
-Deciding *what situation we are in* is a pure function of state and the clock
-(`Signals.phaseOf`), returning a tagged `Phase`. Acting on it is a separate
-exhaustive match. The payoff is that the acting half has no conditionals at all,
-and adding a new situation is a compile error until every site handles it.
+### Scopes own resources
 
-### Scopes own processes
-
-`Ffmpeg.transcode` is a scoped effect. Closing the scope kills the encoder, so a
-seek or a rung change is "close the old scope, open a new one" rather than
-bookkeeping a `Set` of child processes and remembering to `SIGKILL` them. The
-original JavaScript version had exactly that bookkeeping, and leaked encoders.
+`Ffmpeg.transcode` returns a scoped effect. Closing the scope kills the encoder. A seek or quality change is "close old scope, open new scope" — no bookkeeping, no leaked processes.
 
 ### Time is a service
 
-The controller reads `Clock` and loops on a `Schedule`, never `Date.now()` or
-`setInterval`. Thresholds are `Duration` values, so the unit is in the type. The
-whole controller can therefore be driven by `TestClock` — which matters, because
-its interesting behaviour happens over minutes.
+The quality controller reads `Clock` and loops on a `Schedule`, never `Date.now()` or `setInterval`. This lets the entire controller run under `TestClock`, which matters because interesting behavior happens over minutes.
 
-### Track selection is an effect, not a lookup
+### Brands catch type confusion
 
-Choosing a subtitle track needs information the container does not carry
-honestly: in the release this was built against, the 24-cue forced-signage track
-is flagged `default` and the 1670-line dialogue track is flagged nothing. Only
-the cue count separates them, and obtaining it means extracting the track — so
-`chooseAudio` is a pure function while `chooseSubtitle` is an effect that reads
-candidates in one language and keeps the richest.
+`Ipv4`, `Port`, `VolumeLevel`, `Seconds`, `StreamIndex` — branded types prevent:
 
-`bestSubtitle` is the pure ranking underneath both, so `cast streams` can mark
-the track `cast play` would pick rather than reimplementing the guess.
+- Handing a device `999.999.999.999` (rejected at parse time by `Ipv4.make`)
+- Treating volume percentage (0-100) as Cast volume level (0.0-1.0)
+- Confusing stream indices with track IDs
 
-### The two processes share a socket, not a file
-
-`cast seek` runs in a different process from `cast play`, and needs two things
-from it: where the running stream starts, and — when the target is before that
-point — someone to issue a fresh `LOAD`. Commands reach the running player through
-a unix domain socket (`ControlChannel`) with schema-validated request/response.
-The socket is bound when `play` starts and removed when it stops, so commands
-arrive without polling and the running player acts on them immediately.
-
-### Two presentations, one server
-
-`/stream` is a single continuous transcode; `/master.m3u8` and its variants are
-an HLS VOD presentation of the same file. They are served side by side because
-they fail differently — we choose the quality for one, the receiver chooses for
-the other — and serving both costs nothing, since a segment does not exist until
-it is requested.
-
-The HLS playlist is arithmetic over the running time, so it is a pure function
-and lives in `media/Hls/Playlist`. Only the segment encoder touches ffmpeg, and
-it is scoped like every other process here: a receiver that abandons a request
-mid-switch takes the encoder with it.
-
-### The vocabulary is generated, not transcribed
-
-Player states, stream types, HLS segment formats and track kinds come from
-`cast_receiver_framework.js` — the code a Cast device actually runs — via
-`scripts/extract-receiver-vocabulary.ts`. Its enums survive minification as
-object literals keyed by constant name, so they can be recovered and diffed.
-
-Two vocabularies are deliberately wider than what is generated, each documented
-at the point it is widened: `PlayerState` also accepts `LOADING` and
-`StreamType` also accepts `OTHER`, because rejecting a word a device might send
-discards the whole message rather than the word.
-
-The extractor refuses to guess. Asked for `PlayerState` it found two tables with
-the same key set — the media player's, in caps, and the receiver application's,
-in lowercase — and stopped rather than binding the wrong one.
+`--ip not-an-ip` fails at argument parsing, not at `LOAD`.
 
 ### Errors carry causes
 
-`Schema.Defect()` preserves the underlying failure instead of flattening it to a
-string. `MediaProbeError` knows the path; `DeviceNotFoundError` knows what it
-searched for and what it found, and renders that itself.
+Every domain error is a `Schema.TaggedError` with cause preservation. `DeviceNotFoundError` knows what was searched for and what was found; `MediaProbeError` knows the path. Errors render themselves with full context.
 
-### Brands catch the bug that started this
+### Signals and controller are separate
 
-`Ipv4` exists because handing a device an unroutable address is the failure this
-whole tool works around. Making the type refuse anything that is not a dotted
-quad moves that class of bug to compile time, and `--ip not-an-ip` now fails at
-argument parsing rather than at `LOAD`.
+`Signals.phaseOf` is a pure function of state and clock: "what situation are we in?" Returns a tagged `Phase`.
 
-### ffmpeg arguments are values
+`Controller` is a separate exhaustive match over `Phase`: "what to do about it?" No conditionals — adding a new phase is a compile error until every site handles it.
 
-`Media/Ffmpeg/Args` models each option as a variant with a `render` function and
-closed literal sets for codecs, muxers and flags. A flat `Array<string>` is a
-wire protocol to another program with none of the safety: a typo in `-movflags`
-is accepted silently, positional rules (input seeking must precede `-i`) are
-invisible, and nothing stops a bitrate landing where a codec belongs.
+## Generated vocabularies
 
-## Guardrails
+Three wire vocabularies come from their sources, not from transcription:
 
-`oxlint` with a custom plugin written in Effect (`effect-oxlint`) enforces the
-project's one rule — never hand-roll what Effect provides:
+| Generated | From | Caught |
+|---|---|---|
+| Cast frame descriptors | `cast_channel.proto` | Field numbers that were right by luck and would decay |
+| Cast media vocabulary | `cast_receiver_framework.js` (what devices run) | `HlsSegmentFormat` has 8 values, not the 4 written by hand |
+| UPnP actions | `AVTransport:1` / `RenderingControl:1` SCPDs | Argument order (SOAP carries it positionally) |
 
-| Rule | Instead use |
+`npm run codegen:check` fails when any is stale. `npm run vocabulary:sync` refetches Cast vocabulary from Google.
+
+## Two processes, one socket
+
+`cast play` and `cast seek` are separate processes. Control commands reach the running player via a unix domain socket (`ControlChannel`) with schema-validated request/response. The socket is created when `play` starts and removed when it stops.
+
+## HLS and progressive, side by side
+
+`/stream` serves a single continuous transcode. `/master.m3u8` and its variants serve HLS VOD. Both are served simultaneously because they fail differently — we choose quality for one, the receiver for the other. Serving both costs nothing: segments don't exist until requested.
+
+HLS playlists are arithmetic over runtime, so they're pure functions (`media/Hls/Playlist`). Only the segment encoder touches ffmpeg, and it's scoped: a receiver that abandons mid-switch takes the encoder with it.
+
+## Validation at boundaries
+
+Every value is decoded at its boundary (CLI flags, ffprobe output, Cast messages, DLNA SOAP, AirPlay plist) and carries a brand afterward. `Option` for absence, never `null` or magic zero.
+
+## Control flow via Effect, not primitives
+
+The `oxlint` plugin enforces: never hand-roll what Effect provides.
+
+| Forbidden | Use instead |
 |---|---|
-| `no-if` | `Match.value` / `Option.match` / `Effect.when` |
-| `no-try-catch`, `no-throw` | `Effect.try`, `Schema.TaggedError` |
-| `no-await`, `no-promise` | `yield*`, `Effect.callback` |
-| `no-timers`, `no-date-now`, `no-math-random` | `Schedule`, `Clock`, `Random` |
-| `no-process-env` | `Config` |
-| `no-console` | `Console`, `Effect.log*` |
-| `no-json-parse` | `Schema.fromJsonString` |
-| `no-schema-sync` | `decodeEffect` — the `*Sync` forms throw, making a typed failure a defect |
-| `no-run-sync`, `no-swallowed-errors`, `no-or-die` | keep the fiber and the error channel intact |
-| `no-node-http`, `no-node-fs`, `no-fetch`, `no-node-child-process` | the Effect equivalents |
+| `if`/`else` | `Match.value`, `Option.match`, `Effect.when` |
+| `try`/`catch`, `throw` | `Effect.try`, `Schema.TaggedError` |
+| `await`, raw `Promise` | `yield*`, `Effect.promise` |
+| `setTimeout`, `Date.now()`, `Math.random()` | `Schedule`, `Clock`, `Random` |
+| `process.env` | `Config` |
+| `console.log` | `Console`, `Effect.log*` |
+| `JSON.parse` | `Schema.fromJsonString` |
+| `Schema.decodeSync` | `decodeEffect` (the `*Sync` forms throw) |
+| `node:http`, `node:fs`, `fetch`, `node:child_process` | Effect equivalents |
 
-`packages/platform/**` is exempt from the Node-interop rules: confining that
-code to one package is the point of the package.
+`packages/platform/**` is exempt from Node-interop rules — confining that code is the point of the package.
 
-Architecture is checked separately by dependency-cruiser — no cycles, Node
-builtins confined, packages never importing the app. One rule it *cannot*
-enforce lives in the lint plugin instead: `packages/domain` importing another
-workspace package resolves through tsconfig paths but is not a declared
-dependency, so dependency-cruiser drops the edge rather than reporting it.
+## Architecture checks
 
-Two of these caught real bugs in code I had already written — `no-schema-sync`
-found `Schema.decodeSync` in the WebVTT codec turning parse failures into
-defects, and `no-node-http` found `node:http` leaking into the CLI.
+`dependency-cruiser` enforces:
 
-## What Effect does not cover
+- No cycles
+- Node builtins stay in `platform` and `protocol`
+- Packages never import the app
+- `domain` imports no other workspace package (also checked by lint, since tsconfig paths resolve before dependency-cruiser sees the import)
 
-- **TLS/TCP client sockets.** `effect/unstable/socket` is WebSocket-only. But
-  `Socket` itself is transport-agnostic, so `protocol/CastSocket` bridges
-  `node:tls` through `Duplex.toWeb()` into `Socket.fromTransformStream` — the
-  handshake is the only Node-specific part, and everything downstream consumes a
-  real `Socket.Socket`.
-- **A free port.** `platform/HttpServer.freePort` binds to zero and lets go,
-  because the configured port is a preference: the receiver is told which URL to
-  pull, so any port works, and something else on the machine holding 8021 should
-  not stop a film.
-- **A TLS server.** The emulator listens with `node:tls`, which is the same
-  gap as the client side and confined the same way, to one package.
-- **UDP.** No datagram module at all, so mDNS uses `node:dgram`. The datagram
-  callback cannot run an Effect, so it hands packets to a `Queue` and a forked
-  fiber folds them into a `Ref` — the same shape `CastSocket` uses.
+## What Effect doesn't cover
+
+- **TLS/TCP client**: `effect/unstable/socket` is WebSocket-only. `protocol/CastSocket` bridges `node:tls` via `Duplex.toWeb()` into `Socket.fromTransformStream`.
+- **Free port**: `platform/HttpServer.freePort` binds to zero and releases it.
+- **TLS server**: The emulator uses `node:tls`, confined to `packages/emulator`.
+- **UDP**: mDNS uses `node:dgram` in `packages/platform/Mdns`. Datagram callbacks can't run Effects, so they push to a `Queue` and a forked fiber folds packets into a `Ref`.
+
+## Testing
+
+- **Unit tests**: `vitest`, about 1 second for 624 tests
+- **E2E tests**: Built binary run against emulated Cast, DLNA, and AirPlay devices. Spawn processes, bind ports, encode video. Run serially and separately from the fast suite.
+
+`packages/emulator` holds three devices. Each serves its control channel and pulls media over HTTP like a real device. The Cast emulator can advertise via mDNS (off by default). The AirPlay emulator can require HAP pairing and decrypts encrypted control frames.
+
+E2E tests exercise the inversion this tool is built around: the device pulls from us.

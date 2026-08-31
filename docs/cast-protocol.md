@@ -1,8 +1,6 @@
-# Cast protocol notes
+# Cast Protocol Reference
 
-Findings from making this work against a real device (Xiaomi MiTV running the
-stock Default Media Receiver). Most of these are not written down anywhere
-obvious, and each one fails *silently* — which is what makes them expensive.
+Wire protocol details verified against real Cast devices. Most of these are not documented by Google and fail silently.
 
 ## Transport
 
