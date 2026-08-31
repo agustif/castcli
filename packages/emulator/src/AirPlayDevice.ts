@@ -83,8 +83,8 @@ export const make = (options: {
 
     const pull = (url: string) =>
       Effect.gen(function*() {
-        yield* client.get(url).pipe(Effect.flatMap((r) => r.arrayBuffer))
         yield* Ref.update(fetched, (all) => [...all, url])
+        yield* client.get(url).pipe(Effect.flatMap((r) => r.arrayBuffer))
       }).pipe(Effect.orElseSucceed(() => undefined))
 
     yield* Effect.forkScoped(Stream.runForEach(Stream.fromQueue(pulls), pull))
