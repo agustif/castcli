@@ -58,10 +58,10 @@ Three things wait on hardware:
 2. **DLNA on a real TV**: The path is verified against an emulated renderer and has never met a real set.
 3. **AirPlay on an Apple TV or third-party AirPlay TV**: The sender (pair-setup, pair-verify, encrypted control, play-queue, volume) is complete and verified against an emulated device. Hardware would confirm it works end-to-end.
 
-### Protocol improvements in flight
+### Unproven gap
 
-One improvement is in draft but not merged:
+One gap remains unproven in software:
 
 - **mDNS discovery end-to-end** (draft PR #24): the e2e test currently uses `--ip` to bypass discovery.
 
-Everything that can be verified without hardware has been.
+Everything else that can be verified without hardware has been.

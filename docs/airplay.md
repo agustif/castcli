@@ -159,6 +159,6 @@ Binary plist support (`bplist00` format) is implemented for Apple TV compatibili
 
 Software is complete and verified against an emulated AirPlay device that requires pairing, decrypts encrypted control frames, and pulls the media URL. Hardware testing remains: an Apple TV or third-party AirPlay TV to confirm the implemented sender works end-to-end.
 
-One protocol improvement is in flight but not yet merged:
+One gap remains unproven:
 
 - **mDNS discovery end-to-end** (draft PR #24): the e2e test currently uses `--ip` to bypass discovery
