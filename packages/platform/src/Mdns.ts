@@ -577,12 +577,10 @@ export const advertiseAirPlay = (options: {
     yield* Effect.forkScoped(
       Stream.runForEach(Stream.fromQueue(queries), ({ from, packet }) => {
         const isQuery = packet.length >= 12 && (packet.readUInt16BE(2) & 0x8000) === 0
-        const questions = airPlayQuestionsIn(packet)
-        const matches = questions.some((q) => q === serviceType)
         
         return Effect.when(
           Effect.sync(() => socket.send(response, from.port, from.address, () => {})),
-          Effect.succeed(isQuery && matches)
+          Effect.succeed(isQuery)
         )
       })
     )
