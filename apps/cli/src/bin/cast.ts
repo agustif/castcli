@@ -10,7 +10,6 @@
 import {
   Array,
   Console,
-  Data,
   Match,
   Duration,
   Effect,
@@ -25,7 +24,8 @@ import { Argument, Command } from "effect/unstable/cli"
 import * as Flags from "../Cli/Flags.ts"
 import * as Control from "../Cli/Control.ts"
 import * as TimeCode from "../Cli/TimeCode.ts"
-import { FetchHttpClient, HttpClient, HttpRouter, HttpBody, HttpClientRequest } from "effect/unstable/http"
+import * as Target from "../Cli/Target.ts"
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpBody, HttpRouter } from "effect/unstable/http"
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { NodeCrypto } from "@effect/platform-node"
 import { FileSystem } from "effect/FileSystem"
@@ -41,7 +41,6 @@ import {
   type MediaStream,
   Height,
   Ipv4,
-  Port,
   type Rung,
   Seconds,
   StreamIndex,
@@ -56,13 +55,11 @@ import {
   ServerBindError,
   AirPlayPinRequiredError
 } from "@castcli/domain"
-import { CastDevice, AirPlayDevice } from "@castcli/domain"
+import { CastDevice } from "@castcli/domain"
 import { Mdns } from "@castcli/platform"
 import {
   Description as DlnaDescription,
-  Discovery as Ssdp,
-  Renderer as DlnaRenderer,
-  Ssdp as DlnaSsdp
+  Renderer as DlnaRenderer
 } from "@castcli/dlna"
 import { Controller as Quality } from "@castcli/quality"
 import { Ladder } from "@castcli/quality"
@@ -75,7 +72,6 @@ import * as ControlChannel from "../ControlChannel.ts"
 import * as ErrorFormatter from "../ErrorFormatter.ts"
 
 const CAST_SERVICE = "_googlecast._tcp.local"
-const AIRPLAY_SERVICE = "_airplay._tcp.local"
 
 /** Unique only within one MediaInformation, so a constant is enough. */
 const SUBTITLE_TRACK_ID = TrackId.make(1)
@@ -153,71 +149,6 @@ const localAddress = (override: Option.Option<string>) =>
 
 // ------------------------------------------------------------------- scan
 
-/**
- * A device we could play to, whichever protocol it speaks.
- *
- * A tagged union rather than an interface with three implementations. The three
- * protocols agree on almost nothing — Cast launches an application over TLS,
- * DLNA posts SOAP, AirPlay speaks HTTP — and the single thing they share, that
- * the *device* fetches the media from us, is a property of the media server
- * rather than of any object. A union makes every site that acts on a target
- * handle all three, and `Match.exhaustive` says so at compile time.
- */
-type Target = Data.TaggedEnum<{
-  readonly Cast: { readonly device: CastDevice }
-  readonly Dlna: { readonly renderer: DlnaDescription.Renderer; readonly location: string }
-  readonly AirPlay: { readonly device: AirPlayDevice }
-}>
-
-const Target = Data.taggedEnum<Target>()
-
-const describeTarget: (target: Target) => string = Match.type<Target>().pipe(
-  Match.tag("Cast", ({ device }) => `${device.name} — Cast at ${device.ip}:${device.port}`),
-  Match.tag("Dlna", ({ renderer }) => `${renderer.friendlyName} — DLNA`),
-  Match.tag("AirPlay", ({ device }) => `${device.name} — AirPlay at ${device.ip}:${device.port}`),
-  Match.exhaustive
-)
-
-/**
- * Fetch a renderer's description and read it.
- *
- * An SSDP advertisement is only a pointer: it says a device exists and where
- * its description lives, and nothing about whether it can play video. A media
- * *server* on a NAS answers the same search, so the description is what tells
- * a television apart from a filing cabinet.
- *
- * A device that fails to answer is dropped rather than reported: it was found
- * by a broadcast we sent to the whole network, and something on it being
- * unreachable is not an error in what the person asked for.
- */
-const describeRenderer = (client: HttpClient.HttpClient, location: string) =>
-  client.get(location).pipe(
-    Effect.flatMap((response) => response.text),
-    Effect.map((xml) => DlnaDescription.parseRenderer(xml, location)),
-    Effect.orElseSucceed(() => Option.none<DlnaDescription.Renderer>())
-  )
-
-/**
- * Everything on the network we could play to.
- *
- * All three sweeps run at once because they are independent waits on different
- * sockets, and running them sequentially would triple the time.
- */
-const discoverTargets = (timeout: Duration.Duration) =>
-  Effect.map(
-    Effect.all(
-      [
-        Effect.orElseSucceed(Mdns.discoverWithRetry(CAST_SERVICE, timeout), () => []),
-        Effect.orElseSucceed(
-          Effect.scoped(Ssdp.search(DlnaSsdp.MEDIA_RENDERER, timeout)),
-          () => []
-        ),
-        Effect.orElseSucceed(Mdns.discoverAirPlayWithRetry(AIRPLAY_SERVICE, timeout), () => [])
-      ],
-      { concurrency: 3 }
-    ),
-    ([cast, upnp, airplay]) => ({ cast, upnp, airplay })
-  )
 
 const scan = Command.make(
   "scan",
@@ -227,7 +158,7 @@ const scan = Command.make(
     const client = yield* HttpClient.HttpClient
     yield* Console.log("scanning…")
 
-    const found = yield* discoverTargets(config.discoveryTimeout)
+    const found = yield* Target.discover(config.discoveryTimeout)
 
     yield* Effect.forEach(found.cast, (device) =>
       Console.log(
@@ -237,18 +168,19 @@ const scan = Command.make(
           `\n    status    ${device.status ?? "idle"}`
       ), { discard: true })
 
-    yield* Effect.forEach(found.airplay.filter(device => device.supportsVideo), (device) =>
+    yield* Effect.forEach(found.airplay, (device) =>
       Console.log(
         `\n  ${device.name}\n    protocol  AirPlay` +
           `\n    address   ${device.address}` +
-          `\n    model     ${device.model ?? "unknown"}`
+          `\n    model     ${device.model ?? "unknown"}` +
+          `\n    video     ${device.supportsVideo ? "yes" : "no"}`
       ), { discard: true })
 
     // A renderer's advertisement is only a pointer: what it is called, and
     // whether it can play video at all, live in the description at that URL.
     yield* Effect.forEach(found.upnp, (device) =>
       Effect.flatMap(
-        describeRenderer(client, device.location),
+        Target.describeRenderer(client, device.location),
         Option.match({
           onNone: () => Effect.void,
           onSome: (renderer) =>
@@ -300,211 +232,8 @@ const discoverDevice = Effect.fn("cast.discoverDevice")(function*(
   })
 })
 
-/**
- * mDNS unicast replies get dropped often enough on a congested network that an
- * explicit `--ip` is worth having: it skips discovery entirely.
- */
-const deviceAt = (address: Ipv4, devicePort: number) =>
-  new CastDevice({ name: address, ip: address, port: Port.make(devicePort) })
 
 /**
- * Find something to play to.
- *
- * An explicit address is obeyed exactly and is always Cast — nothing else
- * listens on a bare address without a description to fetch first. Otherwise the
- * name decides, and both networks are searched at once, because a person naming
- * their television does not know or care which protocol it speaks.
- *
- * With no name at all the last Cast device is used, which keeps the common case
- * free of a four second sweep. DLNA has no equivalent shortcut on purpose: its
- * description URL carries a port the device may change when it reboots, so a
- * remembered one would be a stale answer rather than a fast one.
- */
-const resolveTarget = (options: {
-  readonly ip: Option.Option<Ipv4>
-  readonly name: Option.Option<string>
-  readonly devicePort: number
-  readonly airplayPort: number
-  readonly timeout: Duration.Duration
-}) =>
-  Effect.gen(function*() {
-    yield* Effect.logDebug(
-      `Resolving target: ip=${Option.getOrElse(options.ip, () => "none")}, ` +
-        `name=${Option.getOrElse(options.name, () => "none")}`
-    )
-    
-    const client = yield* HttpClient.HttpClient
-
-    const remembered = Option.isSome(options.name)
-      ? Option.none<Ipv4>()
-      : yield* State.rememberedDevice
-
-    const shortcut = Option.orElse(options.ip, () => remembered)
-
-    return yield* Option.match(shortcut, {
-    onSome: (address) =>
-      Effect.gen(function*() {
-        yield* Effect.logDebug(`Trying shortcut address: ${address}`)
-        
-        // When using --ip, try both Cast and AirPlay at that address.
-        // Check AirPlay first (simpler HTTP check), fall back to Cast.
-        // Parse /server-info to get features bitmask.
-        const serverInfoResponse = yield* client.get(`http://${address}:${options.airplayPort}/server-info`).pipe(
-          Effect.flatMap((r) => r.text),
-          Effect.tap((text) =>
-            Effect.logDebug(
-              `AirPlay /server-info: ${text.length > 0 ? `${text.length}B` : "empty"}`
-            )
-          ),
-          Effect.orElseSucceed(() => ""),
-          Effect.withSpan("airplay.server-info", {
-            attributes: {
-              "airplay.device.ip": address,
-              "airplay.device.port": options.airplayPort,
-              "http.method": "GET",
-              "http.url": `http://${address}:${options.airplayPort}/server-info`
-            }
-          })
-        )
-
-        const isAirPlay = serverInfoResponse.length > 0
-        
-        return yield* (isAirPlay
-          ? Effect.succeed(undefined).pipe(
-              Effect.map(() => {
-                const featuresMatch = serverInfoResponse.match(/<key>features<\/key>\s*<integer>(0x[0-9a-fA-F]+)<\/integer>/)
-                const features = featuresMatch && featuresMatch[1] !== undefined
-                  ? BigInt(featuresMatch[1])
-                  : undefined
-
-                const airplayDevice = new AirPlayDevice({
-                  name: address,
-                  ip: address,
-                  port: Port.make(options.airplayPort),
-                  features
-                })
-                
-                Effect.logInfo(
-                  `Resolved as AirPlay device: ${address}:${options.airplayPort}, ` +
-                    `features=${features?.toString(16) ?? "unknown"}`
-                ).pipe(Effect.runSync)
-
-                return Target.AirPlay({ device: airplayDevice })
-              })
-            )
-          : Effect.gen(function*() {
-              yield* Effect.logInfo(`Resolved as Cast device: ${address}:${options.devicePort}`)
-              return Target.Cast({ device: deviceAt(address, options.devicePort) })
-            })
-        )
-      }).pipe(
-        Effect.withSpan("cast.resolve-target.shortcut", {
-          attributes: { "target.address": address }
-        })
-      ),
-
-    onNone: () =>
-      Effect.gen(function*() {
-        yield* Console.log("scanning…")
-        const found = yield* discoverTargets(options.timeout).pipe(
-          Effect.tap((result) =>
-            Effect.logDebug(
-              `Discovery complete: Cast=${result.cast.length}, ` +
-                `AirPlay=${result.airplay.length}, DLNA=${result.upnp.length}`
-            )
-          ),
-          Effect.withSpan("cast.discover-targets", {
-            attributes: {
-              "discovery.timeout_ms": Duration.toMillis(options.timeout)
-            }
-          })
-        )
-
-        const wanted = Option.map(options.name, (name) => name.toLowerCase())
-        const matches = (candidate: string) =>
-          Option.match(wanted, {
-            onNone: () => true,
-            onSome: (name) => candidate.toLowerCase().includes(name)
-          })
-
-        // Cast first when multiple answer to the name. It is the protocol this
-        // tool knows best and the one whose behaviour has been watched end to
-        // end on a real television; AirPlay second, DLNA third.
-        const cast = Array.findFirst(found.cast, (candidate) => matches(candidate.name))
-
-        return yield* Option.match(cast, {
-          onSome: (device) =>
-            Effect.gen(function*() {
-              yield* Effect.logInfo(`Matched Cast device: ${device.name} at ${device.ip}`)
-              return Target.Cast({ device })
-            }),
-          onNone: () =>
-            Effect.gen(function*() {
-              const airplay = Array.findFirst(
-                found.airplay.filter((device) => device.supportsVideo),
-                (candidate) => matches(candidate.name)
-              )
-              return yield* Option.match(airplay, {
-                onSome: (device) =>
-                  Effect.gen(function*() {
-                    yield* Effect.logInfo(`Matched AirPlay device: ${device.name} at ${device.ip}`)
-                    return Target.AirPlay({ device })
-                  }),
-                onNone: () =>
-                  Effect.flatMap(
-                    Effect.forEach(
-                      found.upnp,
-                      (device) =>
-                        Effect.map(describeRenderer(client, device.location), (described) =>
-                          Option.map(described, (renderer) => ({
-                            renderer,
-                            location: device.location
-                          }))),
-                      { concurrency: 4 }
-                    ),
-                    (described) =>
-                      Option.match(
-                        Array.findFirst(
-                          Array.getSomes(described),
-                          (candidate) => matches(candidate.renderer.friendlyName)
-                        ),
-                        {
-                          onSome: (candidate) =>
-                            Effect.gen(function*() {
-                              yield* Effect.logInfo(
-                                `Matched DLNA renderer: ${candidate.renderer.friendlyName}`
-                              )
-                              return Target.Dlna(candidate)
-                            }),
-                          onNone: () =>
-                            Effect.fail(
-                              new DeviceNotFoundError({
-                                query: Option.getOrElse(options.name, () => "(first available)"),
-                                found: [
-                                  ...found.cast.map((device) => device.name),
-                                  ...found.airplay.map((device) => device.name),
-                                  ...Array.getSomes(described).map((one) => one.renderer.friendlyName)
-                                ]
-                              })
-                            )
-                        }
-                      )
-                  )
-              })
-            })
-        })
-      }).pipe(
-        Effect.withSpan("cast.resolve-target.discovery", {
-          attributes: {
-            "target.name": Option.getOrElse(options.name, () => "first-available")
-          }
-        })
-      )
-  })
-}).pipe(
-  Effect.withSpan("cast.resolve-target")
-)
-
 /**
  * Play to a DLNA renderer and follow it until it stops.
  *
@@ -668,12 +397,14 @@ const play = Command.make(
     seek: Flags.seek,
     progressive: Flags.progressive,
     pin: Flags.airplayPin,
+    protocol: Flags.protocol,
     logLevel: Flags.logLevel
   },
-  Effect.fn(function*({ audio, device, file, progressive, ip, seek, subs, pin, logLevel }) {
+  Effect.fn(function*({ audio, device, file, progressive, ip, seek, subs, pin, protocol, logLevel }) {
     // Apply log level if provided
     const levelString = Option.getOrElse(logLevel, () => "info")
     yield* Effect.logDebug(`Log level: ${levelString}`)
+    
     
     const config = yield* AppConfig
     const ffmpeg = yield* Ffmpeg
@@ -804,12 +535,13 @@ const play = Command.make(
       cues
     })
 
-    const target = yield* resolveTarget({
+    const target = yield* Target.resolve({
       ip,
       name: device,
       devicePort: config.devicePort,
       airplayPort: config.airplayPort,
-      timeout: config.discoveryTimeout
+      timeout: config.discoveryTimeout,
+      protocol
     })
 
     // Only a Cast address is worth remembering. A DLNA renderer is reached
@@ -989,7 +721,7 @@ const play = Command.make(
         `\n  audio    ${describeAudio(chosenAudio)}` +
         `\n  quality  adaptive — ${ladder.map(describeRung).join(" | ")}` +
         `\n  serving  ${baseUrl}/stream` +
-        `\n  device   ${describeTarget(target)}\n`
+        `\n  device   ${Target.describe(target)}\n`
     )
 
     // One attempt at a session: connect, load, and pump status until the socket
@@ -1178,9 +910,9 @@ const play = Command.make(
       )
       )
 
-    // The one place the two protocols diverge. Everything above — probing the
+    // The one place the three protocols diverge. Everything above — probing the
     // file, choosing the tracks, extracting the subtitles, serving the media —
-    // is the same work, because both are pull models and the device does the
+    // is the same work, because all three are pull models and the device does the
     // fetching either way.
     yield* Match.value(target).pipe(
       Match.tag("Cast", ({ device: castDevice }) =>

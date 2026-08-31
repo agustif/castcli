@@ -34,12 +34,13 @@ export class AirPlayDevice extends Schema.Class<AirPlayDevice>("AirPlayDevice")(
   /**
    * Whether this device requires MFi auth-setup before play.
    *
-   * True if bit 26 (HasUnifiedAdvertiserInfo) or bit 51 (SupportsUnifiedPairSetupAndMFi / Authentication_8) is set.
+   * True if bit 51 (SupportsUnifiedPairSetupAndMFi / Authentication_8) is set.
    * When true, the sender must POST /auth-setup with a Curve25519 public key before pair-verify or play.
+   * Bit 26 (HasUnifiedAdvertiserInfo) is NOT MFi auth.
    */
   get requiresMFiAuth(): boolean {
     return this.features !== undefined
-      ? (this.features & (1n << 26n)) !== 0n || (this.features & (1n << 51n)) !== 0n
+      ? (this.features & (1n << 51n)) !== 0n
       : false
   }
 }

@@ -26,6 +26,8 @@ import {
 } from "@castcli/dlna"
 import * as State from "../State.ts"
 
+export type Protocol = "cast" | "airplay" | "dlna"
+
 const CAST_SERVICE = "_googlecast._tcp.local"
 const AIRPLAY_SERVICE = "_airplay._tcp.local"
 
@@ -122,13 +124,14 @@ const matcher = (name: Option.Option<string>) => (candidate: string): boolean =>
 /**
  * Sweep all three networks and pick something, ignoring whatever was remembered.
  *
- * Cast first when multiple answer to the name, as it is the protocol this tool
- * knows best and the one watched end to end on real hardware. AirPlay second,
- * DLNA third.
+ * When no protocol is specified, Cast is preferred when multiple devices answer
+ * to the name, as it is the protocol this tool knows best. AirPlay second,
+ * DLNA third. When a protocol is given, only that protocol is searched.
  */
 export const search = Effect.fn("target.search")(function*(options: {
   readonly name: Option.Option<string>
   readonly timeout: Duration.Duration
+  readonly protocol: Option.Option<Protocol>
 }) {
   const client = yield* HttpClient.HttpClient
   yield* Console.log("scanning…")
@@ -136,38 +139,88 @@ export const search = Effect.fn("target.search")(function*(options: {
   const found = yield* discover(options.timeout)
   const matches = matcher(options.name)
 
-  const cast = Array.findFirst(found.cast, (candidate) => matches(candidate.name))
-
-  return yield* Option.match(cast, {
-    onSome: (device) => Effect.succeed(Target.Cast({ device })),
+  return yield* Option.match(options.protocol, {
     onNone: () =>
       Effect.gen(function*() {
-        const airplay = Array.findFirst(
-          found.airplay.filter((device) => device.supportsVideo),
-          (candidate) => matches(candidate.name)
-        )
-        return yield* Option.match(airplay, {
-          onSome: (device) => Effect.succeed(Target.AirPlay({ device })),
+        const cast = Array.findFirst(found.cast, (candidate) => matches(candidate.name))
+
+        return yield* Option.match(cast, {
+          onSome: (device) => Effect.succeed(Target.Cast({ device })),
           onNone: () =>
-            Effect.flatMap(renderersAmong(client, found.upnp), (described) =>
-              Option.match(
-                Array.findFirst(described, (candidate) => matches(candidate.renderer.friendlyName)),
-                {
-                  onSome: (candidate) => Effect.succeed(Target.Dlna(candidate)),
+            Effect.gen(function*() {
+              const airplay = Array.findFirst(
+                found.airplay.filter((device) => device.supportsVideo),
+                (candidate) => matches(candidate.name)
+              )
+              return yield* Option.match(airplay, {
+                onSome: (device) => Effect.succeed(Target.AirPlay({ device })),
+                onNone: () =>
+                  Effect.flatMap(renderersAmong(client, found.upnp), (described) =>
+                    Option.match(
+                      Array.findFirst(described, (candidate) => matches(candidate.renderer.friendlyName)),
+                      {
+                        onSome: (candidate) => Effect.succeed(Target.Dlna(candidate)),
+                        onNone: () =>
+                          Effect.fail(
+                            new DeviceNotFoundError({
+                              query: Option.getOrElse(options.name, () => "(first available)"),
+                              found: [
+                                ...found.cast.map((device) => `${device.name} (Cast)`),
+                                ...found.airplay.map((device) => `${device.name} (AirPlay)`),
+                                ...described.map((one) => `${one.renderer.friendlyName} (DLNA)`)
+                              ]
+                            })
+                          )
+                      }
+                    ))
+              })
+            })
+        })
+      }),
+    onSome: (proto) =>
+      Effect.gen(function*() {
+        return yield* (proto === "cast"
+          ? Effect.gen(function*() {
+              const cast = Array.findFirst(found.cast, (candidate) => matches(candidate.name))
+              return yield* Option.match(cast, {
+                onSome: (device) => Effect.succeed(Target.Cast({ device })),
+                onNone: () =>
+                  Effect.fail(
+                    new DeviceNotFoundError({
+                      query: Option.getOrElse(options.name, () => "(first available)"),
+                      found: found.cast.map((device) => `${device.name} (Cast)`)
+                    })
+                  )
+              })
+            })
+          : proto === "airplay"
+            ? Effect.gen(function*() {
+                const airplay = Array.findFirst(found.airplay, (candidate) => matches(candidate.name))
+                return yield* Option.match(airplay, {
+                  onSome: (device) => Effect.succeed(Target.AirPlay({ device })),
                   onNone: () =>
                     Effect.fail(
                       new DeviceNotFoundError({
                         query: Option.getOrElse(options.name, () => "(first available)"),
-                        found: [
-                          ...found.cast.map((device) => device.name),
-                          ...found.airplay.map((device) => device.name),
-                          ...described.map((one) => one.renderer.friendlyName)
-                        ]
+                        found: found.airplay.map((device) => `${device.name} (AirPlay)`)
                       })
                     )
-                }
-              ))
-        })
+                })
+              })
+            : Effect.flatMap(renderersAmong(client, found.upnp), (described) =>
+                Option.match(
+                  Array.findFirst(described, (candidate) => matches(candidate.renderer.friendlyName)),
+                  {
+                    onSome: (candidate) => Effect.succeed(Target.Dlna(candidate)),
+                    onNone: () =>
+                      Effect.fail(
+                        new DeviceNotFoundError({
+                          query: Option.getOrElse(options.name, () => "(first available)"),
+                          found: described.map((one) => `${one.renderer.friendlyName} (DLNA)`)
+                        })
+                      )
+                  }
+                )))
       })
   })
 })
@@ -183,7 +236,11 @@ export const search = Effect.fn("target.search")(function*(options: {
  */
 const rememberedRenderer = (
   friendlyName: string,
-  options: { readonly name: Option.Option<string>; readonly timeout: Duration.Duration }
+  options: {
+    readonly name: Option.Option<string>
+    readonly timeout: Duration.Duration
+    readonly protocol: Option.Option<Protocol>
+  }
 ) =>
   Effect.gen(function*() {
     const client = yield* HttpClient.HttpClient
@@ -218,9 +275,9 @@ const rememberedAirPlay = (
 /**
  * Find something to act on.
  *
- * An explicit address is obeyed exactly and is always Cast — nothing else
- * listens on a bare address without a description to fetch first. Otherwise the
- * name decides, and all three networks are searched at once.
+ * An explicit address with no protocol tries both Cast and AirPlay (via probe).
+ * An explicit address WITH a protocol uses that protocol's port directly.
+ * Otherwise the name decides, and all three networks are searched at once.
  *
  * With no name at all the device from the last session is tried first, because
  * a four second sweep before every pause is most of what those commands cost.
@@ -233,7 +290,9 @@ export const resolve = Effect.fn("target.resolve")(function*(options: {
   readonly ip: Option.Option<Ipv4>
   readonly name: Option.Option<string>
   readonly devicePort: number
+  readonly airplayPort: number
   readonly timeout: Duration.Duration
+  readonly protocol: Option.Option<Protocol>
 }) {
   // An explicit name is an instruction, not a preference, so it overrules the
   // memory rather than being filtered by it.
@@ -243,7 +302,49 @@ export const resolve = Effect.fn("target.resolve")(function*(options: {
 
   return yield* Option.match(options.ip, {
     onSome: (address) =>
-      Effect.succeed(Target.Cast({ device: castAt(address, options.devicePort) })),
+      Option.match(options.protocol, {
+        onNone: () =>
+          Effect.succeed(Target.Cast({ device: castAt(address, options.devicePort) })),
+        onSome: (proto) =>
+          proto === "cast"
+            ? Effect.succeed(Target.Cast({ device: castAt(address, options.devicePort) }))
+            : proto === "airplay"
+              ? Effect.gen(function*() {
+                  const client = yield* HttpClient.HttpClient
+
+                  const serverInfoResponse = yield* client
+                    .get(`http://${address}:${options.airplayPort}/server-info`)
+                    .pipe(
+                      Effect.flatMap((r) => r.text),
+                      Effect.orElseSucceed(() => "")
+                    )
+
+                  const features =
+                    serverInfoResponse.length > 0
+                      ? (() => {
+                          const featuresMatch = serverInfoResponse.match(
+                            /<key>features<\/key>\s*<integer>(0x[0-9a-fA-F]+)<\/integer>/
+                          )
+                          return featuresMatch?.[1] !== undefined ? BigInt(featuresMatch[1]) : undefined
+                        })()
+                      : undefined
+
+                  return Target.AirPlay({
+                    device: new AirPlayDevice({
+                      name: address,
+                      ip: address,
+                      port: Port.make(options.airplayPort),
+                      features
+                    })
+                  })
+                })
+              : Effect.fail(
+                  new DeviceNotFoundError({
+                    query: `${address} (DLNA)`,
+                    found: []
+                  })
+                )
+      }),
     onNone: () =>
       Option.match(remembered, {
         onNone: () => search(options),
@@ -251,7 +352,7 @@ export const resolve = Effect.fn("target.resolve")(function*(options: {
           Match.tag("Cast", ({ ip }) =>
             Effect.succeed(Target.Cast({ device: castAt(ip, options.devicePort) }))),
           Match.tag("Dlna", ({ friendlyName }) => rememberedRenderer(friendlyName, options)),
-          Match.tag("AirPlay", ({ ip }) => rememberedAirPlay(ip, options)),
+          Match.tag("AirPlay", ({ ip }) => rememberedAirPlay(ip, { ...options, devicePort: options.airplayPort })),
           Match.exhaustive
         )
       })
