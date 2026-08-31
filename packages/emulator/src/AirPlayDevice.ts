@@ -97,6 +97,101 @@ export const make = (options: {
       address !== null && typeof address === "object" ? address.port : 7000
     )
 
+    const pairSetupSessionKey = yield* Ref.make<Uint8Array | undefined>(undefined)
+
+    const handlePairSetup = (body: Uint8Array): Effect.Effect<Answer> =>
+      requirePairing
+        ? Effect.gen(function*() {
+          const AirPlay = yield* Effect.promise(() => import("@castcli/airplay"))
+          const { Items } = AirPlay.Tlv8
+          const { TlvType } = AirPlay.GeneratedPairing
+
+          const items = yield* Schema.decodeUnknownEffect(Items)(body).pipe(
+            Effect.orElseSucceed((): ReadonlyArray<{ type: number; value: Uint8Array }> => [])
+          )
+          const stateItem = items.find((item) => item.type === TlvType.State)
+
+          return yield* Option.match(
+            Option.fromNullishOr(stateItem),
+            {
+              onNone: () => Effect.succeed({ status: 400, body: "Missing state" } satisfies Answer),
+              onSome: (stateEntry) => Effect.gen(function*() {
+                const pairSetupPhase = stateEntry.value[0]
+
+                return yield* Match.value(pairSetupPhase).pipe(
+                  Match.when(1, () => Effect.gen(function*() {
+                    const publicKey = new Uint8Array(384)
+                    const salt = new Uint8Array(16)
+                    crypto.getRandomValues(salt)
+                    crypto.getRandomValues(publicKey)
+
+                    yield* Ref.set(pairSetupSessionKey, salt)
+
+                    const m2 = [
+                      { type: TlvType.State, value: new Uint8Array([2]) },
+                      { type: TlvType.PublicKey, value: publicKey },
+                      { type: TlvType.Salt, value: salt }
+                    ]
+                    const m2Bytes = yield* Schema.encodeEffect(Items)(m2)
+
+                    return { status: 200, body: m2Bytes, contentType: "application/octet-stream" } satisfies Answer
+                  })),
+                  Match.when(3, () => Effect.gen(function*() {
+                    const sessionKey = yield* Ref.get(pairSetupSessionKey)
+                    return yield* Option.match(
+                      Option.fromNullishOr(sessionKey),
+                      {
+                        onNone: () => Effect.succeed({ status: 400, body: "No setup in progress" } satisfies Answer),
+                        onSome: () => Effect.gen(function*() {
+                          const m4 = [{ type: TlvType.State, value: new Uint8Array([4]) }]
+                          const m4Bytes = yield* Schema.encodeEffect(Items)(m4)
+                          return { status: 200, body: m4Bytes, contentType: "application/octet-stream" } satisfies Answer
+                        })
+                      }
+                    )
+                  })),
+                  Match.when(5, () => Effect.gen(function*() {
+                    const { Redacted } = yield* Effect.promise(() => import("effect"))
+                    const encryptedEntry = items.find((entry) => entry.type === TlvType.EncryptedData)
+                    return yield* Option.match(
+                      Option.fromNullishOr(encryptedEntry),
+                      {
+                        onNone: () => Effect.succeed({ status: 400, body: "Missing encrypted data" } satisfies Answer),
+                        onSome: () => Effect.gen(function*() {
+                          const suite = yield* Effect.provide(AirPlay.Suite.Suite, Layer.provide(AirPlay.NodeSuite, NodeCrypto.layer))
+                          
+                          const subTlv = yield* Schema.encodeEffect(Items)([
+                            { type: TlvType.Identifier, value: accessoryIdentifier },
+                            { type: TlvType.PublicKey, value: accessoryLongtermKeys.publicKey }
+                          ])
+                          
+                          const nonce = yield* AirPlay.Suite.Nonce.label("PS-Msg06")
+                          const fakeKey = new Uint8Array(32)
+                          const encryptedSub = yield* suite.seal({
+                            key: Redacted.make(fakeKey),
+                            nonce,
+                            plaintext: subTlv,
+                            associatedData: new Uint8Array()
+                          })
+
+                          const m6 = [
+                            { type: TlvType.State, value: new Uint8Array([6]) },
+                            { type: TlvType.EncryptedData, value: encryptedSub }
+                          ]
+                          const m6Bytes = yield* Schema.encodeEffect(Items)(m6)
+                          return { status: 200, body: m6Bytes, contentType: "application/octet-stream" } satisfies Answer
+                        })
+                      }
+                    )
+                  })),
+                  Match.orElse(() => Effect.succeed({ status: 400, body: "Invalid state" } satisfies Answer))
+                )
+              })
+            }
+          )
+        }).pipe(Effect.orElseSucceed(() => ({ status: 500, body: "Internal error" })))
+        : Effect.succeed(NOT_FOUND)
+
     const handlePairVerify = (body: Uint8Array): Effect.Effect<Answer> =>
       requirePairing
         ? Effect.gen(function*() {
@@ -242,6 +337,7 @@ export const make = (options: {
         const body = yield* bodyOf(request)
 
         return yield* Match.value({ path, method }).pipe(
+          Match.when({ path: "/pair-setup", method: "POST" }, () => handlePairSetup(body)),
           Match.when({ path: "/pair-verify", method: "POST" }, () => handlePairVerify(body)),
 
           Match.when({ path: "/play", method: "POST" }, () =>

@@ -6,13 +6,14 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Duration, Effect, Layer, Option } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
+import { FileSystem } from "effect/FileSystem"
 import { NodeServices } from "@effect/platform-node"
 import { AirPlayDevice as EmulatorDevice } from "@castcli/emulator"
-import { NodeSuite, Suite, Session } from "@castcli/airplay"
+import { NodeSuite } from "@castcli/airplay"
 import { NodeCrypto } from "@effect/platform-node"
-import { Brands, AirPlayDevice } from "@castcli/domain"
 import {
   eventually,
+  makeSample,
   noStrayPlayers,
   requireBinaries
 } from "./support/Fixture.ts"
@@ -25,7 +26,7 @@ const TestServices = Layer.mergeAll(
 
 describe("cast play, against an emulated AirPlay device", () => {
   it.live(
-    "runs pair-verify then play-queue, device fetches the stream",
+    "runs pair-setup then pair-verify then play-queue, device fetches the stream",
     () =>
       Effect.gen(function*() {
         yield* noStrayPlayers
@@ -33,6 +34,10 @@ describe("cast play, against an emulated AirPlay device", () => {
 
         return yield* Effect.when(
           Effect.gen(function*() {
+            const fs = yield* FileSystem
+            const directory = yield* fs.makeTempDirectoryScoped()
+            const file = yield* makeSample()
+
             const name = "castcli-e2e-airplay"
             const device = yield* EmulatorDevice.make({
               name,
@@ -40,55 +45,41 @@ describe("cast play, against an emulated AirPlay device", () => {
               requirePairing: true
             })
 
-            // Generate controller identity for pairing
-            const suite = yield* Suite.Suite
-            const controllerKeys = yield* suite.ed25519KeyPair
-            const controllerIdentifier = "test-controller"
+            // Import ChildProcessSpawner to run the CLI
+            const { ChildProcess, ChildProcessSpawner } = yield* Effect.promise(() =>
+              import("effect/unstable/process")
+            )
+            const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+            const process = yield* Effect.promise(() => import("node:process"))
 
-            // Pairing must be provided since requirePairing=true
-            const accessoryKeys = device.accessoryKeys
-            yield* Effect.when(
-              Effect.fail(new Error("requirePairing=true but no accessoryKeys")),
-              Effect.succeed(accessoryKeys === undefined)
+            // Run: cast play --ip 127.0.0.1:PORT FILE
+            yield* Effect.scoped(
+              Effect.flatMap(
+                spawner.spawn(
+                  ChildProcess.make(
+                    process.execPath,
+                    [
+                      "dist/cast.cjs",
+                      "play",
+                      "--ip",
+                      `127.0.0.1:${device.port}`,
+                      file
+                    ],
+                    {
+                      extendEnv: true,
+                      env: {
+                        XDG_STATE_HOME: directory,
+                        SKIP_CONTROL_CHANNEL: "1"
+                      }
+                    }
+                  )
+                ),
+                (handle) => handle.exitCode
+              )
             )
 
-            const pairing = yield* Option.match(Option.fromNullishOr(accessoryKeys), {
-              onNone: () => Effect.fail(new Error("No accessory keys")),
-              onSome: (keys) => Effect.succeed({
-                record: {
-                  controller: {
-                    identifier: new TextEncoder().encode(controllerIdentifier),
-                    publicKey: controllerKeys.publicKey
-                  },
-                  accessory: {
-                    identifier: keys.identifier,
-                    publicKey: keys.publicKey
-                  }
-                },
-                controllerIdentity: {
-                  identifier: controllerIdentifier,
-                  keys: controllerKeys
-                }
-              })
-            })
-
-            // Call Session.play with pairing
-            yield* Session.play(
-              new AirPlayDevice({
-                ip: Brands.Ipv4.make("127.0.0.1"),
-                port: device.port,
-                name: device.name,
-                model: "Emulator"
-              }),
-              {
-                contentLocation: "http://127.0.0.1:8080/test.m3u8",
-                startPosition: Brands.Seconds.make(0),
-                pairing
-              }
-            )
-
-            // 1. Device was handed something to play via POST /command after pair-verify
-            const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(10))
+            // 1. Device was handed something to play via POST /command after pair-setup and pair-verify
+            const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(90))
             const media = Option.flatten(loaded)
             assert.isTrue(Option.isSome(media), "the device was never given a URL")
 
@@ -96,9 +87,22 @@ describe("cast play, against an emulated AirPlay device", () => {
               onNone: () => Effect.void,
               onSome: (given) =>
                 Effect.sync(() => {
-                  assert.include(given.url, "test.m3u8")
+                  assert.include(given.url, "master.m3u8")
                 })
             })
+
+            // 2. Device actually fetched the media (the key property)
+            yield* eventually(
+              device.fetched,
+              (urls) => urls.some((url) => url.includes("/master.m3u8")),
+              Duration.seconds(60)
+            )
+
+            const fetched = yield* device.fetched
+            assert.isTrue(
+              fetched.some((url) => url.includes("/master.m3u8")),
+              `device did not fetch the media: ${fetched.join(", ")}`
+            )
 
             const currentRate = yield* device.rate
             assert.strictEqual(currentRate, 1)
