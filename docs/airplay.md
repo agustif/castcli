@@ -137,5 +137,13 @@ accessory and does not implement Apple Authentication IC protocols.
 
 ## What would complete it
 
-- **An Apple TV to test against.** The cryptographic implementation is complete;
-  hardware testing would reveal whether additional details are required.
+**Hardware to test against**: an Apple TV or third-party AirPlay TV to verify
+the implemented sender — pair-setup, pair-verify, encrypted control channel,
+play-queue, volume — works with that device. The software is complete and
+verified against an emulated device that requires pairing and decrypts encrypted
+control frames.
+
+Additionally, one protocol improvement is in flight but not yet merged:
+
+- **mDNS discovery end-to-end** (draft PR): the e2e test currently uses `--ip`
+  to bypass discovery.

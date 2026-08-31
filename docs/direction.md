@@ -106,27 +106,23 @@ Recorded so it does not have to be re-argued:
 
 ## The third protocol
 
-AirPlay was researched, and the full pull/URL-handoff path has been implemented
-and verified against an emulated device. The cryptographic infrastructure for
-HomeKit Accessory Protocol pairing (PairSetup/PairVerify) exists: SRP6a,
-Ed25519, X25519, ChaCha20-Poly1305, HKDF, and TLV8 encoding all sit in
-`packages/airplay` and are tested.
+AirPlay 2 with HAP pairing is implemented: pair-setup (M1-M6), pair-verify
+(M1-M4), encrypted control channel (ChaCha20-Poly1305 framing), MFi auth-setup
+(sender POST), play-queue (POST /command insertPlayQueueItem), volume control,
+and the full pull/URL-handoff path that shares the same media server, quality
+ladder, segment encoder, and subtitle handling used by Cast and DLNA.
 
-The sender protocol — mDNS `_airplay._tcp` discovery, HTTP control (`/play`,
-`/rate`, `/scrub`, `/stop`, `/playback-info`), and the emulator that pulls
-media — is complete. Integration into the CLI (`scan`, `play`, `status`,
-`pause`, `resume`, `seek`, `stop`) works the same way it does for Cast and DLNA.
+The sender protocol is complete: mDNS `_airplay._tcp` discovery, HAP pair-setup
+and pair-verify, encrypted control channel after pair-verify, Schema-based
+binary plist decode for `/playback-info`, and all CLI commands (`scan`, `play`,
+`volume`, `status`, `pause`, `resume`, `seek`, `stop`). CLI pairing is
+fail-closed: pair-setup runs with PIN 3939 for the emulator or stores
+controller/accessory keys for a device, pair-verify runs before every play, and
+playback fails if pairing or verification fails.
 
-The pairing handshake is **not wired into the session**, because modern Apple
-TVs require it and testing that path requires hardware. The pieces exist;
-connecting them is bounded work once a device can validate the result. The
-reasoning for this is in [`airplay.md`](airplay.md): the legacy unauthenticated
-endpoints work with emulators and may work with some real devices (third-party
-TVs, pre-tvOS 10.2 Apple TVs), but current Apple TVs demand a full AirPlay 2
-session. Which path a given device accepts is settled by trying it. The `playQueue`
-endpoint (`POST /command` with `insertPlayQueueItem`) exists in the sender Session
-but pair-verify is not yet called from Session — the emulator implements pair-verify
-and can require it, but the sender does not yet invoke it.
+The implementation is verified end-to-end against an emulated AirPlay device
+that requires pairing, decrypts encrypted control frames, and pulls the media
+URL handed to it.
 
 Mirroring (push-model H.264 encoding) is **deliberately not built**. It inverts
 the pull model that lets Cast, DLNA, and AirPlay share the media server, quality
@@ -136,18 +132,18 @@ ladder, segment encoder, and subtitle handling.
 
 **Hardware to test against.** Three things wait on it and nothing else:
 
-- **One Cast session with HLS on a real television.** HLS is already the default in
-  software and works with emulated devices. Real Cast hardware would confirm it end-to-end.
-  After that, the quality controller's actuation (reload queue, `LOAD` reissue,
-  probe-and-hold logic) can be removed from progressive mode since HLS handles quality
-  switching.
+- **One Cast session with HLS on a real television.** HLS is already the default
+  and works with emulated devices. Real Cast hardware would confirm it end-to-end.
 - **One DLNA television.** The whole path is verified against an emulated
   renderer and has never met a real set.
-- **An Apple TV or Xiaomi/Samsung/LG AirPlay TV**, to test whether the
-  implemented sender works with that device. The software is complete for the
-  unauthenticated path. For modern Apple TVs, the final step is wiring pair-verify
-  (which exists in the emulator) into the sender Session. If binary plist is required
-  for `/play` (instead of the query-string contract currently used), that is a bounded
-  addition.
+- **An Apple TV or third-party AirPlay TV**, to test whether the implemented
+  sender — pair-setup, pair-verify, encrypted control channel, play-queue,
+  volume — works with that device. The software is complete and verified against
+  an emulated device.
 
-Everything that can be verified without a device has been.
+Additionally, one protocol improvement is in flight but not yet merged:
+
+- **mDNS discovery end-to-end** (draft PR): the e2e test currently uses `--ip`
+  to bypass discovery.
+
+Everything that can be verified without hardware has been.
