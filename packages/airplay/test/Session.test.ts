@@ -152,7 +152,7 @@ describe("AirPlay Session", () => {
         assert.strictEqual(commandResponse.status, 403)
       }).pipe(Effect.provide(TestLayer), Effect.scoped))
 
-    it.effect("requiresMFiAuth detects bit 26", () =>
+    it.effect("requiresMFiAuth does not detect bit 26 (HasUnifiedAdvertiserInfo)", () =>
       Effect.succeed(undefined).pipe(
         Effect.map(() => {
           const airplayDevice = new AirPlayDevice({
@@ -162,7 +162,7 @@ describe("AirPlay Session", () => {
             features: (1n << 26n)
           })
 
-          assert.strictEqual(airplayDevice.requiresMFiAuth, true)
+          assert.strictEqual(airplayDevice.requiresMFiAuth, false)
         }),
         Effect.provide(TestLayer)
       ))

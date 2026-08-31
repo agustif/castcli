@@ -47,6 +47,9 @@ type MovFlag = typeof MovFlag.Type
 const H264Profile = Schema.Literals(["baseline", "main", "high"])
 type H264Profile = typeof H264Profile.Type
 
+const MpegtsFlag = Schema.Literals(["initial_discontinuity", "resend_headers"])
+type MpegtsFlag = typeof MpegtsFlag.Type
+
 // --- options -----------------------------------------------------------------
 
 export type Arg = Data.TaggedEnum<{
@@ -79,6 +82,7 @@ export type Arg = Data.TaggedEnum<{
   /** Force a keyframe at the start, so a segment can be decoded on its own. */
   readonly ForceKeyFrames: { readonly expression: string }
   readonly MuxDelay: { readonly seconds: number }
+  readonly MpegtsFlags: { readonly flags: ReadonlyArray<MpegtsFlag> }
   readonly MovFlags: { readonly flags: ReadonlyArray<MovFlag> }
   readonly Output: { readonly target: string }
 }>
@@ -110,6 +114,7 @@ const render: (arg: Arg) => ReadonlyArray<string> = Match.type<Arg>().pipe(
   Match.tag("TimestampOffset", ({ seconds }) => ["-output_ts_offset", String(seconds)]),
   Match.tag("ForceKeyFrames", ({ expression }) => ["-force_key_frames", expression]),
   Match.tag("MuxDelay", ({ seconds }) => ["-muxdelay", String(seconds), "-muxpreload", String(seconds)]),
+  Match.tag("MpegtsFlags", ({ flags }) => flags.length > 0 ? ["-mpegts_flags", flags.join("+")] : []),
   Match.tag("MovFlags", ({ flags }) => ["-movflags", flags.join("+")]),
   Match.tag("Output", ({ target }) => [target]),
   Match.exhaustive
@@ -226,6 +231,7 @@ export const segment = (options: SegmentOptions): ReadonlyArray<string> =>
     Arg.AudioBitrate({ rate: options.audioBitrate }),
     Arg.TimestampOffset({ seconds: options.startSeconds }),
     Arg.MuxDelay({ seconds: 0 }),
+    Arg.MpegtsFlags({ flags: ["resend_headers"] }),
     Arg.Format({ muxer: "mpegts" }),
     Arg.Output({ target: "pipe:1" })
   ])

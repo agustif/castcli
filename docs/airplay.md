@@ -9,13 +9,23 @@ How to use AirPlay with this CLI, and what the `@castcli/airplay` package implem
 AirPlay devices require pairing before first use. You'll see a 4-digit PIN on the TV screen when pairing is needed.
 
 ```sh
-# Provide the PIN shown on your Apple TV
+# Interactive: the CLI prompts for the PIN when run from a terminal
+cast play movie.mkv --device "Apple TV"
+# AirPlay PIN: [you type the 4-digit code here]
+
+# Or provide the PIN shown on your Apple TV
 cast play movie.mkv --device "Apple TV" --pin 1234
 
 # Or set it as an environment variable
 export AIRPLAY_PIN=1234
 cast play movie.mkv --device "Apple TV"
 ```
+
+**PIN resolution priority:**
+1. `--pin` command-line flag
+2. `AIRPLAY_PIN` environment variable
+3. Interactive prompt (only when stdin is a TTY)
+4. Fails with error if none provided and not running interactively
 
 The emulator uses PIN `3939` for testing.
 

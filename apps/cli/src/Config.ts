@@ -79,8 +79,9 @@ export const AppConfig = Config.all({
   advertiseHost: Config.schema(Ipv4, "CAST_ADVERTISE_HOST").pipe(Config.option),
 
   /**
-   * AirPlay pairing PIN. Required for devices that enforce pairing.
-   * Can be set via --pin flag or this environment variable.
+   * AirPlay pairing PIN for pair-setup. The device displays this code; the
+   * sender must provide it to establish long-term keys. Format is with dashes:
+   * "123-45-678". Falls back to interactive prompt when stdin is a TTY.
    */
   airplayPin: Config.string("AIRPLAY_PIN").pipe(Config.option)
 })

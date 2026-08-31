@@ -55,24 +55,35 @@ const runAuthSetup = (
   device: AirPlayDevice
 ): Effect.Effect<void, unknown, HttpClient.HttpClient | EncryptedSession.Suite> =>
   Effect.gen(function*() {
-    const client = yield* HttpClient.HttpClient
     const url = `http://${device.ip}:${device.port}/auth-setup`
-
+    yield* Effect.logDebug(`AirPlay auth-setup starting: ${url}`)
+    
+    const client = yield* HttpClient.HttpClient
     const suite = yield* EncryptedSession.Suite
     const ephemeralKeys = yield* suite.x25519KeyPair
-
     const publicKey = yield* suite.x25519PublicKey(ephemeralKeys.privateKey)
 
     const request = new Uint8Array(1 + 32)
     request[0] = 0x01
     request.set(publicKey, 1)
 
-    yield* client.execute(
+    const response = yield* client.execute(
       HttpClientRequest.post(url, {
         body: HttpBody.uint8Array(request, "application/octet-stream")
       })
     )
-  })
+    
+    yield* Effect.logDebug(`AirPlay auth-setup completed: HTTP ${response.status}`)
+  }).pipe(
+    Effect.withSpan("airplay.auth-setup", {
+      attributes: {
+        "airplay.device.ip": device.ip,
+        "airplay.device.port": device.port,
+        "http.method": "POST",
+        "http.url": `http://${device.ip}:${device.port}/auth-setup`
+      }
+    })
+  )
 
 /**
  * Run pair-verify exchange with the device and derive encrypted session.
@@ -95,18 +106,44 @@ const runPairVerify = (
   }
 ): Effect.Effect<PairVerifyResult, unknown, HttpClient.HttpClient | EncryptedSession.Suite> =>
   Effect.gen(function*() {
-    const client = yield* HttpClient.HttpClient
     const url = `http://${device.ip}:${device.port}/pair-verify`
+    
+    yield* Effect.logDebug(
+      `AirPlay pair-verify starting: ${url}, ` +
+        `controller=${pairing.controllerIdentity.identifier}`
+    )
+
+    const client = yield* HttpClient.HttpClient
 
     const { request: m1Request, ephemeralKeys } = yield* PairVerify.Controller.m1({
       ephemeral: Option.none()
     })
+    
+    yield* Effect.logDebug(`AirPlay pair-verify M1: ${m1Request.length}B`)
 
     const m2Response = yield* client.execute(
       HttpClientRequest.post(url, {
         body: HttpBody.uint8Array(m1Request, "application/octet-stream")
       })
-    ).pipe(Effect.flatMap((response) => response.arrayBuffer))
+    ).pipe(
+      Effect.flatMap((response) =>
+        Effect.gen(function*() {
+          const buffer = yield* response.arrayBuffer
+          yield* Effect.logDebug(
+            `AirPlay pair-verify M2: HTTP ${response.status}, ${buffer.byteLength}B`
+          )
+          return buffer
+        })
+      ),
+      Effect.withSpan("airplay.pair-verify.m1-m2", {
+        attributes: {
+          "airplay.device.ip": device.ip,
+          "airplay.message": "M1-M2",
+          "http.method": "POST",
+          "http.url": url
+        }
+      })
+    )
 
     const m2Bytes = new Uint8Array(m2Response)
 
@@ -115,10 +152,24 @@ const runPairVerify = (
       pairing: pairing.record,
       controllerIdentity: pairing.controllerIdentity
     })
+    
+    yield* Effect.logDebug(`AirPlay pair-verify M3: ${m3Request.length}B`)
 
     yield* client.execute(
       HttpClientRequest.post(url, {
         body: HttpBody.uint8Array(m3Request, "application/octet-stream")
+      })
+    ).pipe(
+      Effect.tap((response) =>
+        Effect.logDebug(`AirPlay pair-verify M3 response: HTTP ${response.status}`)
+      ),
+      Effect.withSpan("airplay.pair-verify.m3", {
+        attributes: {
+          "airplay.device.ip": device.ip,
+          "airplay.message": "M3",
+          "http.method": "POST",
+          "http.url": url
+        }
       })
     )
 
@@ -144,9 +195,18 @@ const runPairVerify = (
 
     const sessionKeys = yield* EncryptedSession.deriveSessionKeys(sharedSecret)
     const encryptedSession = yield* EncryptedSession.make(sessionKeys)
+    
+    yield* Effect.logInfo("AirPlay pair-verify completed successfully")
 
     return { encryptedSession }
-  })
+  }).pipe(
+    Effect.withSpan("airplay.pair-verify", {
+      attributes: {
+        "airplay.device.ip": device.ip,
+        "airplay.device.port": device.port
+      }
+    })
+  )
 
 /**
  * POST /command insertPlayQueueItem - AirPlay 2 play-queue (feature bit 33).
@@ -160,6 +220,14 @@ const runPairVerify = (
  */
 export const play = (device: AirPlayDevice, options: PlayOptions) =>
   Effect.gen(function*() {
+    yield* Effect.logInfo(
+      `AirPlay play starting: ${device.ip}:${device.port}, ` +
+        `content=${options.contentLocation}, ` +
+        `startPos=${options.startPosition ?? 0}s, ` +
+        `requiresMFi=${device.requiresMFiAuth}, ` +
+        `hasPairing=${options.pairing !== undefined}`
+    )
+    
     yield* Effect.when(
       runAuthSetup(device),
       Effect.succeed(device.requiresMFiAuth)
@@ -185,24 +253,77 @@ export const play = (device: AirPlayDevice, options: PlayOptions) =>
 
     yield* Option.match(maybeResult, {
       onNone: () =>
-        client.execute(
-          HttpClientRequest.post(url, {
-            body: HttpBody.text(plist, "application/x-apple-plist")
-          })
-        ),
+        Effect.gen(function*() {
+          yield* Effect.logDebug(
+            `AirPlay insertPlayQueueItem (unencrypted): POST ${url}, ${plist.length}B`
+          )
+          
+          yield* client.execute(
+            HttpClientRequest.post(url, {
+              body: HttpBody.text(plist, "application/x-apple-plist")
+            })
+          ).pipe(
+            Effect.tap((response) =>
+              Effect.logInfo(
+                `AirPlay play command sent: HTTP ${response.status}, unencrypted`
+              )
+            ),
+            Effect.withSpan("airplay.insert-play-queue-item", {
+              attributes: {
+                "airplay.device.ip": device.ip,
+                "airplay.encrypted": false,
+                "airplay.content_url": options.contentLocation,
+                "http.method": "POST",
+                "http.url": url
+              }
+            })
+          )
+        }),
       onSome: (result) =>
         Effect.gen(function*() {
           const plaintext = new TextEncoder().encode(plist)
           const encrypted = yield* EncryptedSession.encryptFrame(result.encryptedSession, plaintext)
           
+          yield* Effect.logDebug(
+            `AirPlay insertPlayQueueItem (encrypted): POST ${url}, ` +
+              `plaintext=${plaintext.length}B, encrypted=${encrypted.length}B`
+          )
+          
           yield* client.execute(
             HttpClientRequest.post(url, {
               body: HttpBody.uint8Array(encrypted, "application/octet-stream")
             })
+          ).pipe(
+            Effect.tap((response) =>
+              Effect.logInfo(
+                `AirPlay play command sent: HTTP ${response.status}, ` +
+                  `encrypted ${encrypted.length}B`
+              )
+            ),
+            Effect.withSpan("airplay.insert-play-queue-item", {
+              attributes: {
+                "airplay.device.ip": device.ip,
+                "airplay.encrypted": true,
+                "airplay.content_url": options.contentLocation,
+                "airplay.encrypted_bytes": encrypted.length,
+                "http.method": "POST",
+                "http.url": url
+              }
+            })
           )
         })
     })
-  })
+    
+    yield* Effect.logInfo("AirPlay play completed successfully")
+  }).pipe(
+    Effect.withSpan("airplay.play", {
+      attributes: {
+        "airplay.device.ip": device.ip,
+        "airplay.device.port": device.port,
+        "airplay.content_location": options.contentLocation
+      }
+    })
+  )
 
 /** POST /scrub?position=<seconds> */
 export const scrub = (device: AirPlayDevice, position: Seconds) =>

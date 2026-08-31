@@ -309,53 +309,16 @@ export const resolve = Effect.fn("target.resolve")(function*(options: {
           proto === "cast"
             ? Effect.succeed(Target.Cast({ device: castAt(address, options.devicePort) }))
             : proto === "airplay"
-              ? Effect.gen(function*() {
-                  const client = yield* HttpClient.HttpClient
-                  
-                  const serverInfoResponse = yield* client
-                    .get(`http://${address}:${options.airplayPort}/server-info`)
-                    .pipe(
-                      Effect.flatMap((r) => r.text),
-                      Effect.orElseSucceed(() => "")
-                    )
-
-                  const serverInfoHasContent = serverInfoResponse.length > 0
-
-                  const features = yield* (serverInfoHasContent
-                    ? Effect.succeed((() => {
-                        const featuresMatch = serverInfoResponse.match(
-                          /<key>features<\/key>\s*<integer>(0x[0-9a-fA-F]+)<\/integer>/
-                        )
-                        return featuresMatch?.[1] !== undefined ? BigInt(featuresMatch[1]) : undefined
-                      })())
-                    : Effect.gen(function*() {
-                        const infoResponse = yield* client
-                          .get(`http://${address}:${options.airplayPort}/info`)
-                          .pipe(
-                            Effect.flatMap((r) => r.arrayBuffer),
-                            Effect.map((buf) => new Uint8Array(buf)),
-                            Effect.orElseSucceed(() => new Uint8Array(0))
-                          )
-
-                        const hasInfo = infoResponse.length > 0
-                        return hasInfo
-                          ? (() => {
-                            const text = new TextDecoder().decode(infoResponse)
-                            const featuresMatch = text.match(/<key>features<\/key>\s*<integer>(\d+)<\/integer>/)
-                            return featuresMatch?.[1] !== undefined ? BigInt(featuresMatch[1]) : undefined
-                          })()
-                          : undefined
-                      }))
-
-                  return Target.AirPlay({
+              ? Effect.succeed(
+                  Target.AirPlay({
                     device: new AirPlayDevice({
                       name: address,
                       ip: address,
                       port: Port.make(options.airplayPort),
-                      features
+                      features: undefined
                     })
                   })
-                })
+                )
               : Effect.fail(
                   new DeviceNotFoundError({
                     query: `${address} (DLNA)`,

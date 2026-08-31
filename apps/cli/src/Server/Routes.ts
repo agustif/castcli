@@ -104,6 +104,9 @@ const playlistHeaders = {
   "access-control-allow-origin": "*"
 } as const
 
+const mpegTsPid = (packet: Uint8Array): number =>
+  (((packet[1] ?? 0) & 0x1f) << 8) | (packet[2] ?? 0)
+
 const notFound = HttpServerResponse.empty({ status: 404 })
 
 // The requirement type is inferred: v4 tracks each handler's error and service
@@ -208,8 +211,8 @@ export const routes = (options: MediaServerOptions) =>
             Option.match(Option.fromNullishOr(options.ladder[variant]), {
               onNone: () => Effect.succeed(notFound),
               onSome: (rung) =>
-                Effect.map(
-                  ffmpeg.segment({
+                Effect.gen(function*() {
+                  const source = yield* ffmpeg.segment({
                     file: options.file,
                     startSeconds: Hls.segmentStart(segment),
                     durationSeconds: Hls.segmentLength(segment, options.durationSeconds),
@@ -217,19 +220,39 @@ export const routes = (options: MediaServerOptions) =>
                     audioIndex: options.audioIndex,
                     rung,
                     audioBitrate: options.audioBitrate
-                  }),
-                  // Counted like the progressive stream: the numbers are not
-                  // used to choose quality here, but they are the same
-                  // measurement and the log is worth having.
-                  (source) =>
-                    HttpServerResponse.stream(
-                      source.pipe(Stream.tap((chunk) => options.onBytes(chunk.length))),
-                      {
-                        contentType: Hls.SEGMENT_CONTENT_TYPE,
-                        headers: { "cache-control": "no-store" }
-                      }
-                    )
-                )
+                  })
+
+                  const chunks = yield* Stream.runCollect(
+                    source.pipe(Stream.tap((chunk) => options.onBytes(chunk.length)))
+                  )
+
+                  const totalLength = chunks.reduce((sum: number, chunk) => sum + chunk.length, 0)
+                  const buffer = new Uint8Array(totalLength)
+                  let offset = 0
+                  for (const chunk of chunks) {
+                    buffer.set(chunk, offset)
+                    offset += chunk.length
+                  }
+
+                  // ffmpeg emits SDT (PID 0x11) before PAT. Cheap Cast receivers
+                  // probe the first packet and LOAD_FAILED unless it is PAT.
+                  const TS = 188
+                  const packetCount = Math.floor(buffer.length / TS)
+                  const packets = globalThis.Array.from({ length: packetCount }, (_, n) =>
+                    buffer.subarray(n * TS, (n + 1) * TS)
+                  )
+                  const kept = packets.filter((packet) => mpegTsPid(packet) !== 0x11)
+                  const patFirst = new Uint8Array(kept.reduce((sum, packet) => sum + packet.length, 0))
+                  kept.reduce((at, packet) => {
+                    patFirst.set(packet, at)
+                    return at + packet.length
+                  }, 0)
+
+                  return HttpServerResponse.uint8Array(patFirst, {
+                    contentType: Hls.SEGMENT_CONTENT_TYPE,
+                    headers: playlistHeaders
+                  })
+                })
             })
         })
       })
