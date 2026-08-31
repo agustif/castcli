@@ -5,7 +5,6 @@
 
 import { assert, describe, it } from "@effect/vitest"
 import {
-  controlCommand,
   eventually,
   makeSample,
   noStrayPlayers,
@@ -14,9 +13,11 @@ import {
 } from "./support/Fixture.ts"
 import { Duration, Effect, Layer, Option } from "effect"
 import { FileSystem } from "effect/FileSystem"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { FetchHttpClient } from "effect/unstable/http"
 import { NodeServices } from "@effect/platform-node"
 import { DlnaDevice } from "@castcli/emulator"
+import * as process from "node:process"
 
 // Control channel tests do not need Certificate.layer - using DLNA device
 const TestServices = Layer.mergeAll(FetchHttpClient.layer, NodeServices.layer)
@@ -50,16 +51,76 @@ describe("cast play control channel", () => {
             )
             assert.isTrue(Option.isSome(Option.flatten(loaded)))
 
-            // Test pause command through the control channel
-            const pauseExitCode = yield* controlCommand(device, directory, "pause", [])
+            // Test pause command - DLNA devices need device name, not IP
+            const pauseExitCode = yield* Effect.flatMap(
+              ChildProcessSpawner.ChildProcessSpawner,
+              (spawner) =>
+                Effect.scoped(
+                  Effect.flatMap(
+                    spawner.spawn(
+                      ChildProcess.make(
+                        process.execPath,
+                        ["dist/cast.cjs", "pause", "--device", name],
+                        {
+                          extendEnv: true,
+                          env: {
+                            XDG_STATE_HOME: directory
+                          }
+                        }
+                      )
+                    ),
+                    (handle) => handle.exitCode
+                  )
+                )
+            )
             assert.strictEqual(pauseExitCode, 0, "pause command failed")
 
-            // Test status command through the control channel
-            const statusExitCode = yield* controlCommand(device, directory, "status", [])
+            // Test status command
+            const statusExitCode = yield* Effect.flatMap(
+              ChildProcessSpawner.ChildProcessSpawner,
+              (spawner) =>
+                Effect.scoped(
+                  Effect.flatMap(
+                    spawner.spawn(
+                      ChildProcess.make(
+                        process.execPath,
+                        ["dist/cast.cjs", "status", "--device", name],
+                        {
+                          extendEnv: true,
+                          env: {
+                            XDG_STATE_HOME: directory
+                          }
+                        }
+                      )
+                    ),
+                    (handle) => handle.exitCode
+                  )
+                )
+            )
             assert.strictEqual(statusExitCode, 0, "status command failed")
 
-            // Test seek command through the control channel
-            const seekExitCode = yield* controlCommand(device, directory, "seek", ["--to", "0:05"])
+            // Test seek command - this talks through control channel on progressive
+            const seekExitCode = yield* Effect.flatMap(
+              ChildProcessSpawner.ChildProcessSpawner,
+              (spawner) =>
+                Effect.scoped(
+                  Effect.flatMap(
+                    spawner.spawn(
+                      ChildProcess.make(
+                        process.execPath,
+                        ["dist/cast.cjs", "seek", "--device", name, "--to", "0:05"],
+                        {
+                          extendEnv: true,
+                          env: {
+                            XDG_STATE_HOME: directory
+                          }
+                        }
+                      )
+                    ),
+                    (handle) => handle.exitCode
+                  )
+                )
+            )
             assert.strictEqual(seekExitCode, 0, "seek command failed")
           }).pipe(Effect.scoped),
           Effect.succeed(ready)
