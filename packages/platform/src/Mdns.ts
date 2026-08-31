@@ -454,6 +454,7 @@ export const discoverAirPlayWithRetry = Effect.fn("Mdns.discoverAirPlayWithRetry
 export const advertiseAirPlay = (options: {
   readonly name: string
   readonly port: Port
+  readonly requirePairing?: boolean
 }): Effect.Effect<void, never, Scope.Scope> =>
   Effect.gen(function*() {
     const socket = dgram.createSocket({ type: "udp4", reuseAddr: true })
@@ -509,7 +510,7 @@ export const advertiseAirPlay = (options: {
         `features=0x5A7FFFF7,0xE`,
         `model=AppleTV3,2`,
         `deviceid=AA:BB:CC:DD:EE:FF`,
-        `flags=0x4`
+        `flags=0x${options.requirePairing === false ? "0" : "4"}`
       ]
       const txtData = Buffer.concat(
         txtPairs.map((pair) => {

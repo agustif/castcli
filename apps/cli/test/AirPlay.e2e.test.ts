@@ -4,13 +4,14 @@
 // from us via play-queue. Tests AirPlay 2 protocol with requirePairing=true.
 
 import { assert, describe, it } from "@effect/vitest"
-import { Duration, Effect, Layer, Option } from "effect"
+import { Duration, Effect, Layer, Option, Ref, Stream } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { FileSystem } from "effect/FileSystem"
 import { NodeServices } from "@effect/platform-node"
 import { AirPlayDevice as EmulatorDevice } from "@castcli/emulator"
 import { NodeSuite } from "@castcli/airplay"
 import { NodeCrypto } from "@effect/platform-node"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import {
   eventually,
   makeSample,
@@ -102,13 +103,57 @@ describe("cast play, against an emulated AirPlay device", () => {
             const device = yield* EmulatorDevice.make({
               name,
               advertise: true,
-              requirePairing: false
+              requirePairing: true
             })
 
-            yield* play(device, file, directory, ["--device", name], true)
+            // Capture CLI stdout/stderr
+            const cliOutput = yield* Ref.make<string>("")
+            const cliProcess = yield* Effect.flatMap(
+              ChildProcessSpawner.ChildProcessSpawner,
+              (spawner) =>
+                spawner.spawn(
+                  ChildProcess.make(
+                    process.execPath,
+                    ["dist/cast.cjs", "play", file, "--device", name],
+                    {
+                      forceKillAfter: "2 seconds",
+                      extendEnv: true,
+                      env: {
+                        AIRPLAY_DEVICE_PORT: String(device.port),
+                        CAST_ADVERTISE_HOST: "127.0.0.1",
+                        XDG_STATE_HOME: directory,
+                        AIRPLAY_PIN: "3939"
+                      }
+                    }
+                  )
+                )
+            )
+
+            // Collect stdout/stderr
+            yield* Effect.forkScoped(
+              Stream.runForEach(cliProcess.stdout, (chunk) =>
+                Ref.update(cliOutput, (prev) => prev + new TextDecoder().decode(chunk))
+              )
+            )
+            yield* Effect.forkScoped(
+              Stream.runForEach(cliProcess.stderr, (chunk) =>
+                Ref.update(cliOutput, (prev) => prev + new TextDecoder().decode(chunk))
+              )
+            )
 
             const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(90))
             const media = Option.flatten(loaded)
+            
+            yield* Effect.when(
+              Effect.gen(function*() {
+                const output = yield* Ref.get(cliOutput)
+                yield* Effect.sync(() => {
+                  assert.fail(`Device not found via mDNS. CLI output:\n${output}`)
+                })
+              }),
+              Effect.succeed(Option.isNone(media))
+            )
+            
             assert.isTrue(Option.isSome(media), "the device was never found via mDNS or never given a URL")
 
             yield* Option.match(media, {

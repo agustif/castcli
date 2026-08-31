@@ -597,7 +597,8 @@ export const make = (options: {
     yield* Effect.when(
       Mdns.advertiseAirPlay({
         name,
-        port
+        port,
+        ...(options.requirePairing !== undefined ? { requirePairing: options.requirePairing } : {})
       }),
       Effect.succeed(options.advertise === true)
     )
