@@ -1249,7 +1249,7 @@ const play = Command.make(
             const deviceId = Option.fromNullishOr(airplayDevice.deviceId)
 
             const storedPairing = yield* State.getAirPlayPairing(deviceIp, deviceId)
-            const wire = AirPlayPairHttp.connect(airplayDevice.ip, airplayDevice.port)
+            const wire = yield* AirPlayPairHttp.connect(airplayDevice.ip, airplayDevice.port)
 
             const pairing = yield* Option.match(storedPairing, {
               onNone: () => Effect.gen(function*() {

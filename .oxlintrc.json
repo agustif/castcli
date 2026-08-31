@@ -63,13 +63,13 @@
         "castcli/no-timers": "off",
         "castcli/no-try-catch": "off",
         "castcli/no-await": "off",
-        "castcli/no-process-exit": "off"
+        "castcli/no-process-exit": "off",
+        "castcli/no-if": "off"
       }
     },
     {
       "files": [
         "apps/cli/src/AirPlayPlay.ts",
-        "apps/cli/src/AirPlayPairHttp.ts",
         "apps/cli/src/bplist.ts"
       ],
       "rules": {
