@@ -18,6 +18,7 @@ import {
   Option,
   Queue,
   Ref,
+  References,
   Schedule,
   Stream
 } from "effect"
@@ -76,6 +77,7 @@ import * as ControlChannel from "../ControlChannel.ts"
 import * as AirPlayPairHttp from "../AirPlayPairHttp.ts"
 import * as AirPlayPlay from "../AirPlayPlay.ts"
 import * as ErrorFormatter from "../ErrorFormatter.ts"
+import * as Telemetry from "../Telemetry.ts"
 
 const CAST_SERVICE = "_googlecast._tcp.local"
 const AIRPLAY_SERVICE = "_airplay._tcp.local"
@@ -663,10 +665,10 @@ const play = Command.make(
     logLevel: Flags.logLevel
   },
   Effect.fn(function*({ audio, device, file, progressive, ip, seek, subs, pin, protocol, logLevel }) {
-    const levelString = Option.getOrElse(logLevel, () => "info")
-    yield* Effect.logDebug(`Log level: ${levelString}`)
-
-    const config = yield* AppConfig
+    // Set log level for this entire effect
+    return yield* Effect.provideService(
+      Effect.gen(function*() {
+        const config = yield* AppConfig
     const ffmpeg = yield* Ffmpeg
     // `Argument.file({ mustExist: true })` already proved it is there.
     const absolute = FilePath.make(path.resolve(file))
@@ -1347,7 +1349,11 @@ const play = Command.make(
             yield* Console.log(`playing on ${airplayDevice.name}`)
           })
         )),
-      Match.exhaustive
+        Match.exhaustive
+      )
+    }),
+      References.MinimumLogLevel,
+      Telemetry.logLevelFromString(Option.getOrUndefined(logLevel))
     )
   })
 ).pipe(Command.withDescription("Stream a file to a device (Cast, DLNA, or AirPlay)"))
