@@ -18,6 +18,7 @@ interface State {
   session: Option.Option<Airplay.EncryptedSession.EncryptedSession>
   readTimeoutMs: number
   buffer: Uint8Array
+  decryptedPlaintext: Uint8Array
   pendingResponse: Option.Option<Deferred.Deferred<{ status: number; body: Uint8Array }, Socket.SocketError>>
 }
 
@@ -101,13 +102,20 @@ const tryCompleteResponse = (
             })
         )
       )
-      plaintext = step.plaintext
-      yield* Ref.update(stateRef, (s) => ({ ...s, buffer: step.rest }))
+      
+      const newPlaintext = new Uint8Array(state.decryptedPlaintext.length + step.plaintext.length)
+      newPlaintext.set(state.decryptedPlaintext)
+      newPlaintext.set(step.plaintext, state.decryptedPlaintext.length)
+      
+      plaintext = newPlaintext
+      yield* Ref.update(stateRef, (s) => ({ ...s, buffer: step.rest, decryptedPlaintext: newPlaintext }))
     }
 
     const parsed = tryParseHttp(plaintext)
     if (Option.isSome(parsed)) {
-      if (!isEncrypted) {
+      if (isEncrypted) {
+        yield* Ref.update(stateRef, (s) => ({ ...s, decryptedPlaintext: plaintext.slice(parsed.value.consumed) }))
+      } else {
         yield* Ref.update(stateRef, (s) => ({ ...s, buffer: s.buffer.slice(parsed.value.consumed) }))
       }
       if (Option.isSome(state.pendingResponse)) {
@@ -157,6 +165,7 @@ export const make = (
       session: Option.none(),
       readTimeoutMs: 8000,
       buffer: new Uint8Array(),
+      decryptedPlaintext: new Uint8Array(),
       pendingResponse: Option.none()
     })
 
@@ -172,10 +181,7 @@ export const make = (
             newBuffer.set(chunk, s.buffer.length)
             return { ...s, buffer: newBuffer }
           })
-          yield* Effect.matchEffect(tryCompleteResponse(stateRef, suiteService), {
-            onFailure: () => Effect.void,
-            onSuccess: () => Effect.void
-          })
+          yield* tryCompleteResponse(stateRef, suiteService)
         })
       )
     )

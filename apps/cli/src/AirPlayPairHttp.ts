@@ -11,13 +11,13 @@ import { HapHttpClient } from "@castcli/platform"
 export interface PairHttp {
   readonly get: (
     path: string
-  ) => Effect.Effect<{ status: number; body: Uint8Array }, unknown, Scope.Scope | Airplay.Suite.Suite>
+  ) => Effect.Effect<{ status: number; body: Uint8Array }, unknown, Airplay.Suite.Suite>
   readonly post: (
     path: string,
     body: Uint8Array,
     contentType?: string,
     extraHeaders?: Record<string, string>
-  ) => Effect.Effect<{ status: number; body: Uint8Array }, unknown, Scope.Scope | Airplay.Suite.Suite>
+  ) => Effect.Effect<{ status: number; body: Uint8Array }, unknown, Airplay.Suite.Suite>
   readonly exchange: (
     method: string,
     path: string,
@@ -25,46 +25,32 @@ export interface PairHttp {
     contentType: string,
     extraHeaders?: Record<string, string>,
     protocol?: string
-  ) => Effect.Effect<{ status: number; body: Uint8Array }, unknown, Scope.Scope | Airplay.Suite.Suite>
+  ) => Effect.Effect<{ status: number; body: Uint8Array }, unknown, Airplay.Suite.Suite>
   readonly enableEncryption: (
     session: Airplay.EncryptedSession.EncryptedSession
-  ) => Effect.Effect<void, unknown, Scope.Scope | Airplay.Suite.Suite>
-  readonly setReadTimeout: (ms: number) => Effect.Effect<void, unknown, Scope.Scope | Airplay.Suite.Suite>
-  readonly destroy: () => void
+  ) => Effect.Effect<void, unknown, Airplay.Suite.Suite>
+  readonly setReadTimeout: (ms: number) => Effect.Effect<void>
+  readonly close: Effect.Effect<void>
 }
 
-export const connect = (host: string, port: number): PairHttp => {
+export const connect = (
+  host: string,
+  port: number
+): Effect.Effect<PairHttp, unknown, Scope.Scope | Airplay.Suite.Suite> => {
   const dacp = crypto.randomBytes(8).toString("hex").toUpperCase()
   const remote = String(crypto.randomInt(1, 0xffffffff))
 
-  const clientEffect = HapHttpClient.make(host, port, dacp, remote)
+  return Effect.gen(function* () {
+    const client = yield* HapHttpClient.make(host, port, dacp, remote)
 
-  return {
-    get: (path) =>
-      Effect.gen(function* () {
-        const client = yield* clientEffect
-        return yield* client.get(path)
-      }),
-    post: (path, body, contentType, extraHeaders) =>
-      Effect.gen(function* () {
-        const client = yield* clientEffect
-        return yield* client.post(path, body, contentType, extraHeaders)
-      }),
-    exchange: (method, path, body, contentType, extraHeaders, protocol) =>
-      Effect.gen(function* () {
-        const client = yield* clientEffect
-        return yield* client.exchange(method, path, body, contentType, extraHeaders, protocol)
-      }),
-    enableEncryption: (session) =>
-      Effect.gen(function* () {
-        const client = yield* clientEffect
-        yield* client.enableEncryption(session)
-      }),
-    setReadTimeout: (ms) =>
-      Effect.gen(function* () {
-        const client = yield* clientEffect
-        yield* client.setReadTimeout(ms)
-      }),
-    destroy: () => {}
-  }
+    return {
+      get: (path) => client.get(path),
+      post: (path, body, contentType, extraHeaders) => client.post(path, body, contentType, extraHeaders),
+      exchange: (method, path, body, contentType, extraHeaders, protocol) =>
+        client.exchange(method, path, body, contentType, extraHeaders, protocol),
+      enableEncryption: (session) => client.enableEncryption(session),
+      setReadTimeout: (ms) => client.setReadTimeout(ms),
+      close: Effect.interrupt
+    }
+  })
 }
