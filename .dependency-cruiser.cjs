@@ -35,7 +35,7 @@ module.exports = {
         "Cast TLS transport, or the emulator — which is a TLS *server* and so " +
         "is Node interop by its nature. Everywhere else uses the Effect " +
         "equivalent.",
-      from: { pathNot: "^(packages/(platform|protocol|emulator|dlna)|apps/cli/src/ControlChannel\\.ts|scripts|tools)" },
+      from: { pathNot: "^(packages/(platform|protocol|emulator|dlna)|apps/cli/src/(ControlChannel|AirPlayPlay|AirPlayPairHttp)\\.ts|scripts|tools)" },
       // Core modules resolve to their bare name with the protocol recorded
       // separately, so match on dependencyTypes rather than the `node:` prefix.
       to: {
