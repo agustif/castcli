@@ -14,14 +14,13 @@ to the link while it runs.
 Written because VLC could not do it, for a reason worth recording.
 
 **Note on AirPlay:** This tool speaks Cast, DLNA, and AirPlay (pull/URL-handoff
-path). The AirPlay sender is software-complete for the legacy unauthenticated
-endpoints and works with emulated devices. HAP cryptographic primitives exist in
-`packages/airplay` (PairSetup/PairVerify) and the emulator can require pairing, but
-the sender Session does not yet call pair-verify, so pairing is not wired into
-real sessions. The `playQueue` endpoint exists in Session but is not yet used.
-Volume control for AirPlay is a no-op. Modern Apple TVs require HAP pairing, which
-needs hardware to validate. See [`docs/airplay.md`](docs/airplay.md) for details.
-Third-party AirPlay receivers (Samsung, LG, Sony, Vizio) may work without pairing.
+path). The AirPlay sender implements HAP pair-setup and pair-verify for modern
+Apple TVs. On first pair, provide the PIN the device displays via `--pin`,
+`AIRPLAY_PIN` environment variable, or interactive prompt (TTY only). Once
+paired, credentials persist and subsequent plays work automatically. Volume
+control is implemented. See [`docs/airplay.md`](docs/airplay.md) for protocol
+details. Third-party AirPlay receivers (Samsung, LG, Sony, Vizio) may work
+without pairing.
 
 ## The bug this exists to work around
 

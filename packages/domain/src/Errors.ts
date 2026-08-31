@@ -138,3 +138,19 @@ export class EmptyLadderError extends Schema.TaggedError<EmptyLadderError>()(
     return "no quality rung fits this source"
   }
 }
+
+/**
+ * AirPlay pair-setup requires a PIN but none was provided.
+ *
+ * The device shows a code on screen; the sender must supply it to complete
+ * pairing. When stdin is a TTY the CLI prompts for it; otherwise it expects
+ * --pin or AIRPLAY_PIN.
+ */
+export class AirPlayPinRequiredError extends Schema.TaggedError<AirPlayPinRequiredError>()(
+  "AirPlayPinRequiredError",
+  {}
+) {
+  override get message(): string {
+    return "AirPlay pairing requires a PIN: set --pin, AIRPLAY_PIN, or run interactively"
+  }
+}

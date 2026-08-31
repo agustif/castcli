@@ -76,7 +76,14 @@ export const AppConfig = Config.all({
    * machine has several interfaces and picks the wrong one — the failure mode
    * this whole tool exists to avoid.
    */
-  advertiseHost: Config.schema(Ipv4, "CAST_ADVERTISE_HOST").pipe(Config.option)
+  advertiseHost: Config.schema(Ipv4, "CAST_ADVERTISE_HOST").pipe(Config.option),
+
+  /**
+   * AirPlay pairing PIN for pair-setup. The device displays this code; the
+   * sender must provide it to establish long-term keys. Format is with dashes:
+   * "123-45-678". Falls back to interactive prompt when stdin is a TTY.
+   */
+  airplayPin: Config.string("AIRPLAY_PIN").pipe(Config.option)
 })
 
 export type AppConfig = Config.Success<typeof AppConfig>

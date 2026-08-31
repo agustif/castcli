@@ -6,8 +6,9 @@ and what was deliberately left out.
 Last updated: 2026-08-31. AirPlay 2 protocol implemented: HAP pair-setup (M1-M6),
 pair-verify (M1-M4), encrypted control channel (ChaCha20-Poly1305), MFi auth-setup
 (sender POST only), then play-queue (POST /command insertPlayQueueItem). Volume
-control implemented. CLI performs pair-setup (PIN 3939 for emulator), pair-verify,
-and auth-setup (when device requires MFi) automatically.
+control implemented. CLI performs pair-setup with PIN from --pin flag, AIRPLAY_PIN
+env var, or interactive prompt (TTY only), then pair-verify and auth-setup (when
+device requires MFi) automatically.
 
 ## What is built
 
@@ -43,9 +44,16 @@ The sender implements **AirPlay 2 with HAP pair-setup, pair-verify, encrypted co
 - mDNS `_airplay._tcp` discovery with TXT record parsing for `features`, `flags`,
   `model`, and `deviceid`
 - The `AirPlayDevice` domain model with video capability detection
-- **HAP pair-setup** (M1-M6): establishes long-term Ed25519 keys with PIN code
-  (3939 for emulator testing), using existing PairSetup.Controller and Suite
-  primitives (SRP-6a, Ed25519, X25519, ChaCha20-Poly1305, HKDF)
+- **HAP pair-setup** (M1-M6): establishes long-term Ed25519 keys with PIN code.
+  PIN resolution follows this priority:
+  1. `--pin` command-line flag
+  2. `AIRPLAY_PIN` environment variable (format: "123-45-678" with dashes)
+  3. Interactive prompt on stdin (only when stdin is a TTY)
+  4. Fails with `AirPlayPinRequiredError` if none provided and not TTY
+  
+  The device displays the PIN on screen; the sender must provide it to complete
+  first-time pairing. Once paired, credentials persist in `XDG_STATE_HOME/castcli/state.json`
+  keyed by device IP, so subsequent plays skip pair-setup entirely.
 - **HAP pair-verify** (M1-M4): runs before every play session, authenticates
   using stored long-term keys, using PairVerify.Controller
 - **Encrypted control channel**: After pair-verify, control POSTs are encrypted with
