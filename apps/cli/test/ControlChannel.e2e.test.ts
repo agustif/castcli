@@ -36,10 +36,11 @@ describe("cast play control channel", () => {
             const file = yield* makeSample()
 
             // DLNA device doesn't require TLS certificates
-            const device = yield* DlnaDevice.make()
+            const name = "castcli-control-channel-test"
+            const device = yield* DlnaDevice.make({ friendlyName: name, advertise: true })
 
-            // Control channel enabled (skipControlChannel = false)
-            yield* play(device, file, directory, [], false, false)
+            // Control channel enabled (skipControlChannel = false), discover by name
+            yield* play(device, file, directory, ["--device", name], true, false)
 
             // Wait for the device to start playing
             const loaded = yield* eventually(
