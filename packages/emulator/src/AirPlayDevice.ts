@@ -7,8 +7,8 @@ import { Effect, Layer, Match, Option, Queue, Ref, Schema, Scope, Stream } from 
 import type { PlatformError } from "effect/PlatformError"
 import { Brands } from "@castcli/domain"
 import { HttpClient } from "effect/unstable/http"
-import { Mdns } from "@castcli/platform"
 import { NodeCrypto } from "@effect/platform-node"
+import * as Advertise from "./Advertise.ts"
 import * as http from "node:http"
 
 export interface AirPlayDevice {
@@ -595,7 +595,13 @@ export const make = (options: {
     )
 
     yield* Effect.when(
-      Mdns.advertiseAirPlay({ name, port }),
+      Advertise.serveAirPlay({
+        service: "_airplay._tcp.local",
+        friendlyName: name,
+        model: "AppleTV3,2",
+        port,
+        address: "127.0.0.1"
+      }),
       Effect.succeed(options.advertise === true)
     )
 

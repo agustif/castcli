@@ -249,6 +249,80 @@ export const serve = (
     )
   })
 
+const answerAirPlay = (advertisement: Advertisement): Buffer => {
+  const instance = `${advertisement.friendlyName}.${advertisement.service}`
+  const host = `${advertisement.friendlyName.replaceAll(" ", "-")}.local`
+
+  const records = [
+    record(advertisement.service, TYPE.PTR, encodeName(instance)),
+    record(instance, TYPE.SRV, srvData(advertisement.port, host)),
+    record(
+      instance,
+      TYPE.TXT,
+      txtData([
+        `fn=${advertisement.friendlyName}`,
+        `features=0x5A7FFFF7,0xE`,
+        `model=${advertisement.model}`,
+        "deviceid=AA:BB:CC:DD:EE:FF",
+        "flags=0x4"
+      ])
+    ),
+    record(host, TYPE.A, addressData(advertisement.address))
+  ]
+
+  const header = Buffer.alloc(12)
+  header.writeUInt16BE(0, 0)
+  header.writeUInt16BE(0x8400, 2)
+  header.writeUInt16BE(0, 4)
+  header.writeUInt16BE(records.length, 6)
+  return Buffer.concat([header, ...records])
+}
+
+export const serveAirPlay = (
+  advertisement: Advertisement
+): Effect.Effect<void, never, Scope.Scope> =>
+  Effect.gen(function*() {
+    const socket = dgram.createSocket({ type: "udp4", reuseAddr: true })
+    const queries = yield* Queue.unbounded<{ packet: Buffer; from: dgram.RemoteInfo }>()
+    const answered = yield* Ref.make(0)
+
+    socket.on("message", (packet: Buffer, from: dgram.RemoteInfo) => {
+      Queue.offerUnsafe(queries, { packet, from })
+    })
+    socket.on("error", () => undefined)
+
+    yield* Effect.acquireRelease(
+      Effect.callback<void>((resume) => {
+        socket.bind(MDNS_PORT, () => resume(Effect.void))
+      }),
+      () => Effect.sync(() => socket.close())
+    )
+
+    yield* Effect.try({
+      try: () => socket.addMembership(MDNS_ADDRESS),
+      catch: (cause) => cause
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logDebug(`could not join the mDNS group; answering unicast only: ${cause}`)
+      )
+    )
+
+    const reply = answerAirPlay(advertisement)
+
+    yield* Effect.forkScoped(
+      Stream.runForEach(Stream.fromQueue(queries), ({ from, packet }) =>
+        Effect.when(
+          Effect.andThen(
+            Effect.sync(() => socket.send(reply, from.port, from.address, () => {})),
+            Ref.update(answered, (count) => count + 1)
+          ),
+          Effect.succeed(
+            questionsIn(packet).some((question) => question === advertisement.service)
+          )
+        ))
+    )
+  })
+
 /**
  * Exported for the tests. The encoding here and the parsing in
  * `platform/Mdns` are two halves of one format, and they only agree if both

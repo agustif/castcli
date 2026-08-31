@@ -84,4 +84,57 @@ describe("cast play, against an emulated AirPlay device", () => {
       }).pipe(Effect.provide(TestServices)),
     { timeout: 300_000 }
   )
+
+  it.live(
+    "discovers device via mDNS _airplay._tcp and plays content",
+    () =>
+      Effect.gen(function*() {
+        yield* noStrayPlayers
+        const ready = yield* requireBinaries("ffmpeg")
+
+        return yield* Effect.when(
+          Effect.gen(function*() {
+            const fs = yield* FileSystem
+            const directory = yield* fs.makeTempDirectoryScoped()
+            const file = yield* makeSample()
+
+            const name = "castcli-e2e-airplay-mdns"
+            const device = yield* EmulatorDevice.make({
+              name,
+              advertise: true,
+              requirePairing: false
+            })
+
+            yield* Effect.sleep(Duration.seconds(1))
+
+            yield* play(device, file, directory, ["--device", name], true)
+
+            const loaded = yield* eventually(device.loaded, Option.isSome, Duration.seconds(90))
+            const media = Option.flatten(loaded)
+            assert.isTrue(Option.isSome(media), "the device was never found via mDNS or never given a URL")
+
+            yield* Option.match(media, {
+              onNone: () => Effect.void,
+              onSome: (given) =>
+                Effect.sync(() => {
+                  assert.include(given.url, "master.m3u8")
+                })
+            })
+
+            yield* eventually(
+              device.fetched,
+              (urls) => urls.some((url) => url.includes("/master.m3u8")),
+              Duration.seconds(90)
+            )
+            const fetched = yield* device.fetched
+            assert.isTrue(
+              fetched.some((url) => url.includes("/master.m3u8")),
+              `device discovered via mDNS but never fetched content: ${fetched.join(", ")}`
+            )
+          }).pipe(Effect.scoped),
+          Effect.succeed(ready)
+        )
+      }).pipe(Effect.provide(TestServices)),
+    { timeout: 300_000 }
+  )
 })
