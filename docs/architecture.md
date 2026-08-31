@@ -108,13 +108,14 @@ candidates in one language and keeps the richest.
 `bestSubtitle` is the pure ranking underneath both, so `cast streams` can mark
 the track `cast play` would pick rather than reimplementing the guess.
 
-### The two processes share a file, not a socket
+### The two processes share a socket, not a file
 
 `cast seek` runs in a different process from `cast play`, and needs two things
 from it: where the running stream starts, and — when the target is before that
-point — someone to issue a fresh `LOAD`. Both go through the state file, which
-the player polls once a second. A socket would be better engineering and much
-more machinery for one integer.
+point — someone to issue a fresh `LOAD`. Commands reach the running player through
+a unix domain socket (`ControlChannel`) with schema-validated request/response.
+The socket is bound when `play` starts and removed when it stops, so commands
+arrive without polling and the running player acts on them immediately.
 
 ### Two presentations, one server
 

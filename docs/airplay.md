@@ -3,8 +3,9 @@
 The tool speaks Cast, DLNA, and AirPlay. This document explains what was built
 and what was deliberately left out.
 
-Last updated: 2026-08-22. Query-string contract documented. E2E tests prove the
-device fetches.
+Last updated: 2026-08-31. Query-string contract documented. E2E tests prove the
+device fetches. `playQueue` endpoint implemented in Session. Pair-verify implemented
+in emulator but not wired into sender Session. Volume gap noted.
 
 ## What is built
 
@@ -15,6 +16,7 @@ plainer than DLNA — no SOAP, no DIDL:
 | | |
 |---|---|
 | `POST /play` | `Content-Location` plus `Start-Position` (query-string parameters) |
+| `POST /command` | `insertPlayQueueItem` with XML plist (playQueue implementation) |
 | `POST /scrub?position=` | seek |
 | `POST /rate?value=` | `0` pauses, `1` resumes |
 | `POST /stop` | stop |
@@ -23,6 +25,10 @@ plainer than DLNA — no SOAP, no DIDL:
 **Query-string contract**: POST /play accepts Content-Location and Start-Position
 as URL parameters. This is the documented interface. Binary plist would be more
 standard but query-string works with emulators and legacy devices.
+
+**Play-queue path**: POST /command with `insertPlayQueueItem` XML plist is also
+implemented. Whether modern Apple TVs require this path (rather than the simpler
+query-string `/play`) is untested without hardware.
 
 Discovery is mDNS `_airplay._tcp` on port 7000 — the same machinery already
 written for Cast. A device announces its capabilities as a 64-bit `features`
@@ -58,11 +64,11 @@ the device does the fetching.
 
 ### What is deliberately not built
 
-**HAP pair-verify** is not implemented. The unauthenticated endpoints work with
-emulators and may work with some real devices, but modern Apple TVs require a
-full AirPlay 2 session. pyatv's author confirmed in 2023: *"The play_url method
-has been broken for a very long time as I believed Apple wasn't maintaining the
-underlying functionality anymore. They do, but an AirPlay session must be
+**HAP pair-verify is implemented in the emulator but not wired into the sender Session.**
+The unauthenticated endpoints work with emulators and may work with some real devices,
+but modern Apple TVs require a full AirPlay 2 session. pyatv's author confirmed in 2023:
+*"The play_url method has been broken for a very long time as I believed Apple wasn't
+maintaining the underlying functionality anymore. They do, but an AirPlay session must be
 established for it to work now."*
 
 Without pair-verify, the symptom on a current Apple TV is: the screen goes black,
@@ -70,8 +76,9 @@ shows a spinner, and returns to the home screen after four seconds.
 
 Pairing requires HAP: SRP6a, Ed25519, Curve25519, HKDF, and ChaCha20-Poly1305.
 The cryptographic infrastructure (`packages/airplay/src/PairVerify/`,
-`packages/airplay/src/Suite/`) **is already built** as part of the initial
-research, but wiring it into the session is left for when hardware testing
+`packages/airplay/src/Suite/`) **is already built** and the emulator implements
+the full pair-verify handshake (M1-M4). The sender Session does not yet call it,
+so wiring pair-verify into the session is left for when hardware testing
 becomes possible.
 
 **FairPlay is not needed.** This is the one piece of good news and it is worth
@@ -87,23 +94,22 @@ way around.
 
 ## Known gaps
 
-**Current Apple TVs require pairing**, and the pairing path is not wired up.
-The sender will work with:
+**Current Apple TVs require pairing**, and the pairing path is not wired into the
+sender Session (though it exists in the emulator). The sender will work with:
 
 - The emulated device (for tests)
 - Legacy devices that still accept unauthenticated `/play` (pre-tvOS 10.2)
 - Third-party AirPlay receivers (Samsung, LG, Sony, Vizio) that may be more
   permissive
 
-Whether a real Apple TV with pairing actually works with the legacy `/play`
-endpoint (as pyatv suggests) or requires the newer play-queue path (as pyatv
-#2899 suggests) cannot be determined without hardware. The cryptographic
-foundation is there; the session-establishment handshake is not.
+Whether a real Apple TV with the legacy `/play` endpoint works (as pyatv suggests)
+or requires the newer play-queue path (as pyatv #2899 suggests) cannot be determined
+without hardware. The cryptographic foundation is there; the session-establishment
+handshake is not yet called from the sender Session.
 
-**Modern play-queue endpoints** (`POST /command` with `insertPlayQueueItem`) are
-not implemented. This may or may not be required for current Apple TVs — the
-community evidence is split. If needed, it is a bounded addition on top of
-pairing.
+**Play-queue endpoint** (`POST /command` with `insertPlayQueueItem`) is implemented
+in the sender Session. Whether modern Apple TVs require this path (rather than the
+simpler query-string `/play`) is untested without hardware.
 
 **Volume control is not implemented.** The AirPlay protocol supports volume via
 `POST /setproperty`, but the current implementation does not include it. The CLI
@@ -112,16 +118,17 @@ does not change the volume).
 
 ## What would complete it
 
-- **An Apple TV to test against.** If legacy `/play` still works there, the path
-  is: wire up the existing HAP primitives into a pair-verify handshake, test,
-  done. If the play-queue path is mandatory, add that too. Either way, the
-  deciding experiment is an hour with the hardware.
+- **An Apple TV to test against.** The cryptographic primitives exist and the emulator
+  implements pair-verify. The remaining work is wiring pair-verify into the sender
+  Session and validating it with hardware. If binary plist for `/play` is required
+  (rather than query-string parameters), that is a bounded addition.
   
-- **An AirPlay-compatible television** (Samsung, LG, Sony, Vizio). These are a
+- **An AirPlay-compatible television** (Samsung, LG, Sony, Vizio, Xiaomi). These are a
   different firmware lineage and advertise video through bit 49 rather than bit 0.
   Whether they accept the simpler unauthenticated session is unpublished, and a
   single evening with one would settle it.
 
 The honest position is: the software is complete for the unauthenticated path,
-the cryptographic pieces exist for pairing, and the deciding question is whether
-a real device will accept what we send. That requires hardware.
+the cryptographic pieces exist and are emulator-verified for pairing, `playQueue`
+is implemented, and the deciding question is whether a real device will accept what
+we send. That requires hardware.
