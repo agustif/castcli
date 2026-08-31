@@ -545,7 +545,7 @@ export const make = (options: {
 <dict>
   <key>model</key><string>Emulator</string>
   <key>deviceid</key><string>AA:BB:CC:DD:EE:FF</string>
-  <key>features</key><integer>${requireAuthSetup ? "0x4000001" : "0x1"}</integer>
+  <key>features</key><integer>${requireAuthSetup ? "0x8000000000001" : "0x1"}</integer>
   <key>srcvers</key><string>220.68</string>
 </dict>
 </plist>`,

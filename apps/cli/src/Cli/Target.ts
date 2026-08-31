@@ -309,16 +309,35 @@ export const resolve = Effect.fn("target.resolve")(function*(options: {
           proto === "cast"
             ? Effect.succeed(Target.Cast({ device: castAt(address, options.devicePort) }))
             : proto === "airplay"
-              ? Effect.succeed(
-                  Target.AirPlay({
+              ? Effect.gen(function*() {
+                  const client = yield* HttpClient.HttpClient
+
+                  const serverInfoResponse = yield* client
+                    .get(`http://${address}:${options.airplayPort}/server-info`)
+                    .pipe(
+                      Effect.flatMap((r) => r.text),
+                      Effect.orElseSucceed(() => "")
+                    )
+
+                  const features =
+                    serverInfoResponse.length > 0
+                      ? (() => {
+                          const featuresMatch = serverInfoResponse.match(
+                            /<key>features<\/key>\s*<integer>(0x[0-9a-fA-F]+)<\/integer>/
+                          )
+                          return featuresMatch?.[1] !== undefined ? BigInt(featuresMatch[1]) : undefined
+                        })()
+                      : undefined
+
+                  return Target.AirPlay({
                     device: new AirPlayDevice({
                       name: address,
                       ip: address,
                       port: Port.make(options.airplayPort),
-                      features: undefined
+                      features
                     })
                   })
-                )
+                })
               : Effect.fail(
                   new DeviceNotFoundError({
                     query: `${address} (DLNA)`,
