@@ -843,11 +843,17 @@ const play = Command.make(
       onSwitch: (rung) => Queue.offer(reloads, rung)
     })
 
+    // VOD cache path for AirPlay seekable file
+    const vodCachePath = FilePath.make(
+      path.join(path.dirname(absolute), `.${path.basename(absolute)}.vod.mp4`)
+    )
+
     // Serve on every interface; only the advertised URL has to be right.
     const serverOn = (port: number) =>
       HttpRouter.serve(
         routes({
           file: absolute,
+          vodCachePath,
           durationSeconds: Option.getOrElse(duration, () => Seconds.make(0)),
           videoIndex: StreamIndex.make(video.index),
           audioIndex,
@@ -1349,15 +1355,14 @@ const play = Command.make(
                 })
             })
 
-            const progressiveUrl = `${baseUrl}/stream?o=${resumed}`
-            // const hlsUrl = `${baseUrl}/master.m3u8`
-            yield* Console.log(`airplay url QUEUE progressive ${progressiveUrl}`)
+            const vodUrl = `${baseUrl}/vod.mp4`
+            yield* Console.log(`airplay url QUEUE vod ${vodUrl}`)
             yield* AirPlayPlay.play({
               wire,
               device: airplayDevice,
               pairing,
-              contentLocation: progressiveUrl,
-              startPosition: 0
+              contentLocation: vodUrl,
+              startPosition: resumed
             })
             yield* Console.log(`playing on ${airplayDevice.name}`)
           })
