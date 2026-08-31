@@ -248,8 +248,7 @@ export const play = (
                   CAST_DEVICE_PORT: String(device.port),
                   AIRPLAY_DEVICE_PORT: String(device.port),
                   CAST_ADVERTISE_HOST: "127.0.0.1",
-                  XDG_STATE_HOME: stateDirectory,
-                  SKIP_CONTROL_CHANNEL: "1"
+                  XDG_STATE_HOME: stateDirectory
                 }
             }
           )
@@ -263,3 +262,36 @@ export const play = (
           )
       )
     ))
+
+/**
+ * Send a control command to the running player.
+ *
+ * This uses the same control channel mechanism that production commands use,
+ * allowing tests to verify that IPC actually works.
+ */
+export const controlCommand = (
+  device: { readonly port: number },
+  stateDirectory: string,
+  command: string,
+  args: ReadonlyArray<string>
+) =>
+  Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
+    Effect.scoped(
+      Effect.flatMap(
+        spawner.spawn(
+          ChildProcess.make(
+            process.execPath,
+            ["dist/cast.cjs", command, "--ip", "127.0.0.1", ...args],
+            {
+              extendEnv: true,
+              env: {
+                CAST_DEVICE_PORT: String(device.port),
+                XDG_STATE_HOME: stateDirectory
+              }
+            }
+          )
+        ),
+        (handle) => handle.exitCode
+      )
+    )
+  )

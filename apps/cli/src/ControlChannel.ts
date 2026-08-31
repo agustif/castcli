@@ -86,9 +86,12 @@ export const startServer = (handlers: ControlHandlers) =>
   Effect.gen(function*() {
     const sockPath = socketPath()
 
-    // Remove stale socket
+    // Remove stale socket - be more aggressive about cleanup
     try {
-      fs.unlinkSync(sockPath)
+      const stats = fs.statSync(sockPath)
+      if (stats.isSocket()) {
+        fs.unlinkSync(sockPath)
+      }
     } catch {
       // fine if it doesn't exist
     }
@@ -156,8 +159,23 @@ export const startServer = (handlers: ControlHandlers) =>
 
     yield* Effect.promise(() =>
       new Promise<void>((resolve, reject) => {
-        server.listen(sockPath, () => resolve())
-        server.on("error", reject)
+        const timeout = setTimeout(() => {
+          reject(new Error(`Control channel listen timeout after 5s on ${sockPath}`))
+        }, 5000)
+        
+        const errorHandler = (err: Error) => {
+          clearTimeout(timeout)
+          server.removeListener("error", errorHandler)
+          reject(err)
+        }
+        
+        server.on("error", errorHandler)
+        
+        server.listen(sockPath, () => {
+          clearTimeout(timeout)
+          server.removeListener("error", errorHandler)
+          resolve()
+        })
       })
     )
 
