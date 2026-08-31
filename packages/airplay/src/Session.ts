@@ -9,6 +9,7 @@ import { HttpBody, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { AirPlayDevice, Seconds } from "@castcli/domain"
 import * as PairVerify from "./PairVerify/index.ts"
 import type { Pairing } from "./PairSetup/Controller/Pairing.ts"
+import * as PlaybackInfoModule from "./PlaybackInfo/index.ts"
 
 export interface PlayOptions {
   readonly contentLocation: string
@@ -25,12 +26,8 @@ export interface PlayOptions {
   }
 }
 
-export interface PlaybackInfo {
-  readonly duration: number | undefined
-  readonly position: number | undefined
-  readonly rate: number | undefined
-  readonly readyToPlay: boolean | undefined
-}
+export type { PlaybackInfo } from "./PlaybackInfo/index.ts"
+export { MalformedPlaybackInfo } from "./PlaybackInfo/index.ts"
 
 /**
  * Run pair-verify exchange with the device.
@@ -145,18 +142,8 @@ export const playbackInfo = (device: AirPlayDevice) =>
     const response = yield* client.get(url)
     const text = yield* response.text
 
-    const duration = text.match(/<key>duration<\/key>\s*<real>([\d.]+)<\/real>/)
-    const position = text.match(/<key>position<\/key>\s*<real>([\d.]+)<\/real>/)
-    const rateMatch = text.match(/<key>rate<\/key>\s*<real>([\d.]+)<\/real>/)
-    const ready = text.match(/<key>readyToPlay<\/key>\s*<(true|false)\s*\/>/)
-
     return text.length > 0
-      ? Option.some({
-        duration: duration ? Number(duration[1]) : undefined,
-        position: position ? Number(position[1]) : undefined,
-        rate: rateMatch ? Number(rateMatch[1]) : undefined,
-        readyToPlay: ready ? ready[1] === "true" : undefined
-      })
+      ? Option.some(yield* PlaybackInfoModule.parse(text))
       : Option.none()
   })
 

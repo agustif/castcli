@@ -520,4 +520,4 @@ const seek = Command.make(
   })
 ).pipe(Command.withDescription("Seek within what is playing"))
 
-export const all = [status, pause, resume, toggle, seek, volume, stop]
+export const all = [status, pause, resume, toggle, seek, volume, stop] as const
