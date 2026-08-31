@@ -7,7 +7,6 @@
 import * as net from "node:net"
 import * as crypto from "node:crypto"
 import { Console, Effect } from "effect"
-import type { EncryptedSession } from "@castcli/airplay"
 import { EncryptedSession as Encrypted } from "@castcli/airplay"
 
 export interface PairHttp {
@@ -26,7 +25,7 @@ export interface PairHttp {
     extraHeaders?: Record<string, string>,
     protocol?: string
   ) => Effect.Effect<{ status: number; body: Uint8Array }, unknown, Encrypted.Suite>
-  readonly enableEncryption: (session: EncryptedSession) => void
+  readonly enableEncryption: (session: Encrypted.EncryptedSession) => void
   readonly setReadTimeout: (ms: number) => void
   readonly destroy: () => void
 }
@@ -68,7 +67,7 @@ export const connect = (host: string, port: number): PairHttp => {
   }
 
   let socket: net.Socket | undefined
-  let session: EncryptedSession | undefined
+  let session: Encrypted.EncryptedSession | undefined
   let incoming = Buffer.alloc(0)
   let waiters: Array<() => void> = []
   let readTimeoutMs = 8000
@@ -169,7 +168,7 @@ export const connect = (host: string, port: number): PairHttp => {
     }
   })
 
-  const readEncryptedHttp = (sess: EncryptedSession) =>
+  const readEncryptedHttp = (sess: Encrypted.EncryptedSession) =>
     Effect.gen(function*() {
       let decrypted = new Uint8Array()
       let cipher = new Uint8Array(incoming)
@@ -182,7 +181,7 @@ export const connect = (host: string, port: number): PairHttp => {
           next.set(step.plaintext, decrypted.byteLength)
           decrypted = next
         }
-        cipher = step.rest
+        cipher = new Uint8Array(step.rest)
         const parsed = tryParseHttp(Buffer.from(decrypted))
         if (parsed !== undefined) {
           incoming = Buffer.from(cipher)

@@ -68,6 +68,29 @@
     },
     {
       "files": [
+        "apps/cli/src/AirPlayPlay.ts",
+        "apps/cli/src/AirPlayPairHttp.ts",
+        "apps/cli/src/bplist.ts"
+      ],
+      "rules": {
+        "castcli/no-node-child-process": "off",
+        "castcli/no-node-fs": "off",
+        "castcli/no-if": "off",
+        "castcli/no-throw": "off",
+        "castcli/no-promise": "off",
+        "castcli/no-console": "off",
+        "castcli/no-await": "off",
+        "castcli/no-try-catch": "off",
+        "castcli/no-as-cast": "off",
+        "castcli/no-timers": "off",
+        "castcli/no-date-now": "off",
+        "castcli/no-math-random": "off",
+        "eslint/no-shadow": "off",
+        "eslint/no-await-in-loop": "off"
+      }
+    },
+    {
+      "files": [
         "scripts/**",
         "tools/**"
       ],

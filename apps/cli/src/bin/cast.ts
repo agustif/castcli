@@ -28,6 +28,7 @@ import * as TimeCode from "../Cli/TimeCode.ts"
 import { FetchHttpClient, HttpClient, HttpRouter } from "effect/unstable/http"
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { NodeCrypto } from "@effect/platform-node"
+import { NodeSuite } from "@castcli/airplay"
 import { FileSystem } from "effect/FileSystem"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -323,6 +324,16 @@ const deviceAt = (address: Ipv4, devicePort: number) =>
  * description URL carries a port the device may change when it reboots, so a
  * remembered one would be a stale answer rather than a fast one.
  */
+const labelledDevices = (bag: {
+  readonly cast: ReadonlyArray<CastDevice>
+  readonly airplay: ReadonlyArray<AirPlayDevice>
+  readonly dlna: ReadonlyArray<string>
+}) => [
+  ...bag.cast.map((device) => `${device.name} (Cast)`),
+  ...bag.airplay.map((device) => `${device.name} (AirPlay)`),
+  ...bag.dlna.map((name) => `${name} (DLNA)`)
+]
+
 const resolveTarget = Effect.fn("cast.resolveTarget")(function*(options: {
   readonly ip: Option.Option<Ipv4>
   readonly name: Option.Option<string>
@@ -346,16 +357,6 @@ const resolveTarget = Effect.fn("cast.resolveTarget")(function*(options: {
       port: Port.make(options.airplayPort)
     })
 
-  const labelled = (bag: {
-    readonly cast: ReadonlyArray<CastDevice>
-    readonly airplay: ReadonlyArray<AirPlayDevice>
-    readonly dlna: ReadonlyArray<string>
-  }) => [
-    ...bag.cast.map((device) => `${device.name} (Cast)`),
-    ...bag.airplay.map((device) => `${device.name} (AirPlay)`),
-    ...bag.dlna.map((name) => `${name} (DLNA)`)
-  ]
-
   const fail = (
     query: string,
     bag: {
@@ -367,7 +368,7 @@ const resolveTarget = Effect.fn("cast.resolveTarget")(function*(options: {
     Effect.fail(
       new DeviceNotFoundError({
         query,
-        found: labelled(bag)
+        found: labelledDevices(bag)
       })
     )
 
@@ -1241,7 +1242,7 @@ const play = Command.make(
           Effect.gen(function*() {
             const AirPlay = yield* Effect.promise(() => import("@castcli/airplay"))
             const { Redacted } = yield* Effect.promise(() => import("effect"))
-            const { PairSetup, Suite, NodeSuite } = AirPlay
+            const { PairSetup, Suite } = AirPlay
             const deviceIp = Ipv4.make(airplayDevice.ip)
             const deviceId = Option.fromNullishOr(airplayDevice.deviceId)
 
@@ -1272,11 +1273,12 @@ const play = Command.make(
                 yield* Console.log(`pair-setup M2 HTTP ${m2Http.status} ${m2Http.body.byteLength} bytes`)
                 const m2Response = m2Http.body
                 yield* Effect.when(
-                  Effect.sync(() => {
-                    throw new Error(
-                      `pair-setup M2 refused: HTTP ${m2Http.status}, ${m2Response.byteLength} bytes (need 200 and a HAP body on the pin-start socket)`
-                    )
-                  }),
+                  Effect.fail(
+                    new AirPlayPlay.AirPlayHttpError({
+                      message:
+                        `pair-setup M2 refused: HTTP ${m2Http.status}, ${m2Response.byteLength} bytes (need 200 and a HAP body on the pin-start socket)`
+                    })
+                  ),
                   Effect.succeed(m2Http.status !== 200 || m2Response.byteLength < 16)
                 )
 
@@ -1467,7 +1469,8 @@ const MainLayer = Layer.mergeAll(
   // DLNA is request-response over HTTP: fetching a device's description and
   // posting SOAP at it both need a client, where Cast needs only a socket.
   FetchHttpClient.layer,
-  NodeServices.layer
+  NodeServices.layer,
+  NodeSuite.pipe(Layer.provide(NodeCrypto.layer))
 )
 
 cast.pipe(

@@ -111,12 +111,12 @@ export const decryptAvailable = (
     const suite = yield* SuiteService
     const chunks: Uint8Array[] = []
     let offset = 0
-    while (offset + 2 <= buffer.byteLength) {
-      const plainLen = buffer[offset]! | (buffer[offset + 1]! << 8)
+    while (
+      offset + 2 <= buffer.byteLength &&
+      offset + 2 + ((buffer[offset] ?? 0) | ((buffer[offset + 1] ?? 0) << 8)) + TAG <= buffer.byteLength
+    ) {
+      const plainLen = (buffer[offset] ?? 0) | ((buffer[offset + 1] ?? 0) << 8)
       const frameLen = 2 + plainLen + TAG
-      if (offset + frameLen > buffer.byteLength) {
-        break
-      }
       const length = buffer.subarray(offset, offset + 2)
       const sealed = buffer.subarray(offset + 2, offset + frameLen)
       const counter = yield* Ref.getAndUpdate(session.readNonce, (n) => n + BigInt(1))

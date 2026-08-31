@@ -27,9 +27,6 @@ const writeInt = (n: number, size: number): Uint8Array => {
 
 const writeAscii = (s: string): Uint8Array => {
   const bytes = new TextEncoder().encode(s)
-  const marker =
-    bytes.byteLength < 15 ? u8(0x50 | bytes.byteLength) : concat([u8(0x5f), u8(0x10 | 1), writeInt(bytes.byteLength, 1)])
-  // for our sizes always < 15 is false (URLs are long). use int length.
   if (bytes.byteLength < 15) {
     return concat([u8(0x50 | bytes.byteLength), bytes])
   }
@@ -72,17 +69,6 @@ export const encode = (dict: Record<string, string | number>): Uint8Array => {
   }
   const offsetTableOffset = cursor
   const offsetTable = concat(offsets.map((o) => writeInt(o, offsetSize)))
-  const trailer = concat([
-    new Uint8Array(6),
-    u8(offsetSize),
-    u8(refSize),
-    writeInt(0, 4),
-    writeInt(all.length, 4),
-    writeInt(0, 4),
-    writeInt(0, 4),
-    writeInt(0, 4),
-    writeInt(offsetTableOffset, 4)
-  ])
   // trailer is 32 bytes: 6 unused, offsetSize, refSize, 8 num objects, 8 top object, 8 offset table offset
   const trailer32 = new Uint8Array(32)
   trailer32[6] = offsetSize

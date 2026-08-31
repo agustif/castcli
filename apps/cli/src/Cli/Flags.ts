@@ -41,10 +41,11 @@ export const ProtocolName = Schema.Literals(["cast", "airplay", "dlna"])
 export type ProtocolName = typeof ProtocolName.Type
 export type Protocol = ProtocolName
 
-export const protocol = Flag.string("protocol").pipe(
-  Flag.withSchema(ProtocolName),
-  Flag.withDescription("Cast, AirPlay, or DLNA when a device speaks more than one"),
-  Flag.optional
+export const protocol = Flag.optional(
+  Flag.withSchema(
+    Flag.withDescription(Flag.string("protocol"), "Cast, AirPlay, or DLNA when a device speaks more than one"),
+    ProtocolName
+  )
 )
 
 export const audioStream = Flag.integer("audio").pipe(

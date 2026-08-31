@@ -13,16 +13,19 @@ import { Ipv4, Port } from "./Brands.ts"
  * word drops Video V2 (bit 49), which is how a Xiaomi that plays video
  * was listed as audio-only.
  */
+const HEX_WORD = /^(0x)?[0-9a-fA-F]+$/i
+
+const parseHexWord = (hex: string): bigint | undefined => {
+  const normalized = hex.startsWith("0x") || hex.startsWith("0X") ? hex : `0x${hex}`
+  return HEX_WORD.test(hex) ? BigInt(normalized) : undefined
+}
+
 export const parseAirPlayFeatures = (featuresHex: string): bigint | undefined => {
   const parts = featuresHex.split(",")
-  const word = (hex: string): bigint => BigInt(hex.startsWith("0x") ? hex : `0x${hex}`)
-  try {
-    const lo = word(parts[0] ?? "0")
-    const hi = (parts[1] ?? "").length > 0 ? word(parts[1] ?? "0") : 0n
-    return (hi << 32n) | lo
-  } catch {
-    return undefined
-  }
+  const lo = parseHexWord(parts[0] ?? "0")
+  const hiRaw = parts[1] ?? ""
+  const hi = hiRaw.length > 0 ? parseHexWord(hiRaw) : 0n
+  return lo === undefined || hi === undefined ? undefined : (hi << 32n) | lo
 }
 
 

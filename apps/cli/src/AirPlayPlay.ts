@@ -144,23 +144,6 @@ const deriveEventKeys = (sharedSecret: Redacted.Redacted<Uint8Array>) =>
     return yield* EncryptedSession.make({ readKey, writeKey })
   })
 
-const deriveDataKeys = (sharedSecret: Redacted.Redacted<Uint8Array>, seed: number) =>
-  Effect.gen(function*() {
-    const suite = yield* EncryptedSession.Suite
-    const salt = `DataStream-Salt${seed}`
-    const writeKey = yield* suite.hkdfSha512({
-      key: sharedSecret,
-      salt,
-      info: "DataStream-Output-Encryption-Key"
-    })
-    const readKey = yield* suite.hkdfSha512({
-      key: sharedSecret,
-      salt,
-      info: "DataStream-Input-Encryption-Key"
-    })
-    return yield* EncryptedSession.make({ readKey, writeKey })
-  })
-
 const eventHttp200 = (request: string): Uint8Array => {
   const cseq = /(?:^|\r\n)CSeq:\s*(\S+)/i.exec(request)?.[1] ?? "1"
   const server = /(?:^|\r\n)Server:\s*(.+)/i.exec(request)?.[1]?.trim()
@@ -177,7 +160,7 @@ const eventHttp200 = (request: string): Uint8Array => {
   return new TextEncoder().encode(lines.join("\r\n") + "\r\n\r\n")
 }
 
-const concatBytes = (a: Uint8Array, b: Uint8Array): Uint8Array => {
+const concatBytes = (a: Uint8Array, b: Uint8Array): Uint8Array<ArrayBuffer> => {
   const out = new Uint8Array(a.byteLength + b.byteLength)
   out.set(a, 0)
   out.set(b, a.byteLength)
@@ -218,7 +201,7 @@ const xmlOfBplist = (body: Uint8Array): string => {
   const xml = bplistToXml(body)
   const data = /<key>data<\/key>\s*<data>\s*([A-Za-z0-9+/=\s]+)<\/data>/.exec(xml)
   if (data) {
-    const inner = Buffer.from(data[1].replace(/\s+/g, ""), "base64")
+    const inner = Buffer.from((data[1] ?? "").replace(/\s+/g, ""), "base64")
     if (inner.byteLength > 8) {
       return bplistToXml(new Uint8Array(inner))
     }
@@ -267,18 +250,18 @@ const attachEventChannel = (
         Effect.provide(cryptoLayer),
         Effect.runPromise
       )
-      cipherRest = decoded.rest
+      cipherRest = new Uint8Array(decoded.rest)
       if (decoded.plaintext.byteLength === 0) {
         return
       }
       console.log(`event channel plaintext ${decoded.plaintext.byteLength} bytes`)
-      plainBuf = concatBytes(plainBuf, decoded.plaintext)
+      plainBuf = concatBytes(plainBuf, new Uint8Array(decoded.plaintext))
       while (true) {
         const complete = takeCompleteHttp(plainBuf)
         if (complete === undefined) {
           return
         }
-        plainBuf = complete.rest
+        plainBuf = new Uint8Array(complete.rest)
         logEventRequest(complete.message)
         const headerEnd = indexOfCrlf2(complete.message)
         const headerText = new TextDecoder("latin1").decode(
@@ -300,37 +283,6 @@ const attachEventChannel = (
     console.log(`event channel error ${err.message}`)
   })
 }
-
-const tryDataChannel = (
-  host: string,
-  port: number,
-  sharedSecret: Redacted.Redacted<Uint8Array>,
-  seed: number
-) =>
-  Effect.gen(function*() {
-    const dataSession = yield* deriveDataKeys(sharedSecret, seed).pipe(Effect.provide(cryptoLayer))
-    const sock = yield* Effect.tryPromise({
-      try: () =>
-        new Promise<net.Socket | undefined>((resolve) => {
-          const s = net.connect({ host, port }, () => resolve(s))
-          s.setTimeout(1500)
-          s.once("error", () => resolve(undefined))
-          s.once("timeout", () => {
-            s.destroy()
-            resolve(undefined)
-          })
-        }),
-      catch: () => undefined
-    })
-    if (sock !== undefined) {
-      sock.setTimeout(0)
-      attachEventChannel(sock, dataSession)
-      yield* Console.log(`data channel HAP ${host}:${port} seed ${seed}`)
-      return sock
-    }
-    yield* Console.log(`data channel refused ${host}:${port}`)
-    return undefined
-  })
 
 const tryEventChannel = (
   host: string,
@@ -476,7 +428,7 @@ export const play = (options: {
     const itemUuid = crypto.randomUUID().toUpperCase()
     const senderMacBytes = new Uint8Array(6)
     crypto.getRandomValues(senderMacBytes)
-    senderMacBytes[0] = (senderMacBytes[0] & 0xfc) | 0x02
+    senderMacBytes[0] = ((senderMacBytes[0] ?? 0) & 0xfc) | 0x02
     const senderMac = Array.from(senderMacBytes, (b) => b.toString(16).padStart(2, "0")).join(":").toUpperCase()
     const localIp = new URL(options.contentLocation).hostname
     const rtspSession = Math.floor(Math.random() * 0xffffffff)
@@ -562,7 +514,6 @@ export const play = (options: {
         return res
       })
 
-    const empty = { status: 0, body: new Uint8Array() }
     const ntpReq = doSetup("SETUP-NTP", setupXmlNtp, "1")
     let setupRes = yield* ntpReq.pipe(Effect.catchCause(catchHttp("SETUP-NTP")))
     if (setupRes.status !== 200) {
@@ -575,9 +526,10 @@ export const play = (options: {
     const eventMatch = /<key>eventPort<\/key>\s*<integer>(\d+)<\/integer>/.exec(setupXmlOut)
     const eventPort = eventMatch ? Number(eventMatch[1]) : 0
     yield* Console.log(`SETUP eventPort ${eventPort}`)
-    const eventSock = eventPort > 0
-      ? yield* tryEventChannel(options.device.ip, eventPort, sharedSecret)
-      : undefined
+    yield* Effect.when(
+      tryEventChannel(options.device.ip, eventPort, sharedSecret),
+      Effect.succeed(eventPort > 0)
+    )
 
     if (setupRes.status === 200) {
       const recordReq = options.wire.exchange(
