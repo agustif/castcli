@@ -1153,10 +1153,9 @@ const play = Command.make(
                   Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
                 )
 
-                const privateKeyBytes = new Uint8Array(64)
-                const revealed = identity.keys.privateKey
-                const revealedValue = Redacted.value(revealed)
-                privateKeyBytes.set(new Uint8Array(revealedValue.buffer ?? revealedValue))
+                // Ed25519 private key is 32 bytes (the seed)
+                const revealedValue = Redacted.value(identity.keys.privateKey)
+                const privateKeyBytes = new Uint8Array(revealedValue.buffer ?? revealedValue)
 
                 const newPairing = new State.AirPlayPairing({
                   deviceIp,
