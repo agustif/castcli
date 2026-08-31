@@ -283,7 +283,6 @@ export const make = (options: {
                       onNone: () => Effect.void,
                       onSome: (accessoryPrivKey) =>
                         Effect.gen(function*() {
-                          const { Redacted } = yield* Effect.promise(() => import("effect"))
                           const AirPlayForEncryption = yield* Effect.promise(() => import("@castcli/airplay"))
                           const suiteForEncryption = yield* Effect.provide(
                             AirPlayForEncryption.Suite.Suite,
@@ -385,9 +384,39 @@ export const make = (options: {
           Match.when({ path: "/command", method: "POST" }, () =>
             Effect.gen(function*() {
               const verified = yield* Ref.get(pairVerified)
+              const maybeEncryptedSession = yield* Ref.get(encryptedSessionKeys)
+
               return yield* (verified
                 ? Effect.gen(function*() {
-                  const bodyText = new TextDecoder().decode(body)
+                  const bodyText = yield* Option.match(maybeEncryptedSession, {
+                    onNone: () => Effect.succeed(new TextDecoder().decode(body)),
+                    onSome: (session) =>
+                      Effect.gen(function*() {
+                        const AirPlay = yield* Effect.promise(() => import("@castcli/airplay"))
+                        const suite = yield* Effect.provide(AirPlay.Suite.Suite, Layer.provide(AirPlay.NodeSuite, NodeCrypto.layer))
+                        
+                        const lengthHigh = body[0] ?? 0
+                        const lengthLow = body[1] ?? 0
+                        const length = (lengthHigh << 8) | lengthLow
+                        const payload = body.slice(2, 2 + length)
+                        
+                        const counter = yield* Ref.getAndUpdate(session.readNonce, (n) => n + BigInt(1))
+                        const nonce = yield* AirPlay.Suite.Nonce.counter(counter)
+                        
+                        const decrypted = yield* suite.open({
+                          key: session.readKey,
+                          nonce,
+                          ciphertextAndTag: payload,
+                          associatedData: new Uint8Array()
+                        })
+                        
+                        return new TextDecoder().decode(decrypted)
+                      }).pipe(
+                        Effect.catchTag("ForgedFrame", () => Effect.succeed(new TextDecoder().decode(body))),
+                        Effect.catchTag("PlatformError", () => Effect.succeed(new TextDecoder().decode(body)))
+                      )
+                  })
+
                   const urlMatch = bodyText.match(/Content-Location.*?<string>(.*?)<\/string>/s)
                   const posMatch = bodyText.match(/Start-Position.*?<real>([\d.]+)<\/real>/s)
 
