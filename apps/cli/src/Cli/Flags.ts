@@ -68,3 +68,8 @@ export const seek = Flag.string("seek").pipe(
   Flag.withDescription("Start position: seconds, mm:ss or h:mm:ss (default: resume)"),
   Flag.optional
 )
+
+export const airplayPin = Flag.string("pin").pipe(
+  Flag.withDescription("AirPlay pairing PIN (or AIRPLAY_PIN env)"),
+  Flag.optional
+)

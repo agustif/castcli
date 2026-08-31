@@ -138,3 +138,16 @@ export class EmptyLadderError extends Schema.TaggedError<EmptyLadderError>()(
     return "no quality rung fits this source"
   }
 }
+
+/**
+ * AirPlay pairing PIN is required but not provided.
+ * User must provide --pin or AIRPLAY_PIN environment variable.
+ */
+export class AirPlayPinRequiredError extends Schema.TaggedError<AirPlayPinRequiredError>()(
+  "AirPlayPinRequiredError",
+  {}
+) {
+  override get message(): string {
+    return "AirPlay pairing requires a PIN — provide --pin or set AIRPLAY_PIN environment variable"
+  }
+}

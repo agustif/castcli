@@ -53,7 +53,8 @@ import {
   EmptyLadderError,
   NoLocalAddressError,
   NoVideoStreamError,
-  ServerBindError
+  ServerBindError,
+  AirPlayPinRequiredError
 } from "@castcli/domain"
 import { CastDevice, AirPlayDevice } from "@castcli/domain"
 import { Mdns } from "@castcli/platform"
@@ -548,9 +549,10 @@ const play = Command.make(
     audio: Flags.audioStream,
     subs: Flags.subtitleStream,
     seek: Flags.seek,
-    progressive: Flags.progressive
+    progressive: Flags.progressive,
+    pin: Flags.airplayPin
   },
-  Effect.fn(function*({ audio, device, file, progressive, ip, seek, subs }) {
+  Effect.fn(function*({ audio, device, file, progressive, ip, seek, subs, pin }) {
     const config = yield* AppConfig
     const ffmpeg = yield* Ffmpeg
     // `Argument.file({ mustExist: true })` already proved it is there.
@@ -1128,59 +1130,66 @@ const play = Command.make(
             const { Redacted } = yield* Effect.promise(() => import("effect"))
             const { Session: AirPlaySession, PairSetup, Suite, NodeSuite } = AirPlay
             const deviceIp = Ipv4.make(airplayDevice.ip)
+            const deviceId = Option.fromNullishOr(airplayDevice.deviceId)
 
-            const storedPairing = yield* State.getAirPlayPairing(deviceIp)
+            const storedPairing = yield* State.getAirPlayPairing(deviceIp, deviceId)
 
             const pairing = yield* Option.match(storedPairing, {
               onNone: () => Effect.gen(function*() {
-                const suite = yield* Effect.provide(Suite.Suite, Layer.provide(NodeSuite, NodeCrypto.layer))
-                const identity = yield* Effect.gen(function*() {
-                  const keys = yield* suite.ed25519KeyPair
-                  const id = yield* Effect.sync(() => crypto.randomUUID())
-                  return { identifier: id, keys }
-                }).pipe(Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer)))
+                const pairingPin = Option.orElse(pin, () => config.airplayPin)
+                return yield* Option.match(pairingPin, {
+                  onNone: () => Effect.fail(new AirPlayPinRequiredError()),
+                  onSome: (pinValue) => Effect.gen(function*() {
+                    const suite = yield* Effect.provide(Suite.Suite, Layer.provide(NodeSuite, NodeCrypto.layer))
+                    const identity = yield* Effect.gen(function*() {
+                      const keys = yield* suite.ed25519KeyPair
+                      const id = yield* Effect.sync(() => crypto.randomUUID())
+                      return { identifier: id, keys }
+                    }).pipe(Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer)))
 
-                const m1Bytes = yield* PairSetup.m1({ flags: [] })
-                const client = yield* HttpClient.HttpClient
-                const pairSetupUrl = `http://${airplayDevice.ip}:${airplayDevice.port}/pair-setup`
+                    const m1Bytes = yield* PairSetup.m1({ flags: [] })
+                    const client = yield* HttpClient.HttpClient
+                    const pairSetupUrl = `http://${airplayDevice.ip}:${airplayDevice.port}/pair-setup`
 
-                const m2Response = yield* client.execute(
-                  HttpClientRequest.post(pairSetupUrl, { body: HttpBody.uint8Array(m1Bytes) })
-                ).pipe(Effect.flatMap((r) => r.arrayBuffer), Effect.map((buf) => new Uint8Array(buf)))
+                    const m2Response = yield* client.execute(
+                      HttpClientRequest.post(pairSetupUrl, { body: HttpBody.uint8Array(m1Bytes) })
+                    ).pipe(Effect.flatMap((r) => r.arrayBuffer), Effect.map((buf) => new Uint8Array(buf)))
 
-                const { request: m3Bytes, state: proved } = yield* PairSetup.m3(m2Response, { pin: "3939" }).pipe(
-                  Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
-                )
-                const m4Response = yield* client.execute(
-                  HttpClientRequest.post(pairSetupUrl, { body: HttpBody.uint8Array(m3Bytes) })
-                ).pipe(Effect.flatMap((r) => r.arrayBuffer), Effect.map((buf) => new Uint8Array(buf)))
+                    const { request: m3Bytes, state: proved } = yield* PairSetup.m3(m2Response, { pin: pinValue }).pipe(
+                      Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
+                    )
+                    const m4Response = yield* client.execute(
+                      HttpClientRequest.post(pairSetupUrl, { body: HttpBody.uint8Array(m3Bytes) })
+                    ).pipe(Effect.flatMap((r) => r.arrayBuffer), Effect.map((buf) => new Uint8Array(buf)))
 
-                const { request: m5Bytes, state: exchanged } = yield* PairSetup.m5(m4Response, { state: proved, identity }).pipe(
-                  Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
-                )
-                const m6Response = yield* client.execute(
-                  HttpClientRequest.post(pairSetupUrl, { body: HttpBody.uint8Array(m5Bytes) })
-                ).pipe(Effect.flatMap((r) => r.arrayBuffer), Effect.map((buf) => new Uint8Array(buf)))
+                    const { request: m5Bytes, state: exchanged } = yield* PairSetup.m5(m4Response, { state: proved, identity }).pipe(
+                      Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
+                    )
+                    const m6Response = yield* client.execute(
+                      HttpClientRequest.post(pairSetupUrl, { body: HttpBody.uint8Array(m5Bytes) })
+                    ).pipe(Effect.flatMap((r) => r.arrayBuffer), Effect.map((buf) => new Uint8Array(buf)))
 
-                const pairSetupResult = yield* PairSetup.finish(m6Response, exchanged).pipe(
-                  Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
-                )
+                    const pairSetupResult = yield* PairSetup.finish(m6Response, exchanged).pipe(
+                      Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
+                    )
 
-                // Ed25519 private key is 32 bytes (the seed)
-                const revealedValue = Redacted.value(identity.keys.privateKey)
-                const privateKeyBytes = new Uint8Array(revealedValue.buffer ?? revealedValue)
+                    const revealedValue = Redacted.value(identity.keys.privateKey)
+                    const privateKeyBytes = new Uint8Array(revealedValue.buffer ?? revealedValue)
 
-                const newPairing = new State.AirPlayPairing({
-                  deviceIp,
-                  controllerIdentifier: identity.identifier,
-                  controllerPublicKey: identity.keys.publicKey,
-                  controllerPrivateKey: privateKeyBytes,
-                  accessoryIdentifier: pairSetupResult.accessory.identifier,
-                  accessoryPublicKey: pairSetupResult.accessory.publicKey
+                    const newPairing = new State.AirPlayPairing({
+                      deviceIp,
+                      ...(Option.isSome(deviceId) ? { deviceId: Option.getOrThrow(deviceId) } : {}),
+                      controllerIdentifier: identity.identifier,
+                      controllerPublicKey: identity.keys.publicKey,
+                      controllerPrivateKey: privateKeyBytes,
+                      accessoryIdentifier: pairSetupResult.accessory.identifier,
+                      accessoryPublicKey: pairSetupResult.accessory.publicKey
+                    })
+
+                    yield* State.storeAirPlayPairing(newPairing)
+                    return newPairing
+                  })
                 })
-
-                yield* State.storeAirPlayPairing(newPairing)
-                return newPairing
               }),
               onSome: (existing) => Effect.succeed(existing)
             })

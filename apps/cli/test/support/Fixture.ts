@@ -251,6 +251,7 @@ export const play = (
                   AIRPLAY_DEVICE_PORT: String(device.port),
                   CAST_ADVERTISE_HOST: "127.0.0.1",
                   XDG_STATE_HOME: stateDirectory,
+                  AIRPLAY_PIN: "3939",
                   ...(skipControlChannel ? { SKIP_CONTROL_CHANNEL: "1" } : {})
                 }
             }
