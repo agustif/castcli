@@ -55,19 +55,17 @@ An elaborate estimator for a quantity the receiver already knows: its own buffer
 level.
 
 HLS moves that decision to the side that has the information, and it is now
-implemented. A VOD playlist makes every segment of every variant addressable, so
+implemented and the default. A VOD playlist makes every segment of every variant addressable, so
 the receiver switches quality on a segment boundary and seeks by asking for a
 different segment. Nothing restarts. The objection at the time — that preparing
 variants nobody watches burns CPU — turned out not to apply, because segments
 are encoded only when requested; a thousand of them across six variants cost
 nothing until someone asks for one.
 
-It is not the default, for a reason that has nothing to do with the design: the
-progressive path has been watched end to end on a real television and HLS has
-only been verified against an emulated one. Both are served side by side and
-`--hls` chooses. When a real device confirms it, the default flips and the
+The progressive path still exists for files that cannot be segmented (too small, no duration) or
+for receivers that reject HLS, selected with `--progressive`. The
 controller's actuation — the reload queue, the `LOAD` reissue, the
-probe-and-hold logic — can go.
+probe-and-hold logic — remains for progressive-mode only.
 
 ## Testing the inversion
 
@@ -125,7 +123,10 @@ connecting them is bounded work once a device can validate the result. The
 reasoning for this is in [`airplay.md`](airplay.md): the legacy unauthenticated
 endpoints work with emulators and may work with some real devices (third-party
 TVs, pre-tvOS 10.2 Apple TVs), but current Apple TVs demand a full AirPlay 2
-session. Which path a given device accepts is settled by trying it.
+session. Which path a given device accepts is settled by trying it. The `playQueue`
+endpoint (`POST /command` with `insertPlayQueueItem`) exists in the sender Session
+but pair-verify is not yet called from Session — the emulator implements pair-verify
+and can require it, but the sender does not yet invoke it.
 
 Mirroring (push-model H.264 encoding) is **deliberately not built**. It inverts
 the pull model that lets Cast, DLNA, and AirPlay share the media server, quality
@@ -135,15 +136,18 @@ ladder, segment encoder, and subtitle handling.
 
 **Hardware to test against.** Three things wait on it and nothing else:
 
-- **One Cast session with `--hls`.** After that it becomes the default and the
-  quality controller's actuation — the reload queue, the `LOAD` reissue, the
-  probe-and-hold logic — can be deleted.
+- **One Cast session with HLS on a real television.** HLS is already the default in
+  software and works with emulated devices. Real Cast hardware would confirm it end-to-end.
+  After that, the quality controller's actuation (reload queue, `LOAD` reissue,
+  probe-and-hold logic) can be removed from progressive mode since HLS handles quality
+  switching.
 - **One DLNA television.** The whole path is verified against an emulated
   renderer and has never met a real set.
-- **An Apple TV** (or an AirPlay-compatible television), to test whether the
+- **An Apple TV or Xiaomi/Samsung/LG AirPlay TV**, to test whether the
   implemented sender works with that device. The software is complete for the
-  unauthenticated path; pairing is the only missing piece for modern Apple TVs.
-  Which endpoint a given device expects is an hour's experiment with the
-  hardware.
+  unauthenticated path. For modern Apple TVs, the final step is wiring pair-verify
+  (which exists in the emulator) into the sender Session. If binary plist is required
+  for `/play` (instead of the query-string contract currently used), that is a bounded
+  addition.
 
 Everything that can be verified without a device has been.

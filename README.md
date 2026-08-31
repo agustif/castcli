@@ -15,11 +15,13 @@ Written because VLC could not do it, for a reason worth recording.
 
 **Note on AirPlay:** This tool speaks Cast, DLNA, and AirPlay (pull/URL-handoff
 path). The AirPlay sender is software-complete for the legacy unauthenticated
-endpoints and works with emulated devices. Modern Apple TVs require HAP pairing,
-which is not yet wired into the session — the cryptographic primitives exist,
-but connecting them requires hardware to validate. See [`docs/airplay.md`](docs/airplay.md)
-for details. Third-party AirPlay receivers (Samsung, LG, Sony, Vizio) may work
-without pairing.
+endpoints and works with emulated devices. HAP cryptographic primitives exist in
+`packages/airplay` (PairSetup/PairVerify) and the emulator can require pairing, but
+the sender Session does not yet call pair-verify, so pairing is not wired into
+real sessions. The `playQueue` endpoint exists in Session but is not yet used.
+Volume control for AirPlay is a no-op. Modern Apple TVs require HAP pairing, which
+needs hardware to validate. See [`docs/airplay.md`](docs/airplay.md) for details.
+Third-party AirPlay receivers (Samsung, LG, Sony, Vizio) may work without pairing.
 
 ## The bug this exists to work around
 
@@ -130,7 +132,7 @@ cast play movie.mkv --progressive
 | `--audio <index>` | Audio stream index | first match for `CAST_AUDIO_LANGUAGES` |
 | `--subs <index>` | Subtitle stream index, served as a WebVTT sidecar | preferred language, most cues |
 | `--seek <time>` | Start position: `90`, `1:30` or `1:02:03` | where you stopped |
-| `--hls` | Serve HLS instead of one continuous stream (Cast only) | off |
+| `--progressive` | Serve progressive single stream instead of HLS | off |
 
 ### Control
 
@@ -306,8 +308,8 @@ such an import resolve.
 | `npm run vocabulary:sync` | refetch the media vocabulary from Google (needs the network) |
 | `npm run depcruise` | no cycles, Node builtins stay in `platform`/`protocol`, packages never import the app |
 | `npm run codegen:check` | generated wire descriptors, media vocabulary and UPnP actions are not stale |
-| `npm test` | 577 tests, in about a second |
-| `npm run test:e2e` | 4 tests that run the built binary at emulated devices, Cast and DLNA |
+| `npm test` | unit and integration tests, in about a second |
+| `npm run test:e2e` | end-to-end tests that run the built binary at emulated devices: Cast, DLNA, and AirPlay |
 | `npm run check` | all of the above — and the only thing CI runs |
 
 The lint rules encode one idea: never hand-roll what Effect provides. `no-if`,
@@ -318,14 +320,14 @@ carry narrow, documented exemptions.
 
 ## Testing without a television
 
-`packages/emulator` holds two devices. The Cast one serves the control channel over TLS and
+`packages/emulator` holds three devices. The Cast one serves the control channel over TLS and
 then does the half that matters — pulls the media over HTTP exactly as a
 receiver does, walking the master playlist to a variant and the variant to its
 segments. A *device* rather than a service, because it owns its own listener and
 there can be several at once.
 
 ```sh
-npm test        # 112 tests, about a second
+npm test        # unit and integration tests, about a second
 npm run test:e2e  # the built binary, run at an emulated device
 ```
 
@@ -349,8 +351,14 @@ The DLNA one is its HTTP sibling: it serves a device description, accepts SOAP
 at the two control URLs, answers a proper `401 Invalid Action` fault for anything
 it does not implement, and pulls the media when told to play.
 
-What neither can tell you is whether a *particular* television accepts the
-stream. That is why HLS is opt-in and why DLNA has not been near a real set.
+The AirPlay one implements HTTP control endpoints (`/play`, `/rate`, `/scrub`, `/stop`, `/playback-info`)
+and pulls media like the others. The emulator can require HAP pairing and implements pair-verify;
+the sender Session does not yet call pair-verify, so the emulator is configured to accept
+unauthenticated requests for testing.
+
+What the emulators cannot tell you is whether a *particular* television accepts the
+stream. HLS is now the default and is emulator-verified. Real-TV confirmation remains
+for Cast HLS, DLNA, and AirPlay with modern Apple TVs.
 
 ## Generated, not transcribed
 
@@ -400,9 +408,10 @@ removing the `as` casts exposed an `Ipv4` brand that accepted
 - **Progressive quality switches and seeks are visible.** Both restart ffmpeg
   and reissue `LOAD`. This is what HLS exists to fix, and HLS is now the
   default.
-- **The two processes talk through a file.** `cast seek` reaches the running
-  `cast play` by writing a request into the state file, which the player polls
-  once a second. A socket would be better.
+- **The two processes communicate via a unix domain socket.** `cast seek` and
+  other control commands reach the running `cast play` through a unix domain
+  socket with schema-validated request/response. This replaces the previous
+  file-polling mechanism.
 - **Effect has no TLS/TCP client socket.** `effect/unstable/socket` is
   WebSocket-only, so `packages/protocol/src/CastSocket.ts` wraps `node:tls` —
   but exposes it as a real `Socket.Socket`.
