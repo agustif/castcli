@@ -55,6 +55,7 @@ const fakeFfmpeg = (counts: Record<number, number>) =>
   Layer.succeed(Ffmpeg, {
     probe: () => Effect.die("probe is not used by these tests"),
     transcode: () => Effect.die("transcode is not used by these tests"),
+    transcodeFile: () => Effect.die("transcodeFile is not used by these tests"),
     segment: () => Effect.die("segment is not used by these tests"),
     extractCues: (_file, index) => Effect.succeed(cuesOf(counts[index] ?? 0))
   })

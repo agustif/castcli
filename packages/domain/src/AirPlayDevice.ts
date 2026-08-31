@@ -7,6 +7,25 @@
 import { Schema } from "effect"
 import { Ipv4, Port } from "./Brands.ts"
 
+/**
+ * TXT `features` is `0xLOWER,0xUPPER` (sometimes a single word).
+ * The 64-bit mask is `(UPPER << 32) | LOWER`. Parsing only the first
+ * word drops Video V2 (bit 49), which is how a Xiaomi that plays video
+ * was listed as audio-only.
+ */
+export const parseAirPlayFeatures = (featuresHex: string): bigint | undefined => {
+  const parts = featuresHex.split(",")
+  const word = (hex: string): bigint => BigInt(hex.startsWith("0x") ? hex : `0x${hex}`)
+  try {
+    const lo = word(parts[0] ?? "0")
+    const hi = (parts[1] ?? "").length > 0 ? word(parts[1] ?? "0") : 0n
+    return (hi << 32n) | lo
+  } catch {
+    return undefined
+  }
+}
+
+
 export class AirPlayDevice extends Schema.Class<AirPlayDevice>("AirPlayDevice")({
   name: Schema.String,
   ip: Ipv4,

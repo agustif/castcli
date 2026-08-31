@@ -25,9 +25,8 @@ export class ActiveStream extends Schema.Class<ActiveStream>("ActiveStream")({
   /**
    * Whether the receiver can seek by itself.
    *
-   * True under HLS, where every segment of the film is addressable. False for
-   * the progressive stream, which is a live pipe with no byte ranges — there
-   * the player has to restart ffmpeg at the new offset instead.
+   * True under HLS, where every segment of the film is addressable. Progressive
+   * `/stream` is a finished faststart MP4 with byte ranges, not a live pipe.
    */
   seekable: Schema.optionalKey(Schema.Boolean)
 }) {}

@@ -7,9 +7,9 @@
 // Two presentations of the same film are served side by side, because they fail
 // in different ways and neither is strictly better:
 //
-//   * **progressive** (`/stream`) — one continuous transcode at one bitrate.
-//     We choose the quality, so changing it means restarting ffmpeg and
-//     reissuing LOAD, and there are no byte ranges to seek within.
+//   * **progressive** (`/stream`) — a finished faststart MP4 with byte ranges.
+//     ffmpeg writes a seekable file (`+faststart`), we cache the bytes, and
+//     Range probes get 206 with Content-Length rather than a live pipe.
 //   * **HLS** (`/master.m3u8`) — a VOD presentation, one variant per rung, every
 //     segment addressable. The receiver chooses the quality and does its own
 //     seeking, so neither costs a restart.
@@ -17,12 +17,15 @@
 // Serving both costs almost nothing: the segments do not exist until they are
 // requested, so an unused HLS surface encodes nothing at all.
 
-import { Effect, Option, Ref, Schema, Stream } from "effect"
+import { Console, Effect, Match, Option, Ref, Schema, Stream } from "effect"
+import { FileSystem } from "effect/FileSystem"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { Ffmpeg, Hls } from "@castcli/media"
+import { Ffmpeg, FfmpegArgs, Hls } from "@castcli/media"
 import type { Rung } from "@castcli/domain"
 import { Brands, Seconds } from "@castcli/domain"
 import { Srt, Vtt } from "@castcli/media"
+import * as os from "node:os"
+import * as path from "node:path"
 
 export interface SessionState {
   readonly offsetSeconds: Brands.Seconds
@@ -111,58 +114,185 @@ const notFound = HttpServerResponse.empty({ status: 404 })
 
 // The requirement type is inferred: v4 tracks each handler's error and service
 // requirements in the Layer's context, so pinning it by hand fights the router.
-export const routes = (options: MediaServerOptions) =>
-  HttpRouter.addAll([
+type ByteRange =
+  | { readonly _tag: "All" }
+  | { readonly _tag: "Slice"; readonly start: number; readonly end: number }
+  | { readonly _tag: "Unsatisfiable" }
+
+/**
+ * RFC 7233 `bytes=` ranges: `START-END`, `START-`, or `-SUFFIX`.
+ * Anything else, including a range past EOF, is unsatisfiable (416).
+ */
+const parseByteRange = (header: string, total: number): ByteRange => {
+  const raw = String(header).trim()
+  return raw.length === 0
+    ? { _tag: "All" }
+    : Option.match(Option.fromNullishOr(/^bytes=(?:(\d+)-(\d*)|-(\d+))$/.exec(raw)), {
+      onNone: (): ByteRange => ({ _tag: "Unsatisfiable" }),
+      onSome: (match): ByteRange => {
+        const suffixText = match[3]
+        const startText = match[1]
+        const endText = match[2]
+        return suffixText !== undefined
+          ? Number(suffixText) === 0 || total === 0
+            ? { _tag: "Unsatisfiable" }
+            : {
+              _tag: "Slice",
+              start: Math.max(0, total - Number(suffixText)),
+              end: total - 1
+            }
+          : (() => {
+            const start = Number(startText)
+            const end = endText !== undefined && endText.length > 0 ? Number(endText) : total - 1
+            return Number.isFinite(start) && Number.isFinite(end) && total > 0 && start < total &&
+                start <= end
+              ? { _tag: "Slice", start, end: Math.min(end, total - 1) }
+              : { _tag: "Unsatisfiable" }
+          })()
+      }
+    })
+}
+
+const streamCors = {
+  "cache-control": "no-store",
+  "access-control-allow-origin": "*",
+  "accept-ranges": "bytes"
+} as const
+
+export const routes = (options: MediaServerOptions) => {
+  const progressiveCache = new Map<string, Uint8Array>()
+
+  const loadProgressive = Effect.fn("MediaServer.progressiveMp4")(function*(
+    offsetSeconds: Brands.Seconds,
+    rung: Rung
+  ) {
+    const key = `${options.file}|${offsetSeconds}|${rung.height}`
+    return yield* Option.match(Option.fromNullishOr(progressiveCache.get(key)), {
+      onSome: (bytes) => Effect.succeed(bytes),
+      onNone: () =>
+        Effect.gen(function*() {
+          const ffmpeg = yield* Ffmpeg
+          const fs = yield* FileSystem
+          const outPath = path.join(
+            os.tmpdir(),
+            `castcli-stream-${globalThis.crypto.randomUUID()}.mp4`
+          )
+          const transcodeOptions = {
+            file: options.file,
+            offsetSeconds,
+            videoIndex: options.videoIndex,
+            audioIndex: options.audioIndex,
+            rung,
+            audioBitrate: options.audioBitrate,
+            outPath
+          }
+          yield* Console.log(`ffmpeg transcodeFile ${FfmpegArgs.transcodeFile(transcodeOptions).join(" ")}`)
+          yield* ffmpeg.transcodeFile(transcodeOptions).pipe(
+            Effect.tapError((error) => Console.log(`transcodeFile failed ${error}`))
+          )
+          const bytes = yield* fs.readFile(outPath)
+          yield* fs.remove(outPath).pipe(Effect.ignore)
+          progressiveCache.set(key, bytes)
+          yield* options.onBytes(bytes.byteLength)
+          yield* Console.log(`transcodeFile done bytes=${bytes.byteLength} key=${key}`)
+          return bytes
+        })
+    })
+  })
+
+  const handleStream = Effect.fn("MediaServer.stream")(function*(
+    request: HttpServerRequest.HttpServerRequest
+  ) {
+    const current = yield* Ref.get(options.state)
+    const offsetSeconds = Option.getOrElse(queryOffset(request), () => current.offsetSeconds)
+    const remote = Option.getOrElse(request.remoteAddress, () => "?")
+    const rangeHeader = String(request.headers["range"] ?? "")
+
+    yield* Effect.logInfo(
+      `stream requested from ${offsetSeconds}s at ${current.rung.height}p`
+    )
+    yield* Console.log(
+      `stream requested from ${offsetSeconds}s at ${current.rung.height}p from ${remote} url=${request.originalUrl}`
+    )
+
+    const bytes = yield* loadProgressive(offsetSeconds, current.rung)
+    const total = bytes.byteLength
+    const range = parseByteRange(rangeHeader, total)
+    const head = request.method === "HEAD"
+
+    const response = Match.value(range).pipe(
+      Match.when({ _tag: "All" }, () =>
+        head
+          ? HttpServerResponse.empty({
+            status: 200,
+            headers: {
+              ...streamCors,
+              "content-type": "video/mp4",
+              "content-length": String(total)
+            }
+          })
+          : HttpServerResponse.uint8Array(bytes, {
+            status: 200,
+            contentType: "video/mp4",
+            headers: streamCors
+          })),
+      Match.when({ _tag: "Slice" }, ({ start, end }) => {
+        const slice = bytes.subarray(start, end + 1)
+        const headers = {
+          ...streamCors,
+          "content-range": `bytes ${start}-${end}/${total}`
+        }
+        return head
+          ? HttpServerResponse.empty({
+            status: 206,
+            headers: {
+              ...headers,
+              "content-type": "video/mp4",
+              "content-length": String(slice.byteLength)
+            }
+          })
+          : HttpServerResponse.uint8Array(slice, {
+            status: 206,
+            contentType: "video/mp4",
+            headers
+          })
+      }),
+      Match.when({ _tag: "Unsatisfiable" }, () =>
+        HttpServerResponse.empty({
+          status: 416,
+          headers: {
+            ...streamCors,
+            "content-type": "video/mp4",
+            "content-range": `bytes */${total}`
+          }
+        })),
+      Match.exhaustive
+    )
+
+    yield* Console.log(
+      `stream range=${rangeHeader.length > 0 ? rangeHeader : "-"} bytes=${total} status=${response.status} method=${request.method} from ${remote}`
+    )
+    return response
+  })
+
+  return HttpRouter.addAll([
     // --- progressive ---------------------------------------------------------
 
-    HttpRouter.route(
-      "GET",
-      "/stream",
-      Effect.fn("MediaServer.stream")(function*(request: HttpServerRequest.HttpServerRequest) {
-        const ffmpeg = yield* Ffmpeg
-        const current = yield* Ref.get(options.state)
-        const offsetSeconds = Option.getOrElse(queryOffset(request), () => current.offsetSeconds)
-
-        yield* Effect.logInfo(
-          `stream requested from ${offsetSeconds}s at ${current.rung.height}p`
-        )
-
-        const source = yield* ffmpeg.transcode({
-          file: options.file,
-          offsetSeconds,
-          videoIndex: options.videoIndex,
-          audioIndex: options.audioIndex,
-          rung: current.rung,
-          audioBitrate: options.audioBitrate
-        })
-
-        // Counting bytes as they pass gives the quality controller its
-        // throughput signal, measured where backpressure actually applies.
-        const counted = source.pipe(
-          Stream.tap((chunk) => options.onBytes(chunk.length))
-        )
-
-        // A live pipe has no meaningful byte ranges: always answer 200 and let
-        // the receiver read to EOF. Seeking restarts ffmpeg at a new offset.
-        return HttpServerResponse.stream(counted, {
-          contentType: "video/mp4",
-          headers: {
-            "accept-ranges": "none",
-            "cache-control": "no-store"
-          }
-        })
-      })
-    ),
+    HttpRouter.route("GET", "/stream", handleStream),
+    HttpRouter.route("HEAD", "/stream", handleStream),
 
     // --- HLS -----------------------------------------------------------------
 
     HttpRouter.route(
       "GET",
       "/master.m3u8",
-      Effect.fn("MediaServer.master")(function*() {
+      Effect.fn("MediaServer.master")(function*(request: HttpServerRequest.HttpServerRequest) {
         yield* Effect.logInfo(
           `hls master requested: ${options.ladder.length} variants, ` +
             `${Hls.segmentCount(options.durationSeconds)} segments each`
+        )
+        yield* Console.log(
+          `hls master requested from ${Option.getOrElse(request.remoteAddress, () => "?")} url=${request.originalUrl}`
         )
         return HttpServerResponse.text(
           Hls.master(options.ladder, options.audioBitsPerSecond, (variant) => `/v${variant}.m3u8`),
@@ -174,12 +304,15 @@ export const routes = (options: MediaServerOptions) =>
     HttpRouter.route(
       "GET",
       "/v:variant.m3u8",
-      Effect.fn("MediaServer.variant")(function*() {
+      Effect.fn("MediaServer.variant")(function*(request: HttpServerRequest.HttpServerRequest) {
         const params = yield* HttpRouter.params
         const variant = Schema.decodeUnknownOption(indexIn(options.ladder.length))(
           params["variant"]
         )
 
+        yield* Console.log(
+          `hls variant requested from ${Option.getOrElse(request.remoteAddress, () => "?")} variant=${params["variant"] ?? "?"}`
+        )
         return Option.match(variant, {
           onNone: () => notFound,
           onSome: (index) =>
@@ -194,9 +327,12 @@ export const routes = (options: MediaServerOptions) =>
     HttpRouter.route(
       "GET",
       "/v:variant/:segment.ts",
-      Effect.fn("MediaServer.segment")(function*() {
+      Effect.fn("MediaServer.segment")(function*(request: HttpServerRequest.HttpServerRequest) {
         const ffmpeg = yield* Ffmpeg
         const params = yield* HttpRouter.params
+        yield* Console.log(
+          `hls segment requested from ${Option.getOrElse(request.remoteAddress, () => "?")} v=${params["variant"] ?? "?"} seg=${params["segment"] ?? "?"}`
+        )
 
         const wanted = Option.all({
           variant: Schema.decodeUnknownOption(indexIn(options.ladder.length))(params["variant"]),
@@ -308,3 +444,4 @@ export const routes = (options: MediaServerOptions) =>
       })
     )
   ])
+}

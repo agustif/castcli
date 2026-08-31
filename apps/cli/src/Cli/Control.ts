@@ -93,7 +93,7 @@ const onTarget = <A, E1, E2, E3, R1, R2, R3>(
   options: {
     readonly ip: Option.Option<Brands.Ipv4>
     readonly device: Option.Option<string>
-    readonly protocol: Option.Option<import("./Target.ts").Protocol>
+    readonly protocol: Option.Option<Flags.ProtocolName>
   },
   handlers: {
     readonly onCast: (
