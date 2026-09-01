@@ -58,7 +58,7 @@ import {
   ServerBindError,
   AirPlayPinRequiredError
 } from "@castcli/domain"
-import { CastDevice, AirPlayDevice } from "@castcli/domain"
+import { CastDevice, AirPlayDevice, isMacAirPlayReceiver } from "@castcli/domain"
 import { Mdns } from "@castcli/platform"
 import {
   Description as DlnaDescription,
@@ -1285,6 +1285,11 @@ const play = Command.make(
                     ` act=${airplayDevice.act ?? "none"}`
                 )
 
+                const isMacReceiver = airplayDevice.isMacReceiver || 
+                  (airPlayInfo.model !== undefined && isMacAirPlayReceiver(airPlayInfo.model))
+                const statusFlagsAllowAnyone = (airPlayInfo.statusFlags ?? 0) === 4
+                const useTransient = isMacReceiver && statusFlagsAllowAnyone
+
                 const pinProvided = Option.isSome(pin) || Option.isSome(config.airplayPin)
                 const skipPinStart = pinProvided || !AirPlayInfo.pairPinStartFromInfo({
                   ...airPlayInfo,
@@ -1292,23 +1297,26 @@ const play = Command.make(
                 })
                 let pinStartStatus: number | undefined = undefined
 
-                yield* Match.value(skipPinStart).pipe(
-                  Match.when(true, () =>
-                    Effect.logInfo(
-                      pinProvided
-                        ? "PIN provided via --pin or AIRPLAY_PIN; skipping pair-pin-start"
-                        : `skipping pair-pin-start for model ${airPlayInfo.model ?? airplayDevice.model ?? "unknown"}`
-                    )
-                  ),
-                  Match.when(false, () => Effect.gen(function*() {
-                    const pinStart = yield* wire.post("/pair-pin-start", new Uint8Array())
-                    pinStartStatus = pinStart.status
-                    yield* Console.log(`pair-pin-start HTTP ${pinStart.status} ${pinStart.body.byteLength} bytes Host ${hostHeader}`)
-                  })),
-                  Match.exhaustive
-                )
+                if (useTransient) {
+                  yield* wire.setHkpVersion(4)
+                  yield* Console.log(
+                    `Mac receiver with statusFlags=4 (Anyone on Same Network): using transient pairing (HKP 4, no PIN prompt)`
+                  )
+                } else if (skipPinStart) {
+                  yield* Effect.logInfo(
+                    pinProvided
+                      ? "PIN provided via --pin or AIRPLAY_PIN; skipping pair-pin-start"
+                      : `skipping pair-pin-start for model ${airPlayInfo.model ?? airplayDevice.model ?? "unknown"}`
+                  )
+                } else {
+                  const pinStart = yield* wire.post("/pair-pin-start", new Uint8Array())
+                  pinStartStatus = pinStart.status
+                  yield* Console.log(`pair-pin-start HTTP ${pinStart.status} ${pinStart.body.byteLength} bytes Host ${hostHeader}`)
+                }
 
-                const m1Bytes = yield* PairSetup.m1({ flags: [] })
+                const m1Bytes = yield* PairSetup.m1({ 
+                  flags: useTransient ? [AirPlay.GeneratedPairing.PairingFlag.Transient] : []
+                })
                 let m2Http = yield* wire.post(pairSetupPath, m1Bytes)
                 yield* Console.log(`pair-setup M2 HTTP ${m2Http.status} ${m2Http.body.byteLength} bytes Host ${hostHeader}`)
 
@@ -1351,53 +1359,84 @@ const play = Command.make(
                   Effect.succeed(m2Http.status !== 200 || m2Response.byteLength < 16)
                 )
 
-                yield* Match.value(pinProvided).pipe(
-                  Match.when(true, () => Console.log("Using PIN from --pin or AIRPLAY_PIN")),
-                  Match.when(false, () =>
-                    Console.log(
-                      skipPinStart
-                        ? "If the Mac shows an AirPlay allow dialog, accept it; otherwise a PIN may appear on the receiver"
-                        : "AirPlay PIN should now be on the TV"
-                    )
-                  ),
-                  Match.exhaustive
+                const airplayPin = yield* (useTransient 
+                  ? Effect.succeed("3939")
+                  : pinProvided
+                    ? Effect.andThen(
+                        Console.log("Using PIN from --pin or AIRPLAY_PIN"),
+                        resolveAirPlayPin(pin, config.airplayPin)
+                      )
+                    : Effect.andThen(
+                        Console.log(
+                          skipPinStart
+                            ? "If the Mac shows an AirPlay allow dialog, accept it; otherwise a PIN may appear on the receiver"
+                            : "AirPlay PIN should now be on the TV"
+                        ),
+                        resolveAirPlayPin(pin, config.airplayPin)
+                      )
                 )
-                const airplayPin = yield* resolveAirPlayPin(pin, config.airplayPin)
 
                 const { request: m3Bytes, state: proved } = yield* PairSetup.m3(m2Response, { pin: airplayPin }).pipe(
                   Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
                 )
-                    const m4Http = yield* wire.post(pairSetupPath, m3Bytes)
-                    yield* Console.log(`pair-setup M4 HTTP ${m4Http.status} ${m4Http.body.byteLength} bytes`)
-                    const m4Response = m4Http.body
+                const m4Http = yield* wire.post(pairSetupPath, m3Bytes)
+                yield* Console.log(`pair-setup M4 HTTP ${m4Http.status} ${m4Http.body.byteLength} bytes`)
+                const m4Response = m4Http.body
 
-                    const { request: m5Bytes, state: exchanged } = yield* PairSetup.m5(m4Response, { state: proved, identity }).pipe(
-                      Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
-                    )
-                    const m6Http = yield* wire.post(pairSetupPath, m5Bytes)
-                    yield* Console.log(`pair-setup M6 HTTP ${m6Http.status} ${m6Http.body.byteLength} bytes`)
-                    const m6Response = m6Http.body
+                if (useTransient) {
+                  yield* Console.log(
+                    "Transient pairing: stopping after M4, deriving session keys from SRP shared secret"
+                  )
+                }
 
-                    const pairSetupResult = yield* PairSetup.finish(m6Response, exchanged).pipe(
-                      Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
-                    )
-
-                    const revealedValue = Redacted.value(identity.keys.privateKey)
-                    const privateKeyBytes = Uint8Array.from(revealedValue)
-
-                    const newPairing = new State.AirPlayPairing({
-                      deviceIp,
-                      ...(Option.isSome(deviceId) ? { deviceId: Option.getOrThrow(deviceId) } : {}),
-                      controllerIdentifier: identity.identifier,
-                      controllerPublicKey: identity.keys.publicKey,
-                      controllerPrivateKey: privateKeyBytes,
-                      accessoryIdentifier: pairSetupResult.accessory.identifier,
-                      accessoryPublicKey: pairSetupResult.accessory.publicKey
+                const newPairing = yield* (useTransient 
+                  ? Effect.gen(function*() {
+                      yield* Effect.logInfo(`Transient pairing completed for ${deviceIp} (no M5/M6, no long-term storage)`)
+                      const srpKeyBytes = Redacted.value(proved.srpSessionKey)
+                      return new State.AirPlayPairing({
+                        deviceIp,
+                        ...(Option.isSome(deviceId) ? { deviceId: Option.getOrThrow(deviceId) } : {}),
+                        controllerIdentifier: "",
+                        controllerPublicKey: new Uint8Array(),
+                        controllerPrivateKey: new Uint8Array(),
+                        accessoryIdentifier: new Uint8Array(),
+                        accessoryPublicKey: new Uint8Array(),
+                        transient: true,
+                        srpSessionKey: Uint8Array.from(srpKeyBytes)
+                      })
                     })
+                  : Effect.gen(function*() {
+                      const { request: m5Bytes, state: exchanged } = yield* PairSetup.m5(m4Response, { state: proved, identity }).pipe(
+                        Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
+                      )
+                      const m6Http = yield* wire.post(pairSetupPath, m5Bytes)
+                      yield* Console.log(`pair-setup M6 HTTP ${m6Http.status} ${m6Http.body.byteLength} bytes`)
+                      const m6Response = m6Http.body
 
-                    yield* State.storeAirPlayPairing(newPairing)
-                    yield* Effect.logInfo(`Pairing stored successfully for ${deviceIp}`)
-                    return { pairing: newPairing, wire }
+                      const pairSetupResult = yield* PairSetup.finish(m6Response, exchanged).pipe(
+                        Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer))
+                      )
+
+                      const revealedValue = Redacted.value(identity.keys.privateKey)
+                      const privateKeyBytes = Uint8Array.from(revealedValue)
+
+                      const newPairing = new State.AirPlayPairing({
+                        deviceIp,
+                        ...(Option.isSome(deviceId) ? { deviceId: Option.getOrThrow(deviceId) } : {}),
+                        controllerIdentifier: identity.identifier,
+                        controllerPublicKey: identity.keys.publicKey,
+                        controllerPrivateKey: privateKeyBytes,
+                        accessoryIdentifier: pairSetupResult.accessory.identifier,
+                        accessoryPublicKey: pairSetupResult.accessory.publicKey
+                      })
+
+                      yield* State.storeAirPlayPairing(newPairing)
+                      yield* Effect.logInfo(`Pairing stored successfully for ${deviceIp}`)
+                      return newPairing
+                    })
+                )
+
+                return { pairing: newPairing, wire }
               }).pipe(
                 Effect.withSpan("airplay.pair-setup", {
                   attributes: {

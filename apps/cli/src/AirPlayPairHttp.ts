@@ -32,18 +32,20 @@ export interface PairHttp {
     session: Airplay.EncryptedSession.EncryptedSession
   ) => Effect.Effect<void, unknown, Airplay.Suite.Suite>
   readonly setReadTimeout: (ms: number) => Effect.Effect<void>
+  readonly setHkpVersion: (version: number) => Effect.Effect<void>
   readonly close: Effect.Effect<void>
 }
 
 export const connect = (
   host: string,
-  port: number
+  port: number,
+  hkpVersion?: number
 ): Effect.Effect<PairHttp, unknown, Scope.Scope | Airplay.Suite.Suite> => {
   const dacp = crypto.randomBytes(8).toString("hex").toUpperCase()
   const remote = String(crypto.randomInt(1, 0xffffffff))
 
   return Effect.gen(function* () {
-    const client = yield* HapHttpClient.make(host, port, dacp, remote)
+    const client = yield* HapHttpClient.make(host, port, dacp, remote, hkpVersion)
 
     return {
       get: (path) => client.get(path),
@@ -52,6 +54,7 @@ export const connect = (
         client.exchange(method, path, body, contentType, extraHeaders, protocol),
       enableEncryption: (session) => client.enableEncryption(session),
       setReadTimeout: (ms) => client.setReadTimeout(ms),
+      setHkpVersion: (version) => client.setHkpVersion(version),
       close: Effect.interrupt
     }
   })
