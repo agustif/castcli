@@ -1,0 +1,4 @@
+https://developers.google.com/cast/docs/web_receiver/integrate -> cast/official/google-developers/docs/web_receiver/integrate.html (exit code: 22)
+https://developers.google.com/cast/docs/media/tracks -> cast/official/google-developers/docs/media/tracks.html (exit code: 22)
+https://developers.google.com/cast/docs/media/live -> cast/official/google-developers/docs/media/live.html (exit code: 22)
+https://developers.google.com/cast/docs/media/ad_breaks -> cast/official/google-developers/docs/media/ad_breaks.html (exit code: 22)

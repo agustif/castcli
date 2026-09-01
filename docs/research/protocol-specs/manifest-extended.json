@@ -1,0 +1,78 @@
+[
+  {
+    "dest": "cast/official/google-developers/docs/overview.html",
+    "url": "https://developers.google.com/cast/docs/overview"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/design_checklist.html",
+    "url": "https://developers.google.com/cast/docs/design_checklist"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/web_sender/index.html",
+    "url": "https://developers.google.com/cast/docs/web_sender"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/web_sender/integrate.html",
+    "url": "https://developers.google.com/cast/docs/web_sender/integrate"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/web_sender/advanced.html",
+    "url": "https://developers.google.com/cast/docs/web_sender/advanced"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/android_sender/index.html",
+    "url": "https://developers.google.com/cast/docs/android_sender"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/android_sender/integrate.html",
+    "url": "https://developers.google.com/cast/docs/android_sender/integrate"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/android_sender/advanced.html",
+    "url": "https://developers.google.com/cast/docs/android_sender/advanced"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/ios_sender/index.html",
+    "url": "https://developers.google.com/cast/docs/ios_sender"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/ios_sender/integrate.html",
+    "url": "https://developers.google.com/cast/docs/ios_sender/integrate"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/ios_sender/advanced.html",
+    "url": "https://developers.google.com/cast/docs/ios_sender/advanced"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/web_receiver/index.html",
+    "url": "https://developers.google.com/cast/docs/web_receiver"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/web_receiver/integrate.html",
+    "url": "https://developers.google.com/cast/docs/web_receiver/integrate"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/media/index.html",
+    "url": "https://developers.google.com/cast/docs/media"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/media/tracks.html",
+    "url": "https://developers.google.com/cast/docs/media/tracks"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/media/live.html",
+    "url": "https://developers.google.com/cast/docs/media/live"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/media/ad_breaks.html",
+    "url": "https://developers.google.com/cast/docs/media/ad_breaks"
+  },
+  {
+    "dest": "cast/official/google-developers/reference/web_receiver/cast.framework.html",
+    "url": "https://developers.google.com/cast/docs/reference/web_receiver/cast.framework"
+  },
+  {
+    "dest": "cast/official/google-developers/reference/web_receiver/cast.framework.CastReceiverContext.html",
+    "url": "https://developers.google.com/cast/docs/reference/web_receiver/cast.framework.CastReceiverContext"
+  }
+]

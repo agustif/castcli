@@ -1,0 +1,166 @@
+[
+  {
+    "dest": "airplay/Accessory-Design-Guidelines.pdf",
+    "url": "https://developer.apple.com/accessories/Accessory-Design-Guidelines.pdf"
+  },
+  {
+    "dest": "airplay/FairPlayStreamingOverview.pdf",
+    "url": "https://developer.apple.com/streaming/fps/FairPlayStreamingOverview.pdf"
+  },
+  {
+    "dest": "airplay/apple-docs/HLS-draft-pantos.pdf",
+    "url": "https://developer.apple.com/streaming/HLS-draft-pantos.pdf"
+  },
+  {
+    "dest": "airplay/apple-docs/Whats-new-HLS.pdf",
+    "url": "https://developer.apple.com/streaming/Whats-new-HLS.pdf"
+  },
+  {
+    "dest": "airplay/apple-docs/apple-platform-security-guide.pdf",
+    "url": "https://help.apple.com/pdf/security/en_US/apple-platform-security-guide.pdf"
+  },
+  {
+    "dest": "airplay/hap/HomeKitADK-README.md",
+    "url": "https://raw.githubusercontent.com/apple/HomeKitADK/master/README.md"
+  },
+  {
+    "dest": "airplay/hap/getting_started.md",
+    "url": "https://raw.githubusercontent.com/apple/HomeKitADK/master/Documentation/getting_started.md"
+  },
+  {
+    "dest": "airplay/hap/HAPCharacteristicTypes.h",
+    "url": "https://raw.githubusercontent.com/apple/HomeKitADK/master/HAP/HAPCharacteristicTypes.h"
+  },
+  {
+    "dest": "airplay/hap/HAPServiceTypes.h",
+    "url": "https://raw.githubusercontent.com/apple/HomeKitADK/master/HAP/HAPServiceTypes.h"
+  },
+  {
+    "dest": "airplay/hap/HAPPairingPairSetup.h",
+    "url": "https://raw.githubusercontent.com/apple/HomeKitADK/master/HAP/HAPPairingPairSetup.h"
+  },
+  {
+    "dest": "airplay/hap/HAPPairingPairVerify.h",
+    "url": "https://raw.githubusercontent.com/apple/HomeKitADK/master/HAP/HAPPairingPairVerify.h"
+  },
+  {
+    "dest": "cast/official/openscreen/cast/common/channel/proto/cast_channel.proto",
+    "url": "https://raw.githubusercontent.com/chromium/openscreen/main/cast/common/channel/proto/cast_channel.proto"
+  },
+  {
+    "dest": "cast/official/openscreen/cast/common/channel/proto/authority_keys.proto",
+    "url": "https://raw.githubusercontent.com/chromium/openscreen/main/cast/common/channel/proto/authority_keys.proto"
+  },
+  {
+    "dest": "cast/official/openscreen/cast/common/channel/message_util.h",
+    "url": "https://raw.githubusercontent.com/chromium/openscreen/main/cast/common/channel/message_util.h"
+  },
+  {
+    "dest": "cast/official/openscreen/cast/docs/protocol_flow.md",
+    "url": "https://raw.githubusercontent.com/chromium/openscreen/main/cast/docs/protocol_flow.md"
+  },
+  {
+    "dest": "cast/official/openscreen/cast/docs/architecture.md",
+    "url": "https://raw.githubusercontent.com/chromium/openscreen/main/cast/docs/architecture.md"
+  },
+  {
+    "dest": "cast/official/openscreen/docs/discovery.md",
+    "url": "https://raw.githubusercontent.com/chromium/openscreen/main/docs/discovery.md"
+  },
+  {
+    "dest": "cast/official/openscreen/cast/streaming/remoting.proto",
+    "url": "https://raw.githubusercontent.com/chromium/openscreen/main/cast/streaming/remoting.proto"
+  },
+  {
+    "dest": "cast/official/openscreen/cast/streaming/input.proto",
+    "url": "https://raw.githubusercontent.com/chromium/openscreen/main/cast/streaming/input.proto"
+  },
+  {
+    "dest": "cast/community/node-castv2-thibauts/README.md",
+    "url": "https://raw.githubusercontent.com/thibauts/node-castv2/master/README.md"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/media/messages.html",
+    "url": "https://developers.google.com/cast/docs/media/messages"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/web_receiver/queueing.html",
+    "url": "https://developers.google.com/cast/docs/web_receiver/queueing"
+  },
+  {
+    "dest": "cast/official/google-developers/docs/web_receiver/core_features.html",
+    "url": "https://developers.google.com/cast/docs/web_receiver/core_features"
+  },
+  {
+    "dest": "cast/official/google-developers/reference/web_receiver/cast.framework.messages.html",
+    "url": "https://developers.google.com/cast/docs/reference/web_receiver/cast.framework.messages"
+  },
+  {
+    "dest": "airplay/rfcs/rfc6762.txt",
+    "url": "https://www.rfc-editor.org/rfc/rfc6762.txt"
+  },
+  {
+    "dest": "airplay/rfcs/rfc6763.txt",
+    "url": "https://www.rfc-editor.org/rfc/rfc6763.txt"
+  },
+  {
+    "dest": "airplay/rfcs/rfc8216.txt",
+    "url": "https://www.rfc-editor.org/rfc/rfc8216.txt"
+  },
+  {
+    "dest": "airplay/rfcs/rfc5054.txt",
+    "url": "https://www.rfc-editor.org/rfc/rfc5054.txt"
+  },
+  {
+    "dest": "airplay/rfcs/rfc8439.txt",
+    "url": "https://www.rfc-editor.org/rfc/rfc8439.txt"
+  },
+  {
+    "dest": "airplay/rfcs/rfc7748.txt",
+    "url": "https://www.rfc-editor.org/rfc/rfc7748.txt"
+  },
+  {
+    "dest": "airplay/rfcs/rfc8032.txt",
+    "url": "https://www.rfc-editor.org/rfc/rfc8032.txt"
+  },
+  {
+    "dest": "airplay/rfcs/rfc5869.txt",
+    "url": "https://www.rfc-editor.org/rfc/rfc5869.txt"
+  },
+  {
+    "dest": "dlna/rfc/rfc2616.txt",
+    "url": "https://www.rfc-editor.org/rfc/rfc2616.txt"
+  },
+  {
+    "dest": "dlna/arch/UPnP-arch-DeviceArchitecture-v2.0.pdf",
+    "url": "https://upnp.org/specs/arch/UPnP-arch-DeviceArchitecture-v2.0.pdf"
+  },
+  {
+    "dest": "dlna/av/UPnP-av-AVArchitecture-v2.pdf",
+    "url": "https://upnp.org/specs/av/UPnP-av-AVArchitecture-v2.pdf"
+  },
+  {
+    "dest": "dlna/av/UPnP-av-MediaRenderer-v3-Device.pdf",
+    "url": "https://upnp.org/specs/av/UPnP-av-MediaRenderer-v3-Device.pdf"
+  },
+  {
+    "dest": "dlna/av/UPnP-av-MediaServer-v4-Device.pdf",
+    "url": "https://upnp.org/specs/av/UPnP-av-MediaServer-v4-Device.pdf"
+  },
+  {
+    "dest": "dlna/av/UPnP-av-AVTransport-v3-Service.pdf",
+    "url": "https://upnp.org/specs/av/UPnP-av-AVTransport-v3-Service.pdf"
+  },
+  {
+    "dest": "dlna/av/UPnP-av-RenderingControl-v3-Service.pdf",
+    "url": "https://upnp.org/specs/av/UPnP-av-RenderingControl-v3-Service.pdf"
+  },
+  {
+    "dest": "dlna/av/UPnP-av-ConnectionManager-v3-Service.pdf",
+    "url": "https://upnp.org/specs/av/UPnP-av-ConnectionManager-v3-Service.pdf"
+  },
+  {
+    "dest": "dlna/av/UPnP-av-ContentDirectory-v4-Service.pdf",
+    "url": "https://upnp.org/specs/av/UPnP-av-ContentDirectory-v4-Service.pdf"
+  }
+]
