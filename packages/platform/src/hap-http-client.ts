@@ -291,14 +291,16 @@ export const make = (
         yield* Ref.update(waiters, (list) => [...list, responseDeferred])
 
         yield* writer(wire)
-        yield* Effect.logDebug(`hap ${method} ${path} wrote ${wire.byteLength}B`)
-
-        return yield* Deferred.await(responseDeferred).pipe(
+        const response = yield* Deferred.await(responseDeferred).pipe(
           Effect.timeoutOrElse({
             duration: Duration.millis(state.readTimeoutMs),
             orElse: () => Effect.fail(readError(new Error(`AirPlay HTTP read timed out on ${method} ${path}`)))
           })
         )
+        yield* Effect.logDebug(
+          `hap ${method} ${path} Host ${config.host}:${config.port} wrote ${wire.byteLength}B -> HTTP ${response.status} ${response.body.byteLength}B`
+        )
+        return response
       })
 
     return {

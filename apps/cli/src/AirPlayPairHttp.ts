@@ -1,7 +1,9 @@
 // One TCP connection for pair-setup, pair-verify, then HAP-encrypted HTTP.
 //
 // Apple TV authorizes pair-setup on the socket that called pair-pin-start.
-// After pair-verify M4 the same socket expects HAP IP frames wrapping HTTP/1.1.
+// macOS AirPlay Receiver 403s pair-pin-start; skip it and pair-setup on the
+// /info socket instead. After pair-verify M4 the same socket expects HAP IP
+// frames wrapping HTTP/1.1.
 
 import * as crypto from "node:crypto"
 import { Effect, Scope } from "effect"

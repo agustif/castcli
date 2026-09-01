@@ -76,6 +76,7 @@ import * as State from "../State.ts"
 import * as ControlChannel from "../ControlChannel.ts"
 import * as AirPlayPairHttp from "../AirPlayPairHttp.ts"
 import * as AirPlayPlay from "../AirPlayPlay.ts"
+import * as AirPlayInfo from "../AirPlayInfo.ts"
 import * as ErrorFormatter from "../ErrorFormatter.ts"
 import * as Telemetry from "../Telemetry.ts"
 
@@ -1255,9 +1256,9 @@ const play = Command.make(
             const deviceId = Option.fromNullishOr(airplayDevice.deviceId)
 
             const storedPairing = yield* State.getAirPlayPairing(deviceIp, deviceId)
-            const wire = yield* AirPlayPairHttp.connect(airplayDevice.ip, airplayDevice.port)
+            const initialWire = yield* AirPlayPairHttp.connect(airplayDevice.ip, airplayDevice.port)
 
-            const pairing = yield* Option.match(storedPairing, {
+            const paired = yield* Option.match(storedPairing, {
               onNone: () => Effect.gen(function*() {
                 yield* Effect.logInfo(`Starting AirPlay pair-setup for ${airplayDevice.ip}`)
                 const suite = yield* Effect.provide(Suite.Suite, Layer.provide(NodeSuite, NodeCrypto.layer))
@@ -1269,31 +1270,82 @@ const play = Command.make(
                 }).pipe(Effect.provide(Layer.provide(NodeSuite, NodeCrypto.layer)))
 
                 const pairSetupPath = "/pair-setup"
+                let wire = initialWire
 
-                // Same TCP socket for /info, pin-start, and every pair-setup
-                // message. A new connection is HTTP 470 and an empty M2.
-                yield* wire.get("/info")
+                // Same TCP socket for /info and HAP pair-setup. Apple TV also
+                // wants /pair-pin-start on that socket; a Mac receiver 403s it.
+                const infoRes = yield* wire.get("/info")
+                const airPlayInfo = AirPlayInfo.parseAirPlayInfo(infoRes.body)
+                const hostHeader = `${airplayDevice.ip}:${airplayDevice.port}`
+                yield* Console.log(
+                  `GET /info HTTP ${infoRes.status} ${infoRes.body.byteLength} bytes Host ${hostHeader}` +
+                    ` model=${airPlayInfo.model ?? airplayDevice.model ?? "unknown"}` +
+                    ` name=${airPlayInfo.name ?? airplayDevice.name}` +
+                    ` statusFlags=${airPlayInfo.statusFlags ?? airplayDevice.flags ?? "none"}` +
+                    ` act=${airplayDevice.act ?? "none"}`
+                )
 
                 const pinProvided = Option.isSome(pin) || Option.isSome(config.airplayPin)
-                
-                yield* Match.value(pinProvided).pipe(
-                  Match.when(true, () => Effect.logInfo("PIN provided via --pin or AIRPLAY_PIN; skipping pair-pin-start")),
+                const skipPinStart = pinProvided || !AirPlayInfo.pairPinStartFromInfo({
+                  ...airPlayInfo,
+                  model: airPlayInfo.model ?? airplayDevice.model
+                })
+                let pinStartStatus: number | undefined = undefined
+
+                yield* Match.value(skipPinStart).pipe(
+                  Match.when(true, () =>
+                    Effect.logInfo(
+                      pinProvided
+                        ? "PIN provided via --pin or AIRPLAY_PIN; skipping pair-pin-start"
+                        : `skipping pair-pin-start for model ${airPlayInfo.model ?? airplayDevice.model ?? "unknown"}`
+                    )
+                  ),
                   Match.when(false, () => Effect.gen(function*() {
                     const pinStart = yield* wire.post("/pair-pin-start", new Uint8Array())
-                    yield* Console.log(`pair-pin-start HTTP ${pinStart.status}`)
+                    pinStartStatus = pinStart.status
+                    yield* Console.log(`pair-pin-start HTTP ${pinStart.status} ${pinStart.body.byteLength} bytes Host ${hostHeader}`)
                   })),
                   Match.exhaustive
                 )
 
                 const m1Bytes = yield* PairSetup.m1({ flags: [] })
-                const m2Http = yield* wire.post(pairSetupPath, m1Bytes)
-                yield* Console.log(`pair-setup M2 HTTP ${m2Http.status} ${m2Http.body.byteLength} bytes`)
+                let m2Http = yield* wire.post(pairSetupPath, m1Bytes)
+                yield* Console.log(`pair-setup M2 HTTP ${m2Http.status} ${m2Http.body.byteLength} bytes Host ${hostHeader}`)
+
+                const pinStartBlocked = pinStartStatus !== undefined && pinStartStatus !== 200 && pinStartStatus !== 204
+                const m2Empty = m2Http.status !== 200 || m2Http.body.byteLength < 16
+                yield* Match.value(pinStartBlocked && m2Empty).pipe(
+                  Match.when(true, () => Effect.gen(function*() {
+                    yield* Console.log(
+                      `pair-pin-start HTTP ${pinStartStatus} then pair-setup M2 HTTP ${m2Http.status}; retrying pair-setup without pair-pin-start`
+                    )
+                    wire = yield* AirPlayPairHttp.connect(airplayDevice.ip, airplayDevice.port)
+                    const infoRetry = yield* wire.get("/info")
+                    yield* Console.log(
+                      `GET /info HTTP ${infoRetry.status} ${infoRetry.body.byteLength} bytes Host ${hostHeader} (retry, no pair-pin-start)`
+                    )
+                    m2Http = yield* wire.post(pairSetupPath, m1Bytes)
+                    yield* Console.log(`pair-setup M2 HTTP ${m2Http.status} ${m2Http.body.byteLength} bytes Host ${hostHeader} (retry)`)
+                  })),
+                  Match.when(false, () => Effect.void),
+                  Match.exhaustive
+                )
+
                 const m2Response = m2Http.body
                 yield* Effect.when(
                   Effect.fail(
                     new AirPlayPlay.AirPlayHttpError({
-                      message:
-                        `pair-setup M2 refused: HTTP ${m2Http.status}, ${m2Response.byteLength} bytes (need 200 and a HAP body on the pin-start socket)`
+                      message: AirPlayInfo.describePairSetupRefusal({
+                        infoStatus: infoRes.status,
+                        infoBytes: infoRes.body.byteLength,
+                        pinStartStatus,
+                        m2Status: m2Http.status,
+                        m2Bytes: m2Response.byteLength,
+                        host: hostHeader,
+                        model: airPlayInfo.model ?? airplayDevice.model,
+                        act: airplayDevice.act,
+                        skippedPinStart: skipPinStart
+                      })
                     })
                   ),
                   Effect.succeed(m2Http.status !== 200 || m2Response.byteLength < 16)
@@ -1301,7 +1353,13 @@ const play = Command.make(
 
                 yield* Match.value(pinProvided).pipe(
                   Match.when(true, () => Console.log("Using PIN from --pin or AIRPLAY_PIN")),
-                  Match.when(false, () => Console.log("AirPlay PIN should now be on the TV")),
+                  Match.when(false, () =>
+                    Console.log(
+                      skipPinStart
+                        ? "If the Mac shows an AirPlay allow dialog, accept it; otherwise a PIN may appear on the receiver"
+                        : "AirPlay PIN should now be on the TV"
+                    )
+                  ),
                   Match.exhaustive
                 )
                 const airplayPin = yield* resolveAirPlayPin(pin, config.airplayPin)
@@ -1339,7 +1397,7 @@ const play = Command.make(
 
                     yield* State.storeAirPlayPairing(newPairing)
                     yield* Effect.logInfo(`Pairing stored successfully for ${deviceIp}`)
-                    return newPairing
+                    return { pairing: newPairing, wire }
               }).pipe(
                 Effect.withSpan("airplay.pair-setup", {
                   attributes: {
@@ -1351,9 +1409,11 @@ const play = Command.make(
               onSome: (existing) =>
                 Effect.gen(function*() {
                   yield* Console.log(`reusing pairing ${existing.deviceId ?? existing.deviceIp}`)
-                  return existing
+                  return { pairing: existing, wire: initialWire }
                 })
             })
+            const pairing = paired.pairing
+            const wire = paired.wire
 
             const vodUrl = `${baseUrl}/vod.mp4`
             yield* Console.log(`airplay url QUEUE vod ${vodUrl}`)

@@ -20,6 +20,28 @@ const parseHexWord = (hex: string): bigint | undefined => {
   return HEX_WORD.test(hex) ? BigInt(normalized) : undefined
 }
 
+const MAC_MODEL = /^Mac\d+,\d+$/
+
+/** True for macOS AirPlay Receiver model strings (`Mac15,9`). */
+export const isMacAirPlayReceiver = (model: string | undefined): boolean =>
+  model !== undefined && MAC_MODEL.test(model)
+
+/**
+ * Apple TV authorizes HAP pair-setup on the socket that called pair-pin-start.
+ * A Mac receiver does not: pair-pin-start is 403 (ACL / not implemented), and
+ * authorization is the system “Allow AirPlay” dialog plus TXT `act`.
+ */
+export const wantsPairPinStart = (model: string | undefined): boolean =>
+  !isMacAirPlayReceiver(model)
+
+/** Human label for TXT `act` when we recognize it. */
+export const describeAirPlayAccessControl = (
+  act: string | undefined
+): string | undefined =>
+  act === "2" ? "Current User (Apple Account devices only)"
+  : act === "0" ? "unrestricted"
+  : act
+
 export const parseAirPlayFeatures = (featuresHex: string): bigint | undefined => {
   const parts = featuresHex.split(",")
   const lo = parseHexWord(parts[0] ?? "0")
@@ -40,10 +62,31 @@ export class AirPlayDevice extends Schema.Class<AirPlayDevice>("AirPlayDevice")(
   /** Model string, e.g. `AppleTV11,1`. */
   model: Schema.optional(Schema.String),
   /** Device ID from TXT `deviceid`. */
-  deviceId: Schema.optional(Schema.String)
+  deviceId: Schema.optional(Schema.String),
+  /** TXT `act` — Access Control Type. `2` is Current User (Apple Account). */
+  act: Schema.optional(Schema.String),
+  /** TXT `acl` — Access Control Level. `1` disables pairing for non-Home devices. */
+  acl: Schema.optional(Schema.String)
 }) {
   get address(): string {
     return `${this.ip}:${this.port}`
+  }
+
+  /**
+   * macOS AirPlay Receiver (`Mac15,9`, …). It is not an Apple TV: it has no
+   * on-screen HAP PIN overlay, and `POST /pair-pin-start` is 403.
+   */
+  get isMacReceiver(): boolean {
+    return isMacAirPlayReceiver(this.model)
+  }
+
+  /**
+   * Whether the ATV `POST /pair-pin-start` prelude should run.
+   * macOS receivers reject that path; sending it and then pair-setup on the
+   * same socket is the bug this field exists to stop.
+   */
+  get wantsPairPinStart(): boolean {
+    return !isMacAirPlayReceiver(this.model)
   }
 
   /** Whether this device claims video capability (bit 0 or bit 49). */
