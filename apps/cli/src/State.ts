@@ -6,12 +6,13 @@
 // the receiver reports time within the current stream rather than within the
 // film, and the process that knows the difference is a different process.
 //
-// Nothing here is load bearing. A missing, unreadable or malformed state file
-// must never stop a film from playing, so every read falls back to empty and
-// every write is best effort. That policy is the reason this module exists
-// rather than the calls being inlined: it has to be applied consistently.
+// A missing file is empty memory, which is a perfectly good state to start
+// from. An *existing* file that will not decode is not: AirPlay pairings live
+// here, and overwriting them with empty because a sibling field drifted would
+// forget every television. Play still proceeds (reads look like empty); writes
+// refuse to persist that empty over the file they failed to read.
 
-import { Config, Context, Effect, Layer, Match, Option, Schema } from "effect"
+import { Config, Context, Data, Effect, Layer, Match, Option, Schema } from "effect"
 import { FileSystem } from "effect/FileSystem"
 import { Path } from "effect/Path"
 import { FilePath, Ipv4, Seconds } from "@castcli/domain"
@@ -108,15 +109,38 @@ export const LastTarget = Schema.TaggedUnion({
 
 export type LastTarget = typeof LastTarget.Type
 
+/**
+ * Pairings that can be decoded. A single corrupt record must not fail the
+ * document: that is how one bad device entry used to wipe every other pairing.
+ * `catchDecoding` with `Option.none` drops the key rather than the map.
+ */
+const AirPlayPairings = Schema.Record(
+  Schema.String,
+  AirPlayPairing.pipe(Schema.catchDecoding(() => Effect.succeed(Option.none())))
+).pipe(
+  Schema.catchDecoding(() => Effect.succeed(Option.some({})))
+)
+
+const dropInvalid = <S extends Schema.Top>(schema: S) =>
+  schema.pipe(Schema.catchDecoding(() => Effect.succeed(Option.none())))
+
 export class Remembered extends Schema.Class<Remembered>("Remembered")({
-  lastTarget: Schema.optional(LastTarget),
+  lastTarget: Schema.optional(dropInvalid(LastTarget)),
   /** Absolute path to the position last reported for it. */
-  positions: Schema.optionalKey(Schema.Record(Schema.String, Seconds)),
-  active: Schema.optional(ActiveStream),
-  seek: Schema.optional(SeekRequest),
-  cues: Schema.optionalKey(Schema.Record(Schema.String, CueCounts)),
+  positions: Schema.optionalKey(
+    Schema.Record(Schema.String, Seconds).pipe(
+      Schema.catchDecoding(() => Effect.succeed(Option.some({})))
+    )
+  ),
+  active: Schema.optional(dropInvalid(ActiveStream)),
+  seek: Schema.optional(dropInvalid(SeekRequest)),
+  cues: Schema.optionalKey(
+    Schema.Record(Schema.String, CueCounts).pipe(
+      Schema.catchDecoding(() => Effect.succeed(Option.some({})))
+    )
+  ),
   /** AirPlay pairings by device ID (preferred) or IP (fallback) */
-  airplayPairings: Schema.optionalKey(Schema.Record(Schema.String, AirPlayPairing))
+  airplayPairings: Schema.optionalKey(AirPlayPairings)
 }) {}
 
 const EMPTY = new Remembered({ positions: {}, airplayPairings: {} })
@@ -136,6 +160,14 @@ const stateFile = Effect.gen(function*() {
   return path.join(base, "castcli", "state.json")
 })
 
+type Snapshot = Data.TaggedEnum<{
+  readonly Missing: {}
+  readonly Ready: { readonly state: Remembered }
+  readonly Unreadable: {}
+}>
+
+const Snapshot = Data.taggedEnum<Snapshot>()
+
 export class Store extends Context.Service<Store, {
   readonly read: Effect.Effect<Remembered>
   readonly update: (change: (state: Remembered) => Remembered) => Effect.Effect<void>
@@ -148,18 +180,48 @@ export class Store extends Context.Service<Store, {
       const path = yield* Path
       const file = yield* stateFile
 
-      // Every failure lands here: absent file, unreadable directory, JSON that
-      // does not decode because the schema moved. All of them mean "nothing
-      // remembered", which is a perfectly good state to start from.
-      const read = fs.readFileString(file).pipe(
-        Effect.flatMap(decode),
-        Effect.orElseSucceed(() => EMPTY)
+      const snapshot = fs.readFileString(file).pipe(
+        Effect.flatMap((json) =>
+          decode(json).pipe(
+            Effect.map((state) => Snapshot.Ready({ state })),
+            Effect.tapError((issue) =>
+              Effect.logError(
+                "state.json exists but could not be decoded; leaving the file untouched",
+                issue
+              )
+            ),
+            Effect.catch(() => Effect.succeed(Snapshot.Unreadable()))
+          )
+        ),
+        Effect.catchTag("PlatformError", (error) =>
+          Match.value(error.reason._tag).pipe(
+            Match.when("NotFound", () => Effect.succeed(Snapshot.Missing())),
+            Match.orElse(() =>
+              Effect.logWarning("could not read the state file", error).pipe(
+                Effect.as(Snapshot.Unreadable())
+              )
+            )
+          )
+        )
       )
+
+      const view: (loaded: Snapshot) => Remembered = Match.type<Snapshot>().pipe(
+        Match.tag("Missing", () => EMPTY),
+        Match.tag("Ready", ({ state }) => state),
+        Match.tag("Unreadable", () => EMPTY),
+        Match.exhaustive
+      )
+
+      const read = Effect.map(snapshot, view)
 
       const write = (state: Remembered) =>
         Effect.gen(function*() {
-          yield* fs.makeDirectory(path.dirname(file), { recursive: true })
-          yield* fs.writeFileString(file, yield* encode(state))
+          const directory = path.dirname(file)
+          yield* fs.makeDirectory(directory, { recursive: true })
+          const json = yield* encode(state)
+          const temp = yield* fs.makeTempFile({ directory, prefix: "state.", suffix: ".tmp" })
+          yield* fs.writeFileString(temp, json)
+          yield* fs.rename(temp, file)
         }).pipe(
           // Best effort, and deliberately quiet at info level: someone watching
           // a film does not need to hear that a bookmark could not be saved.
@@ -169,7 +231,19 @@ export class Store extends Context.Service<Store, {
         )
 
       const update = (change: (state: Remembered) => Remembered) =>
-        Effect.flatMap(read, (state) => write(change(state)))
+        Effect.flatMap(
+          snapshot,
+          Match.type<Snapshot>().pipe(
+            Match.tag("Missing", () => write(change(EMPTY))),
+            Match.tag("Ready", ({ state }) => write(change(state))),
+            Match.tag("Unreadable", () =>
+              Effect.logError(
+                "not writing over an unreadable state.json (AirPlay pairings must not be wiped)"
+              )
+            ),
+            Match.exhaustive
+          )
+        )
 
       const positionOf = (target: FilePath) =>
         Effect.map(read, (state) => Option.fromNullishOr(state.positions?.[target]))
