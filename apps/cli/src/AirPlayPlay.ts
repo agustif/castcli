@@ -576,7 +576,10 @@ export const play = (options: {
 
     const rcClient = "A6B27562-B43A-4F2D-B75F-82391E250194"
     const clientUUID = crypto.randomUUID().toUpperCase()
-    const setup130Xml = `${plistHeader}
+    let streamId = ""
+    yield* Match.value(isMacReceiver).pipe(
+      Match.when(false, () => Effect.gen(function*() {
+        const setup130Xml = `${plistHeader}
 <dict>
   <key>streams</key>
   <array>
@@ -590,12 +593,31 @@ export const play = (options: {
   </array>
 </dict>
 </plist>`
-    const setup130 = yield* doSetup("SETUP-130", setup130Xml, "4").pipe(
-      Effect.catchCause(catchHttp("SETUP-130"))
+        const setup130 = yield* doSetup("SETUP-130", setup130Xml, "4").pipe(
+          Effect.catchCause(catchHttp("SETUP-130"))
+        )
+        const setup130XmlOut = bplistToXml(setup130.body)
+        streamId = streamIdFromSetup(setup130.body)
+        yield* Console.log(`SETUP-130 streamID ${streamId || "MISSING"} xml=${setup130XmlOut.slice(0, 500)}`)
+      })),
+      Match.when(true, () => Effect.gen(function*() {
+        yield* Console.log("Mac receiver: skipping SETUP-130, will use POST /play instead of play-queue")
+        const playXml = `${plistHeader}
+<dict>
+  <key>Content-Location</key><string>${options.contentLocation}</string>
+  <key>Start-Position</key><real>${options.startPosition}</real>
+</dict>
+</plist>`
+        const playBody = yield* toBplist(playXml)
+        yield* Console.log(`POST /play bplist ${playBody.byteLength} bytes`)
+        const playRes = yield* options.wire.post(
+          "/play",
+          playBody,
+          "application/x-apple-binary-plist"
+        ).pipe(Effect.catchCause(catchHttp("POST /play")))
+        yield* Console.log(`POST /play HTTP ${playRes.status} ${playRes.body.byteLength} bytes ${bplistToXml(playRes.body).slice(0, 500)}`)
+      }))
     )
-    const setup130XmlOut = bplistToXml(setup130.body)
-    const streamId = streamIdFromSetup(setup130.body)
-    yield* Console.log(`SETUP-130 streamID ${streamId || "MISSING"} xml=${setup130XmlOut.slice(0, 500)}`)
 
     const cmdHeaders = {
       "User-Agent": "AirPlay/870.14.1",
@@ -620,7 +642,9 @@ export const play = (options: {
         return res
       })
 
-    const insertXml = `${plistHeader}
+    yield* Effect.when(
+      Effect.gen(function*() {
+        const insertXml = `${plistHeader}
 <dict>
   <key>type</key><string>insertPlayQueueItem</string>
   <key>item</key>
@@ -632,11 +656,12 @@ export const play = (options: {
   </dict>
 </dict>
 </plist>`
-    const insertRes = yield* sendCommand("insertPlayQueueItem", insertXml)
-    if (insertRes.status === 200) {
-      yield* sendCommand(
-        "setProperty isInterestedInDateRange",
-        `${plistHeader}
+        const insertRes = yield* sendCommand("insertPlayQueueItem", insertXml)
+        yield* Effect.when(
+          Effect.gen(function*() {
+            yield* sendCommand(
+              "setProperty isInterestedInDateRange",
+              `${plistHeader}
 <dict>
   <key>type</key><string>setProperty</string>
   <key>property</key><string>isInterestedInDateRange</string>
@@ -644,29 +669,55 @@ export const play = (options: {
   <key>item</key><dict><key>uuid</key><string>${itemUuid}</string></dict>
 </dict>
 </plist>`
-      )
-      yield* sendCommand(
-        "setProperty actionAtItemEnd",
-        `${plistHeader}
+            )
+            yield* sendCommand(
+              "setProperty actionAtItemEnd",
+              `${plistHeader}
 <dict>
   <key>type</key><string>setProperty</string>
   <key>property</key><string>actionAtItemEnd</string>
   <key>value</key><integer>1</integer>
 </dict>
 </plist>`
-      )
-      yield* sendCommand(
-        "setRate",
-        `${plistHeader}
+            )
+            yield* sendCommand(
+              "setRate",
+              `${plistHeader}
 <dict>
   <key>type</key><string>setRate</string>
   <key>rate</key><real>1</real>
 </dict>
 </plist>`
-      )
-    } else {
-      yield* Console.log(`insertPlayQueueItem ${insertRes.status} — not sending setProperty/setRate`)
-    }
+            )
+          }),
+          Effect.succeed(insertRes.status === 200)
+        )
+        yield* Effect.when(
+          Console.log(`insertPlayQueueItem ${insertRes.status} — not sending setProperty/setRate`),
+          Effect.succeed(insertRes.status !== 200)
+        )
+      }),
+      Effect.succeed(!isMacReceiver)
+    )
+
+    yield* Effect.when(
+      Effect.gen(function*() {
+        yield* Console.log("Mac receiver: sending POST /rate to start playback")
+        const rateXml = `${plistHeader}
+<dict>
+  <key>value</key><real>1.0</real>
+</dict>
+</plist>`
+        const rateBody = yield* toBplist(rateXml)
+        const rateRes = yield* options.wire.post(
+          "/rate",
+          rateBody,
+          "application/x-apple-binary-plist"
+        ).pipe(Effect.catchCause(catchHttp("POST /rate")))
+        yield* Console.log(`POST /rate HTTP ${rateRes.status} ${rateRes.body.byteLength} bytes`)
+      }),
+      Effect.succeed(isMacReceiver)
+    )
 
     yield* Console.log("waiting for playback to end (event playbackState)")
     let seenPlaying = false
