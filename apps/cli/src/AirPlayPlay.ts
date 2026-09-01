@@ -327,15 +327,17 @@ export const play = (options: {
       Match.when(true, () =>
         Effect.gen(function*() {
           yield* Console.log("Transient session: deriving control keys from SRP shared secret (no pair-verify)")
-          const srpKey = options.pairing.srpSessionKey
-          yield* Effect.when(
-            Effect.fail(new AirPlayHttpError({ 
-              message: "Transient pairing missing SRP session key" 
-            })),
-            Effect.succeed(srpKey === undefined || srpKey.byteLength === 0)
+          const srpKey = yield* Option.match(
+            Option.fromNullable(options.pairing.srpSessionKey),
+            {
+              onNone: () => Effect.fail(new AirPlayHttpError({ 
+                message: "Transient pairing missing SRP session key" 
+              })),
+              onSome: (key) => Effect.succeed(key)
+            }
           )
           const sessionKeys = yield* EncryptedSession.deriveTransientSessionKeys(
-            Redacted.make(srpKey!)
+            Redacted.make(srpKey)
           )
           return yield* EncryptedSession.make(sessionKeys)
         }).pipe(Effect.provide(cryptoLayer))

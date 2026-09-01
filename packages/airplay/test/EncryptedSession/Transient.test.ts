@@ -14,7 +14,6 @@ import { Effect, Layer, Redacted } from "effect"
 import { NodeCrypto } from "@effect/platform-node"
 import { describe, it, expect } from "vitest"
 import * as EncryptedSession from "../../src/EncryptedSession"
-import { Suite } from "../../src/Suite"
 import { layer } from "../../src/NodeSuite"
 
 const TestSuite = Layer.provide(layer, NodeCrypto.layer)

@@ -1295,24 +1295,28 @@ const play = Command.make(
                   ...airPlayInfo,
                   model: airPlayInfo.model ?? airplayDevice.model
                 })
-                let pinStartStatus: number | undefined = undefined
-
-                if (useTransient) {
-                  yield* wire.setHkpVersion(4)
-                  yield* Console.log(
-                    `Mac receiver with statusFlags=4 (Anyone on Same Network): using transient pairing (HKP 4, no PIN prompt)`
-                  )
-                } else if (skipPinStart) {
-                  yield* Effect.logInfo(
-                    pinProvided
-                      ? "PIN provided via --pin or AIRPLAY_PIN; skipping pair-pin-start"
-                      : `skipping pair-pin-start for model ${airPlayInfo.model ?? airplayDevice.model ?? "unknown"}`
-                  )
-                } else {
-                  const pinStart = yield* wire.post("/pair-pin-start", new Uint8Array())
-                  pinStartStatus = pinStart.status
-                  yield* Console.log(`pair-pin-start HTTP ${pinStart.status} ${pinStart.body.byteLength} bytes Host ${hostHeader}`)
-                }
+                const pinStartStatus = yield* Match.value({ useTransient, skipPinStart }).pipe(
+                  Match.when({ useTransient: true }, () => Effect.gen(function*() {
+                    yield* wire.setHkpVersion(4)
+                    yield* Console.log(
+                      `Mac receiver with statusFlags=4 (Anyone on Same Network): using transient pairing (HKP 4, no PIN prompt)`
+                    )
+                    return Option.none<number>()
+                  })),
+                  Match.when({ skipPinStart: true }, () => Effect.gen(function*() {
+                    yield* Effect.logInfo(
+                      pinProvided
+                        ? "PIN provided via --pin or AIRPLAY_PIN; skipping pair-pin-start"
+                        : `skipping pair-pin-start for model ${airPlayInfo.model ?? airplayDevice.model ?? "unknown"}`
+                    )
+                    return Option.none<number>()
+                  })),
+                  Match.orElse(() => Effect.gen(function*() {
+                    const pinStart = yield* wire.post("/pair-pin-start", new Uint8Array())
+                    yield* Console.log(`pair-pin-start HTTP ${pinStart.status} ${pinStart.body.byteLength} bytes Host ${hostHeader}`)
+                    return Option.some(pinStart.status)
+                  }))
+                )
 
                 const m1Bytes = yield* PairSetup.m1({ 
                   flags: useTransient ? [AirPlay.GeneratedPairing.PairingFlag.Transient] : []
@@ -1320,12 +1324,19 @@ const play = Command.make(
                 let m2Http = yield* wire.post(pairSetupPath, m1Bytes)
                 yield* Console.log(`pair-setup M2 HTTP ${m2Http.status} ${m2Http.body.byteLength} bytes Host ${hostHeader}`)
 
-                const pinStartBlocked = pinStartStatus !== undefined && pinStartStatus !== 200 && pinStartStatus !== 204
+                const pinStartBlocked = Option.match(pinStartStatus, {
+                  onNone: () => false,
+                  onSome: (status) => status !== 200 && status !== 204
+                })
                 const m2Empty = m2Http.status !== 200 || m2Http.body.byteLength < 16
                 yield* Match.value(pinStartBlocked && m2Empty).pipe(
                   Match.when(true, () => Effect.gen(function*() {
+                    const statusMsg = Option.match(pinStartStatus, {
+                      onNone: () => "none",
+                      onSome: (s) => String(s)
+                    })
                     yield* Console.log(
-                      `pair-pin-start HTTP ${pinStartStatus} then pair-setup M2 HTTP ${m2Http.status}; retrying pair-setup without pair-pin-start`
+                      `pair-pin-start HTTP ${statusMsg} then pair-setup M2 HTTP ${m2Http.status}; retrying pair-setup without pair-pin-start`
                     )
                     wire = yield* AirPlayPairHttp.connect(airplayDevice.ip, airplayDevice.port)
                     const infoRetry = yield* wire.get("/info")
@@ -1383,11 +1394,12 @@ const play = Command.make(
                 yield* Console.log(`pair-setup M4 HTTP ${m4Http.status} ${m4Http.body.byteLength} bytes`)
                 const m4Response = m4Http.body
 
-                if (useTransient) {
-                  yield* Console.log(
+                yield* Effect.when(
+                  Console.log(
                     "Transient pairing: stopping after M4, deriving session keys from SRP shared secret"
-                  )
-                }
+                  ),
+                  Effect.succeed(useTransient)
+                )
 
                 const newPairing = yield* (useTransient 
                   ? Effect.gen(function*() {
@@ -1420,7 +1432,7 @@ const play = Command.make(
                       const revealedValue = Redacted.value(identity.keys.privateKey)
                       const privateKeyBytes = Uint8Array.from(revealedValue)
 
-                      const newPairing = new State.AirPlayPairing({
+                      const persistentPairing = new State.AirPlayPairing({
                         deviceIp,
                         ...(Option.isSome(deviceId) ? { deviceId: Option.getOrThrow(deviceId) } : {}),
                         controllerIdentifier: identity.identifier,
@@ -1430,9 +1442,9 @@ const play = Command.make(
                         accessoryPublicKey: pairSetupResult.accessory.publicKey
                       })
 
-                      yield* State.storeAirPlayPairing(newPairing)
+                      yield* State.storeAirPlayPairing(persistentPairing)
                       yield* Effect.logInfo(`Pairing stored successfully for ${deviceIp}`)
-                      return newPairing
+                      return persistentPairing
                     })
                 )
 
