@@ -76,7 +76,11 @@ export class AirPlayPairing extends Schema.Class<AirPlayPairing>("AirPlayPairing
   controllerPrivateKey: Schema.Uint8ArrayFromBase64,
   /** Accessory (receiver) long-term Ed25519 public key and identifier */
   accessoryIdentifier: Schema.Uint8ArrayFromBase64,
-  accessoryPublicKey: Schema.Uint8ArrayFromBase64
+  accessoryPublicKey: Schema.Uint8ArrayFromBase64,
+  /** Whether this is a transient pairing (Mac receivers, no long-term storage) */
+  transient: Schema.optionalKey(Schema.Boolean),
+  /** SRP session key for transient pairing (base64) */
+  srpSessionKey: Schema.optionalKey(Schema.Uint8ArrayFromBase64)
 }) {}
 
 /**

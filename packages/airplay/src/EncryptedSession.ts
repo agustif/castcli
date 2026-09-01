@@ -46,6 +46,46 @@ export const deriveSessionKeys = (
     return { readKey, writeKey }
   })
 
+/**
+ * Derive transient session keys from SRP shared secret for control channel.
+ *
+ * Used for HomeKit transient pairing (X-Apple-HKP: 4, M1 with Transient flag).
+ * After M4, the controller stops and derives control-channel keys from the SRP
+ * shared secret (HKDF salt SplitSetupSalt / AccessoryEncrypt-Control as in HAP ADK).
+ * No M5/M6 exchange occurs; the Mac receiver resets pair-setup state after M4.
+ *
+ * Uses Control-Salt with Control-Read/Write-Encryption-Key (SAME as pair-verify
+ * deriveSessionKeys), but with SRP K as IKM instead of X25519 shared secret.
+ *
+ * Hardware-verified on macOS AirPlay receivers (Mac17,5): Control-Salt works,
+ * SplitSetupSalt causes HAP decrypt failures.
+ *
+ * @param srpSessionKey - The SRP shared secret (K = H(S)) from M3/M4 exchange
+ * @returns Session keys for encrypted control channel
+ * @since 0.1.0
+ */
+export const deriveTransientSessionKeys = (
+  srpSessionKey: Redacted.Redacted<Uint8Array>
+): Effect.Effect<SessionKeys, PlatformError, SuiteService> =>
+  Effect.gen(function*() {
+    const suite = yield* SuiteService
+
+    // Same derivation as deriveSessionKeys (pair-verify), but IKM is SRP K
+    const readKey = yield* suite.hkdfSha512({
+      key: srpSessionKey,
+      salt: GeneratedSalt.Control,
+      info: GeneratedInfo.ControlRead
+    })
+
+    const writeKey = yield* suite.hkdfSha512({
+      key: srpSessionKey,
+      salt: GeneratedSalt.Control,
+      info: GeneratedInfo.ControlWrite
+    })
+
+    return { readKey, writeKey }
+  })
+
 export interface EncryptedSession {
   readonly keys: SessionKeys
   readonly writeNonce: Ref.Ref<bigint>

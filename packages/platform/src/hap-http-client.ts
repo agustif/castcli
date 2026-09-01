@@ -17,6 +17,7 @@ interface Config {
   readonly port: number
   readonly dacp: string
   readonly remote: string
+  readonly hkpVersion: number
 }
 
 interface HttpResponse {
@@ -29,6 +30,7 @@ interface State {
   readTimeoutMs: number
   buffer: Uint8Array
   decryptedPlaintext: Uint8Array
+  hkpVersion: number
 }
 
 const empty = new Uint8Array()
@@ -77,7 +79,7 @@ const encodeRequest = (
   const headers = {
     "User-Agent": "AirPlay/320.20",
     Connection: "keep-alive",
-    "X-Apple-HKP": "3",
+    "X-Apple-HKP": String(config.hkpVersion),
     "X-Apple-Client-Name": "castcli",
     "DACP-ID": config.dacp,
     "Active-Remote": config.remote,
@@ -109,7 +111,8 @@ export const make = (
   host: string,
   port: number,
   dacp: string,
-  remote: string
+  remote: string,
+  hkpVersion?: number
 ): Effect.Effect<
   {
     get: (path: string) => Effect.Effect<HttpResponse, Socket.SocketError, Airplay.Suite.Suite>
@@ -129,18 +132,20 @@ export const make = (
     ) => Effect.Effect<HttpResponse, Socket.SocketError, Airplay.Suite.Suite>
     enableEncryption: (session: Airplay.EncryptedSession.EncryptedSession) => Effect.Effect<void>
     setReadTimeout: (ms: number) => Effect.Effect<void>
+    setHkpVersion: (version: number) => Effect.Effect<void>
   },
   Socket.SocketError,
   Scope.Scope | Airplay.Suite.Suite
 > =>
   Effect.gen(function* () {
-    const config: Config = { host, port, dacp, remote }
+    const config: Config = { host, port, dacp, remote, hkpVersion: hkpVersion ?? 3 }
     const socket = yield* makeNet({ host, port })
     const stateRef = yield* Ref.make<State>({
       session: Option.none(),
       readTimeoutMs: 8000,
       buffer: empty,
-      decryptedPlaintext: empty
+      decryptedPlaintext: empty,
+      hkpVersion: config.hkpVersion
     })
     const waiters = yield* Ref.make<
       ReadonlyArray<Deferred.Deferred<HttpResponse, Socket.SocketError>>
@@ -266,8 +271,10 @@ export const make = (
         const cached = yield* takeReady()
         if (Option.isSome(cached)) return cached.value
 
+        const state = yield* Ref.get(stateRef)
+        const currentConfig = { ...config, hkpVersion: state.hkpVersion }
         const msg = encodeRequest(
-          config,
+          currentConfig,
           method,
           path,
           body,
@@ -275,8 +282,6 @@ export const make = (
           extraHeaders ?? {},
           protocol ?? "HTTP/1.1"
         )
-
-        const state = yield* Ref.get(stateRef)
         const wire = Option.isSome(state.session)
           ? yield* Airplay.EncryptedSession.encryptMessage(Option.getOrThrow(state.session), msg).pipe(
               Effect.mapError((err) =>
@@ -310,6 +315,7 @@ export const make = (
       exchange: (method, path, body, contentType, extraHeaders, protocol) =>
         request(method, path, body, contentType, extraHeaders, protocol),
       enableEncryption: (session) => Ref.update(stateRef, (s) => ({ ...s, session: Option.some(session) })),
-      setReadTimeout: (ms) => Ref.update(stateRef, (s) => ({ ...s, readTimeoutMs: ms }))
+      setReadTimeout: (ms) => Ref.update(stateRef, (s) => ({ ...s, readTimeoutMs: ms })),
+      setHkpVersion: (version) => Ref.update(stateRef, (s) => ({ ...s, hkpVersion: version }))
     }
   })
