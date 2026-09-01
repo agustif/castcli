@@ -1357,7 +1357,7 @@ const play = Command.make(
                       message: AirPlayInfo.describePairSetupRefusal({
                         infoStatus: infoRes.status,
                         infoBytes: infoRes.body.byteLength,
-                        pinStartStatus,
+                        pinStartStatus: Option.getOrUndefined(pinStartStatus),
                         m2Status: m2Http.status,
                         m2Bytes: m2Response.byteLength,
                         host: hostHeader,

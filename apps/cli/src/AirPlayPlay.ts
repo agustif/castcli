@@ -328,16 +328,16 @@ export const play = (options: {
         Effect.gen(function*() {
           yield* Console.log("Transient session: deriving control keys from SRP shared secret (no pair-verify)")
           const srpKey = yield* Option.match(
-            Option.fromNullable(options.pairing.srpSessionKey),
+            Option.fromNullishOr(options.pairing.srpSessionKey),
             {
               onNone: () => Effect.fail(new AirPlayHttpError({ 
                 message: "Transient pairing missing SRP session key" 
               })),
-              onSome: (key) => Effect.succeed(key)
+              onSome: (key: Uint8Array) => Effect.succeed(key)
             }
           )
           const sessionKeys = yield* EncryptedSession.deriveTransientSessionKeys(
-            Redacted.make(srpKey)
+            Redacted.make<Uint8Array>(srpKey)
           )
           return yield* EncryptedSession.make(sessionKeys)
         }).pipe(Effect.provide(cryptoLayer))
@@ -534,7 +534,8 @@ export const play = (options: {
         )
         return res
       })),
-      Match.when(true, () => Effect.succeed({ status: 0, body: new Uint8Array() }))
+      Match.when(true, () => Effect.succeed({ status: 0, body: new Uint8Array() })),
+      Match.exhaustive
     )
     yield* options.wire.setReadTimeout(8000)
 
@@ -616,7 +617,8 @@ export const play = (options: {
           "application/x-apple-binary-plist"
         ).pipe(Effect.catchCause(catchHttp("POST /play")))
         yield* Console.log(`POST /play HTTP ${playRes.status} ${playRes.body.byteLength} bytes ${bplistToXml(playRes.body).slice(0, 500)}`)
-      }))
+      })),
+      Match.exhaustive
     )
 
     const cmdHeaders = {
