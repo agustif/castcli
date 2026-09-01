@@ -54,11 +54,13 @@ export const deriveSessionKeys = (
  * shared secret (HKDF salt SplitSetupSalt / AccessoryEncrypt-Control as in HAP ADK).
  * No M5/M6 exchange occurs; the Mac receiver resets pair-setup state after M4.
  *
- * Key direction (from HAP ADK HAPPairingPairSetup.c:746-773):
- * - AccessoryEncrypt-Control → accessoryToController key (controller reads)
- * - ControllerEncrypt-Control → controllerToAccessory key (controller writes)
+ * Uses Control-Salt with Control-Read/Write-Encryption-Key (SAME as pair-verify
+ * deriveSessionKeys), but with SRP K as IKM instead of X25519 shared secret.
  *
- * @param srpSessionKey - The SRP shared secret (K) from M3/M4 exchange
+ * Hardware-verified on macOS AirPlay receivers (Mac17,5): Control-Salt works,
+ * SplitSetupSalt causes HAP decrypt failures.
+ *
+ * @param srpSessionKey - The SRP shared secret (K = H(S)) from M3/M4 exchange
  * @returns Session keys for encrypted control channel
  * @since 0.1.0
  */
@@ -68,20 +70,17 @@ export const deriveTransientSessionKeys = (
   Effect.gen(function*() {
     const suite = yield* SuiteService
 
-    // readKey: what the controller uses to decrypt messages FROM the accessory
-    // HAP ADK: AccessoryEncrypt-Control → accessoryToController.controlChannel.key
+    // Same derivation as deriveSessionKeys (pair-verify), but IKM is SRP K
     const readKey = yield* suite.hkdfSha512({
       key: srpSessionKey,
-      salt: GeneratedSalt.SplitSetup,
-      info: GeneratedInfo.AccessoryEncryptControl
+      salt: GeneratedSalt.Control,
+      info: GeneratedInfo.ControlRead
     })
 
-    // writeKey: what the controller uses to encrypt messages TO the accessory
-    // HAP ADK: ControllerEncrypt-Control → controllerToAccessory.controlChannel.key
     const writeKey = yield* suite.hkdfSha512({
       key: srpSessionKey,
-      salt: GeneratedSalt.SplitSetup,
-      info: GeneratedInfo.ControllerEncryptControl
+      salt: GeneratedSalt.Control,
+      info: GeneratedInfo.ControlWrite
     })
 
     return { readKey, writeKey }
