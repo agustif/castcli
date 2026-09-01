@@ -52,3 +52,28 @@ describe("AirPlayDevice.supportsVideo", () => {
     assert.isTrue(videoDevice(parseAirPlayFeatures("0x7f8ad0,0x38bcf46")).supportsVideo)
   })
 })
+
+describe("macOS AirPlay Receiver pairing prelude", () => {
+  it("treats Mac15,9 as a Mac receiver that must not POST /pair-pin-start", () => {
+    const device = new AirPlayDevice({
+      name: "MacBook Pro de Agusti",
+      ip: Ipv4.make("192.168.1.123"),
+      port: Port.make(7000),
+      model: "Mac15,9",
+      act: "2"
+    })
+    assert.isTrue(device.isMacReceiver)
+    assert.isFalse(device.wantsPairPinStart)
+  })
+
+  it("keeps pair-pin-start for Apple TV", () => {
+    const device = new AirPlayDevice({
+      name: "Living Room",
+      ip: Ipv4.make("192.168.1.10"),
+      port: Port.make(7000),
+      model: "AppleTV14,1"
+    })
+    assert.isFalse(device.isMacReceiver)
+    assert.isTrue(device.wantsPairPinStart)
+  })
+})

@@ -376,7 +376,9 @@ const toAirPlayDevices = (sweep: AirPlaySweep): ReadonlyArray<AirPlayDevice> =>
                     })()))
                     : undefined,
                   model: instance.txt.get("model"),
-                  deviceId: instance.txt.get("deviceid")
+                  deviceId: instance.txt.get("deviceid"),
+                  act: instance.txt.get("act"),
+                  acl: instance.txt.get("acl")
                 })
               ]
             }

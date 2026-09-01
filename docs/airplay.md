@@ -29,6 +29,15 @@ cast play movie.mkv --device "Apple TV"
 
 The emulator uses PIN `3939` for testing.
 
+### macOS AirPlay Receiver
+
+A Mac advertising `_airplay._tcp` (`model` like `Mac15,9`) is not an Apple TV.
+
+- `GET /info` is HTTP 200 (binary plist: name, model, features, statusFlags).
+- `POST /pair-pin-start` is HTTP 403 — there is no TV PIN overlay. The CLI skips this request when `/info` (or TXT `model`) says Mac.
+- `POST /pair-setup` M1 is still HTTP 403 when TXT `act=2` (Allow AirPlay for **Current User**). That ACL only admits devices signed into the same Apple Account; a CLI sender is not one. Changing the receiver to **Anyone on the Same Network** is required before HAP pair-setup can proceed; the Mac then uses the system Allow dialog, not pair-pin-start.
+
+
 ### Pairing storage
 
 Pairing data is stored in `$XDG_STATE_HOME/castcli/state.json` (default: `~/.local/state/castcli/state.json`), keyed by device ID when available, with IP address as fallback.
