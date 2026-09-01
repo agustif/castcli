@@ -196,4 +196,32 @@ describe("bplist encoder/decoder", () => {
     const decoded = bplist.decode(encoded)
     expect(decoded).toEqual(input)
   })
+  it("fromXml keeps nested streams for SETUP type 130", () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>streams</key>
+  <array>
+    <dict>
+      <key>clientUUID</key><string>AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE</string>
+      <key>clientTypeUUID</key><string>A6B27562-B43A-4F2D-B75F-82391E250194</string>
+      <key>channelID</key><string>02:11:22:33:44:55-RCS-1</string>
+      <key>controlType</key><integer>1</integer>
+      <key>type</key><integer>130</integer>
+    </dict>
+  </array>
+</dict>
+</plist>`
+    const parsed = bplist.fromXml(xml)
+    const encoded = bplist.encode(parsed)
+    const decoded = bplist.decode(encoded) as {
+      streams: Array<{ type: number; controlType: number; channelID: string }>
+    }
+    expect(Array.isArray(decoded.streams)).toBe(true)
+    expect(decoded.streams[0]?.type).toBe(130)
+    expect(decoded.streams[0]?.controlType).toBe(1)
+    expect(decoded.streams[0]?.channelID).toBe("02:11:22:33:44:55-RCS-1")
+    expect(encoded.byteLength).toBeGreaterThan(220)
+  })
 })

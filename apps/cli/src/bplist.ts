@@ -1,7 +1,7 @@
 // Binary plist encoder/decoder for AirPlay using the npm `plist` package.
 // Apple TV /play wants application/x-apple-binary-plist, not XML.
 
-import { buildBinary, parseBinary } from "plist"
+import { build, buildBinary, parse, parseBinary } from "plist"
 import type { PlistValue as LibPlistValue } from "plist"
 
 export type PlistValue = LibPlistValue
@@ -38,3 +38,7 @@ export const decode = (data: Uint8Array): PlistValue => {
   const parsed = parseBinary(buffer)
   return toStandardUint8Array(parsed)
 }
+
+export const fromXml = (xml: string): PlistValue => parse(xml)
+
+export const toXml = (value: PlistValue): string => build(value)

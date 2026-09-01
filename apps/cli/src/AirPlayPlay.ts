@@ -22,7 +22,6 @@ import type { PairHttp } from "./AirPlayPairHttp.ts"
 import type { AirPlayPairing } from "./State.ts"
 import * as bplist from "./bplist.ts"
 
-type PlistDict = bplist.PlistDict
 import * as dgram from "node:dgram"
 import * as net from "node:net"
 
@@ -32,79 +31,33 @@ export class AirPlayHttpError extends Data.TaggedError("AirPlayHttpError")<{
 
 const cryptoLayer = Layer.provide(NodeSuite, NodeCrypto.layer)
 
-const xmlToPlist = (xml: string): PlistDict => {
-  const dict: PlistDict = {}
-  const keyPattern = /<key>([^<]+)<\/key>/g
-  const keys: string[] = []
-  let match: RegExpExecArray | null
-  while ((match = keyPattern.exec(xml)) !== null) {
-    keys.push(match[1] ?? "")
-  }
-  for (const key of keys) {
-    const keyIndex = xml.indexOf(`<key>${key}</key>`)
-    if (keyIndex < 0) continue
-    const afterKey = xml.substring(keyIndex + `<key>${key}</key>`.length)
-    if (afterKey.startsWith("<string>")) {
-      const stringMatch = /<string>([^<]*)<\/string>/.exec(afterKey)
-      if (stringMatch && stringMatch[1] !== undefined) dict[key] = stringMatch[1]
-    } else if (afterKey.startsWith("<integer>")) {
-      const intMatch = /<integer>(\d+)<\/integer>/.exec(afterKey)
-      if (intMatch && intMatch[1] !== undefined) dict[key] = Number(intMatch[1])
-    } else if (afterKey.startsWith("<real>")) {
-      const realMatch = /<real>([\d.]+)<\/real>/.exec(afterKey)
-      if (realMatch && realMatch[1] !== undefined) dict[key] = Number(realMatch[1])
-    } else if (afterKey.startsWith("<true/>")) {
-      dict[key] = true
-    } else if (afterKey.startsWith("<false/>")) {
-      dict[key] = false
-    } else if (afterKey.startsWith("<data>")) {
-      const dataMatch = /<data>\s*([A-Za-z0-9+/=\s]+)<\/data>/.exec(afterKey)
-      if (dataMatch) {
-        const b64 = (dataMatch[1] ?? "").replace(/\s+/g, "")
-        const bytes = Uint8Array.from(Buffer.from(b64, "base64"))
-        dict[key] = bytes
-      }
-    }
-  }
-  return dict
-}
-
-const plistToXml = (dict: PlistDict): string => {
-  const lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<plist version="1.0">', "<dict>"]
-  for (const [key, value] of Object.entries(dict)) {
-    lines.push(`  <key>${key}</key>`)
-    if (typeof value === "string") {
-      lines.push(`  <string>${value}</string>`)
-    } else if (typeof value === "number") {
-      if (Number.isInteger(value)) {
-        lines.push(`  <integer>${value}</integer>`)
-      } else {
-        lines.push(`  <real>${value}</real>`)
-      }
-    } else if (typeof value === "boolean") {
-      lines.push(`  <${value}/>`)
-    } else if (value instanceof Uint8Array) {
-      const b64 = Buffer.from(value).toString("base64")
-      lines.push(`  <data>${b64}</data>`)
-    }
-  }
-  lines.push("</dict>", "</plist>")
-  return lines.join("\n")
-}
-
 const bplistToXml = (bytes: Uint8Array): string => {
   if (bytes.byteLength === 0) {
     return ""
   }
   try {
-    const decoded = bplist.decode(bytes)
-    if (decoded && typeof decoded === "object" && !Array.isArray(decoded) && !(decoded instanceof Uint8Array)) {
-      return plistToXml(decoded as PlistDict)
-    }
-    return String(decoded)
+    return bplist.toXml(bplist.decode(bytes))
   } catch {
     return new TextDecoder("utf-8", { fatal: false }).decode(bytes)
   }
+}
+
+const streamIdFromSetup = (body: Uint8Array): string => {
+  try {
+    const decoded = bplist.decode(body)
+    if (decoded !== null && typeof decoded === "object" && !Array.isArray(decoded)) {
+      const streams = (decoded as { streams?: unknown }).streams
+      if (Array.isArray(streams) && streams[0] !== null && typeof streams[0] === "object") {
+        const id = (streams[0] as { streamID?: unknown }).streamID
+        if (typeof id === "number" || typeof id === "string") {
+          return String(id)
+        }
+      }
+    }
+  } catch {
+    // fall through to XML
+  }
+  return /<key>streamID<\/key>\s*<integer>(\d+)<\/integer>/.exec(bplistToXml(body))?.[1] ?? ""
 }
 
 const hexHead = (bytes: Uint8Array): string =>
@@ -490,7 +443,7 @@ export const play = (options: {
 
     const toBplist = (xml: string) =>
       Effect.try({
-        try: () => bplist.encode(xmlToPlist(xml)),
+        try: () => bplist.encode(bplist.fromXml(xml)),
         catch: (cause) => new AirPlayHttpError({ message: `bplist: ${String(cause)}` })
       })
 
@@ -604,7 +557,7 @@ export const play = (options: {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">`
     const wrapCommand = (innerXml: string): Uint8Array => {
-      const innerPlist = xmlToPlist(innerXml)
+      const innerPlist = bplist.fromXml(innerXml)
       const inner = bplist.encode(innerPlist)
       const wrapper: bplist.PlistDict = {
         params: {
@@ -637,8 +590,7 @@ export const play = (options: {
       Effect.catchCause(catchHttp("SETUP-130"))
     )
     const setup130XmlOut = bplistToXml(setup130.body)
-    const streamMatch = /<key>streamID<\/key>\s*<integer>(\d+)<\/integer>/.exec(setup130XmlOut)
-    const streamId = streamMatch ? streamMatch[1] : ""
+    const streamId = streamIdFromSetup(setup130.body)
     yield* Console.log(`SETUP-130 streamID ${streamId || "MISSING"} xml=${setup130XmlOut.slice(0, 500)}`)
 
     const cmdHeaders = {
