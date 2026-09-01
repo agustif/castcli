@@ -122,6 +122,87 @@ describe("State", () => {
       }).pipe(Effect.provide(NodeServices.layer))
     ))
 
+  it.effect("does not overwrite garbage JSON with empty pairings", () =>
+    withStore((directory) =>
+      Effect.gen(function*() {
+        const fs = yield* FileSystem
+        const file = `${directory}/castcli/state.json`
+        yield* fs.makeDirectory(`${directory}/castcli`, { recursive: true })
+        yield* fs.writeFileString(file, "this is not json")
+
+        yield* State.rememberPosition(FILM, Brands.Seconds.make(12))
+
+        const raw = yield* fs.readFileString(file)
+        assert.strictEqual(raw, "this is not json")
+        assert.isTrue(Option.isNone(yield* State.positionOf(FILM)))
+      }).pipe(Effect.provide(NodeServices.layer))
+    ))
+
+  const samplePairing = () =>
+    new State.AirPlayPairing({
+      deviceIp: TV,
+      deviceId: "62:8A:09:C1:74:B7",
+      controllerIdentifier: "test-controller",
+      controllerPublicKey: new Uint8Array(32).fill(1),
+      controllerPrivateKey: new Uint8Array(32).fill(2),
+      accessoryIdentifier: new TextEncoder().encode("62:8A:09:C1:74:B7"),
+      accessoryPublicKey: new Uint8Array(32).fill(3)
+    })
+
+  it.effect("keeps pairings when a sibling field is invalid", () =>
+    withStore((directory) =>
+      Effect.gen(function*() {
+        const pairing = samplePairing()
+        yield* State.storeAirPlayPairing(pairing)
+
+        const fs = yield* FileSystem
+        const file = `${directory}/castcli/state.json`
+        const raw = yield* fs.readFileString(file)
+        yield* fs.writeFileString(
+          file,
+          raw.replace('"positions":{}', '"positions":"not-a-record","unexpected":{"broken":true}')
+        )
+
+        yield* State.rememberPosition(FILM, Brands.Seconds.make(77))
+
+        const loaded = yield* State.getAirPlayPairing(TV, Option.some("62:8A:09:C1:74:B7"))
+        assert.isTrue(Option.isSome(loaded))
+        const value = Option.getOrThrow(loaded)
+        assert.strictEqual(value.controllerIdentifier, "test-controller")
+        assert.deepStrictEqual(
+          yield* State.positionOf(FILM),
+          Option.some(Brands.Seconds.make(77))
+        )
+        const after = yield* fs.readFileString(file)
+        assert.isTrue(after.includes("controllerPublicKey"))
+        assert.isFalse(after.includes('"airplayPairings":{}'))
+      }).pipe(Effect.provide(NodeServices.layer))
+    ))
+
+  it.effect("keeps good pairings when one pairing record is corrupt", () =>
+    withStore((directory) =>
+      Effect.gen(function*() {
+        const pairing = samplePairing()
+        yield* State.storeAirPlayPairing(pairing)
+
+        const fs = yield* FileSystem
+        const file = `${directory}/castcli/state.json`
+        const raw = yield* fs.readFileString(file)
+        const withBad = raw.replace(
+          '"airplayPairings":{',
+          '"airplayPairings":{"bad-device":{"deviceIp":"not-an-ip"},'
+        )
+        yield* fs.writeFileString(file, withBad)
+
+        yield* State.rememberPosition(FILM, Brands.Seconds.make(5))
+
+        const loaded = yield* State.getAirPlayPairing(TV, Option.some("62:8A:09:C1:74:B7"))
+        assert.isTrue(Option.isSome(loaded))
+        const after = yield* fs.readFileString(file)
+        assert.isFalse(after.includes("bad-device"))
+      }).pipe(Effect.provide(NodeServices.layer))
+    ))
+
   it.effect("reuses cue counts only while the file is unchanged", () =>
     withStore(() =>
       Effect.gen(function*() {
