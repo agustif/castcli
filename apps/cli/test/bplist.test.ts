@@ -215,13 +215,18 @@ describe("bplist encoder/decoder", () => {
 </plist>`
     const parsed = bplist.fromXml(xml)
     const encoded = bplist.encode(parsed)
-    const decoded = bplist.decode(encoded) as {
-      streams: Array<{ type: number; controlType: number; channelID: string }>
-    }
-    expect(Array.isArray(decoded.streams)).toBe(true)
-    expect(decoded.streams[0]?.type).toBe(130)
-    expect(decoded.streams[0]?.controlType).toBe(1)
-    expect(decoded.streams[0]?.channelID).toBe("02:11:22:33:44:55-RCS-1")
+    const decoded = bplist.decode(encoded)
+    expect(decoded).toEqual(
+      expect.objectContaining({
+        streams: expect.arrayContaining([
+          expect.objectContaining({
+            type: 130,
+            controlType: 1,
+            channelID: "02:11:22:33:44:55-RCS-1"
+          })
+        ])
+      })
+    )
     expect(encoded.byteLength).toBeGreaterThan(220)
   })
 })

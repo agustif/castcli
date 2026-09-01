@@ -7,7 +7,7 @@
 // occurred during Read" was on the second AirPlay request. Chunks go onto a
 // Queue; one drain fiber parses them in order.
 
-import { Effect, Ref, Option, Deferred, Scope, Queue, Duration } from "effect"
+import { Effect, Ref, Option, Deferred, Scope, Queue, Duration, Array } from "effect"
 import * as Socket from "effect/unstable/socket/Socket"
 import { makeNet } from "@effect/platform-node-shared/NodeSocket"
 import * as Airplay from "@castcli/airplay"
@@ -160,8 +160,8 @@ export const make = (
 
     const takeWaiter = () =>
       Ref.modify(waiters, (list) => {
-        if (list.length === 0) return [Option.none(), list] as const
-        return [Option.some(list[0]!), list.slice(1)] as const
+        const head = Array.get(list, 0)
+        return [head, Option.isSome(head) ? list.slice(1) : list] as const
       })
 
     const enqueueReady = (response: HttpResponse) =>
@@ -169,8 +169,8 @@ export const make = (
 
     const takeReady = () =>
       Ref.modify(ready, (list) => {
-        if (list.length === 0) return [Option.none(), list] as const
-        return [Option.some(list[0]!), list.slice(1)] as const
+        const head = Array.get(list, 0)
+        return [head, Option.isSome(head) ? list.slice(1) : list] as const
       })
 
     const deliver = (response: HttpResponse) =>

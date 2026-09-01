@@ -42,6 +42,17 @@ const bplistToXml = (bytes: Uint8Array): string => {
   }
 }
 
+const wrapCommand = (innerXml: string): Uint8Array => {
+  const innerPlist = bplist.fromXml(innerXml)
+  const inner = bplist.encode(innerPlist)
+  const wrapper: bplist.PlistDict = {
+    params: {
+      data: inner
+    }
+  }
+  return bplist.encode(wrapper)
+}
+
 const streamIdFromSetup = (body: Uint8Array): string => {
   try {
     const decoded = bplist.decode(body)
@@ -556,16 +567,6 @@ export const play = (options: {
     const plistHeader = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">`
-    const wrapCommand = (innerXml: string): Uint8Array => {
-      const innerPlist = bplist.fromXml(innerXml)
-      const inner = bplist.encode(innerPlist)
-      const wrapper: bplist.PlistDict = {
-        params: {
-          data: inner
-        }
-      }
-      return bplist.encode(wrapper)
-    }
 
     const infoRes = yield* options.wire.get("/info").pipe(Effect.catchCause(catchHttp("GET /info")))
     yield* Console.log(`GET /info HTTP ${infoRes.status} ${infoRes.body.byteLength} bytes ${bplistToXml(infoRes.body).slice(0, 200)}`)
