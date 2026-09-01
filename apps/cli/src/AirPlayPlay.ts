@@ -515,36 +515,57 @@ export const play = (options: {
         return res
       })
 
-    const ntpReq = doSetup("SETUP-NTP", setupXmlNtp, "1")
-    let setupRes = yield* ntpReq.pipe(Effect.catchCause(catchHttp("SETUP-NTP")))
-    if (setupRes.status !== 200) {
-      const remoteReq = doSetup("SETUP-remote", setupXmlRemote, "2")
-      setupRes = yield* remoteReq.pipe(Effect.catchCause(catchHttp("SETUP-remote")))
-    }
+    const isMacReceiver = options.device.isMacReceiver
+    yield* Effect.when(
+      Console.log("Mac receiver: skipping SETUP-NTP and SETUP-remote, will send only SETUP-130"),
+      Effect.succeed(isMacReceiver)
+    )
+
+    const setupRes = yield* Match.value(isMacReceiver).pipe(
+      Match.when(false, () => Effect.gen(function*() {
+        const ntpReq = doSetup("SETUP-NTP", setupXmlNtp, "1")
+        let res = yield* ntpReq.pipe(Effect.catchCause(catchHttp("SETUP-NTP")))
+        yield* Effect.when(
+          Effect.gen(function*() {
+            const remoteReq = doSetup("SETUP-remote", setupXmlRemote, "2")
+            res = yield* remoteReq.pipe(Effect.catchCause(catchHttp("SETUP-remote")))
+          }),
+          Effect.succeed(res.status !== 200)
+        )
+        return res
+      })),
+      Match.when(true, () => Effect.succeed({ status: 0, body: new Uint8Array() }))
+    )
     yield* options.wire.setReadTimeout(8000)
 
     const setupXmlOut = bplistToXml(setupRes.body)
     const eventMatch = /<key>eventPort<\/key>\s*<integer>(\d+)<\/integer>/.exec(setupXmlOut)
     const eventPort = eventMatch ? Number(eventMatch[1]) : 0
-    yield* Console.log(`SETUP eventPort ${eventPort}`)
+    yield* Effect.when(
+      Console.log(`SETUP eventPort ${eventPort}`),
+      Effect.succeed(!isMacReceiver)
+    )
 
-    if (setupRes.status === 200) {
-      const recordReq = options.wire.exchange(
-        "RECORD",
-        rtspUri,
-        new Uint8Array(),
-        "application/octet-stream",
-        { ...apHeaders, CSeq: "3" },
-        "RTSP/1.0"
-      )
-      const recordRes = yield* recordReq.pipe(Effect.catchCause(catchHttp("RECORD")))
-      yield* Console.log(`RECORD RTSP ${recordRes.status} ${recordRes.body.byteLength} bytes ${hexHead(recordRes.body)}`)
-      if (recordRes.status === 200) {
-        yield* Console.log("RECORD 200 — tvOS 26 queue: GET /info, SETUP type 130, POST /command params.data")
-      }
-    } else {
-      yield* Console.log(`SETUP ${setupRes.status} — not sending RECORD`)
-    }
+    yield* Match.value({ setupOk: setupRes.status === 200, isMac: isMacReceiver }).pipe(
+      Match.when({ setupOk: true, isMac: false }, () => Effect.gen(function*() {
+        const recordReq = options.wire.exchange(
+          "RECORD",
+          rtspUri,
+          new Uint8Array(),
+          "application/octet-stream",
+          { ...apHeaders, CSeq: "3" },
+          "RTSP/1.0"
+        )
+        const recordRes = yield* recordReq.pipe(Effect.catchCause(catchHttp("RECORD")))
+        yield* Console.log(`RECORD RTSP ${recordRes.status} ${recordRes.body.byteLength} bytes ${hexHead(recordRes.body)}`)
+        yield* Effect.when(
+          Console.log("RECORD 200 — tvOS 26 queue: GET /info, SETUP type 130, POST /command params.data"),
+          Effect.succeed(recordRes.status === 200)
+        )
+      })),
+      Match.when({ isMac: true }, () => Console.log("Mac receiver: skipping RECORD (no NTP/remote SETUP)")),
+      Match.orElse(() => Console.log(`SETUP ${setupRes.status} — not sending RECORD`))
+    )
 
     const plistHeader = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
